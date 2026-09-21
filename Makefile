@@ -11,7 +11,7 @@ RAGDEMO_DSN       ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGD
 RAGDEMO_ADMIN_DSN ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGDEMO_DB_PORT)/postgres
 export POSTGRES_PASSWORD RAGDEMO_DB_PORT RAGDEMO_DSN RAGDEMO_ADMIN_DSN
 
-.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster backup restore eval-retrieval
+.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 accept-p1 clean dagster backup restore eval-retrieval
 
 install:
 	uv sync --all-packages
@@ -46,6 +46,14 @@ test-schema:
 # P0 阶段验收：docs/10-roadmap.md P0 表格七项，含尚未满足的种子计数项
 accept-p0:
 	uv run pytest tests/test_p0_acceptance.py -v -m db
+
+# P1 阶段验收：docs/10-roadmap.md P1 表格九项。
+# 注意其中三项（连续 5 天管线、间隔一周的双跑一致性、真实备份恢复演练）
+# 只能做结构性验证，另有两项（recall@10 / recall@50）目前跑在夹具语料的
+# 5 条用例上而非 06-retrieval.md §9.2 要求的 100 条生产用例——
+# 跑绿不等于这五项已经真正验收，逐项说明见该文件头部的文档字符串。
+accept-p1:
+	uv run pytest tests/test_p1_acceptance.py -v -m db
 
 # 检索评测 + 与主干基线比对，回退超容差（08 §4.1：0.02）以非零码退出，供 CI 门禁使用。
 eval-retrieval:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 import psycopg
@@ -12,10 +13,68 @@ from ragdemo.retrieval.rerank import FailingReranker, MockReranker, Reranker
 from ragdemo.retrieval.rewrite import expand_synonyms
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
+from ragdemo.retrieval.vector_index import (
+    PgVectorIndex,
+    VectorCandidate,
+    VectorIndex,
+    VectorItem,
+)
 
 
 def _service(conn: psycopg.Connection, reranker: Reranker | None = None) -> RetrievalService:
     return RetrievalService(conn, MockEmbedder(), reranker or MockReranker())
+
+
+class _SpyIndex:
+    """记录自己有没有被调用过的 VectorIndex。只用来钉住"服务真的用了这个索引"。"""
+
+    def __init__(self, inner: VectorIndex) -> None:
+        self._inner = inner
+        self.queries = 0
+
+    def upsert(self, items: Sequence[VectorItem]) -> None:
+        self._inner.upsert(items)
+
+    def query(
+        self,
+        vector: Sequence[float],
+        *,
+        k: int,
+        as_of: datetime | None = None,
+        entity_ids: Sequence[str] | None = None,
+        doc_types: Sequence[str] | None = None,
+    ) -> list[VectorCandidate]:
+        self.queries += 1
+        return self._inner.query(
+            vector, k=k, as_of=as_of, entity_ids=entity_ids, doc_types=doc_types
+        )
+
+    def delete(self, block_ids: Sequence[int]) -> None:
+        self._inner.delete(block_ids)
+
+    def count(self) -> int:
+        return self._inner.count()
+
+    def existing_ids(self, block_ids: Sequence[int]) -> set[int]:
+        return self._inner.existing_ids(block_ids)
+
+
+@pytest.mark.db
+def test_service_actually_uses_the_injected_index(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """传进来的向量索引必须真的被用上。
+
+    回归测试：`RetrievalService.search()` 一度根本不把 index 传给 `vector_search`，
+    于是不管构造时给了什么索引，向量一路都静默退回 pgvector——ADR-0009 整条
+    Chroma 链路接好了却没接上，而所有测试照样绿。没有这条断言就发现不了。
+    """
+    spy = _SpyIndex(PgVectorIndex(corpus))
+    service = RetrievalService(corpus, MockEmbedder(), MockReranker(), index=spy)
+
+    service.search(RetrievalRequest(query="云端训练芯片", as_of=as_of_2024))
+
+    assert spy.queries > 0, "服务没有使用注入的向量索引"
 
 
 @pytest.mark.db

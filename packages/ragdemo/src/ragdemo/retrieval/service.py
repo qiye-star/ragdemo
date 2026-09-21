@@ -28,6 +28,11 @@ from ragdemo.retrieval.rerank import Reranker, RerankOutcome, rerank_or_degrade
 from ragdemo.retrieval.rewrite import expand_synonyms
 from ragdemo.retrieval.types import RetrievalRequest, RetrievalResult, RetrievalStats
 from ragdemo.retrieval.vector import apply_scan_settings, vector_search
+from ragdemo.retrieval.vector_index import (
+    ChromaVectorIndex,
+    VectorIndex,
+    chroma_client_from_env,
+)
 from ragdemo_core.db.session import as_of_session
 
 logger = logging.getLogger(__name__)
@@ -48,11 +53,24 @@ class RetrievalService:
         reranker: Reranker,
         *,
         synonyms: Mapping[str, list[str]] | None = None,
+        index: VectorIndex | None = None,
     ) -> None:
+        """`index` 是向量候选生成器（ADR-0009）。
+
+        省略时 `vector_search` 退回 `PgVectorIndex`，走库内 pgvector HNSW。
+        要让向量召回真正走 Chroma，**必须**在这里把 `ChromaVectorIndex` 传进来——
+        生产路径用 `chroma_backed_service()`，它从环境变量构造客户端。
+
+        留一个可省略的参数而不是在这里直接 `chroma_client_from_env()`，
+        是因为那样会让每次构造 `RetrievalService` 都强制依赖一个在跑的 Chroma
+        实例，单元测试与离线评测都会被拖下水；而 pgvector 退路本来就是
+        ADR-0009 后果 4 要求保留的对照组。
+        """
         self.conn = conn
         self.embedder = embedder
         self.reranker = reranker
         self.synonyms = dict(synonyms or {})
+        self.index = index
 
     def search(self, req: RetrievalRequest) -> RetrievalResult:
         """过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开，返回证据与统计。"""
@@ -75,7 +93,7 @@ class RetrievalService:
 
             t0 = time.perf_counter()
             qvec = self.embedder.embed([req.query])[0]
-            vec = vector_search(conn, req, qvec)
+            vec = vector_search(conn, req, qvec, index=self.index)
             ms_vec = (time.perf_counter() - t0) * 1000
 
             fused = weighted_rrf(
@@ -93,7 +111,7 @@ class RetrievalService:
                 variant_vec = self.embedder.embed([variant])[0]
                 variant_fused = weighted_rrf(
                     bm25_search(conn, variant_req),
-                    vector_search(conn, variant_req, variant_vec),
+                    vector_search(conn, variant_req, variant_vec, index=self.index),
                     w_bm25=cfg.w_bm25 * _VARIANT_WEIGHT,
                     w_vec=cfg.w_vec * _VARIANT_WEIGHT,
                     rrf_k=cfg.rrf_k,
@@ -184,6 +202,29 @@ def _merge(primary: Sequence[FusedHit], extra: Sequence[FusedHit], limit: int) -
     ]
     merged.sort(key=lambda f: (-f.score, f.block_id))
     return merged[:limit]
+
+
+def chroma_backed_service(
+    conn: psycopg.Connection,
+    embedder: Embedder,
+    reranker: Reranker,
+    *,
+    synonyms: Mapping[str, list[str]] | None = None,
+    owner_user: str | None = None,
+) -> RetrievalService:
+    """生产路径的构造入口：向量召回走 Chroma（ADR-0009）。
+
+    客户端由 `chroma_client_from_env()` 按环境变量构造，并拒绝任何指向公网的
+    地址——原始文档与实体财务数据不得出境（`CLAUDE.md` §0）。
+
+    `owner_user` 非空时会落到该用户专属的 collection：用户上传材料私有隔离
+    靠的是物理分库而不是查询条件（ADR-0009 边界）。不传就是公共检索空间。
+
+    直接 `RetrievalService(...)` 而不传 `index` 得到的是 pgvector 退路，
+    那是对照组不是生产配置——需要 Chroma 就用这个函数。
+    """
+    index = ChromaVectorIndex(chroma_client_from_env(), owner_user=owner_user)
+    return RetrievalService(conn, embedder, reranker, synonyms=synonyms, index=index)
 
 
 def _leaf_contents(conn: psycopg.Connection, block_ids: list[int]) -> dict[int, str]:
