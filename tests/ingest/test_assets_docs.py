@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -27,6 +28,7 @@ from ragdemo.parse.textin import (
     PageBudget,
     ParsePermanent,
     ParseResult,
+    PrivateDocumentEgressBlocked,
     TextInParser,
     artifact_keys,
 )
@@ -103,7 +105,7 @@ def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path:
     ctx = build_asset_context(partition_key="2024-10-28")
     docs = _normalized(ctx)
     prepared = prepare_documents(
-        docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000)
+        docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
     )
     writer = DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements")
     doc_blocks_loaded(ctx, prepared, writer)
@@ -126,7 +128,9 @@ def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection, tmp_path
     ctx = build_asset_context(partition_key="2024-10-28")
     docs = _normalized(ctx)
     blob = LocalBlobStore(tmp_path)
-    prepared = prepare_documents(docs, MockDocumentParser(), blob, PageBudget(1000))
+    prepared = prepare_documents(
+        docs, MockDocumentParser(), blob, PageBudget(1000), owner_user=None
+    )
 
     doc_blocks_loaded(
         ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements")
@@ -159,7 +163,7 @@ def test_parse_artifact_refs_land_in_the_document_row(
     json_key, _ = artifact_keys(parser.content_hash(raw_bytes), parser.param_fp)
     blob.put(json_key, json.dumps(_xparse_payload(), ensure_ascii=False).encode("utf-8"))
 
-    prepared = prepare_documents(docs, parser, blob, PageBudget(1000))
+    prepared = prepare_documents(docs, parser, blob, PageBudget(1000), owner_user=None)
     doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock"))
 
     rows = conn.execute(
@@ -180,8 +184,11 @@ def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
 
     ctx = build_asset_context(partition_key="2024-10-28")
     docs = [d for d in _normalized(ctx) if d.blocks]
-    prepared = prepare_documents(docs, Exploding(), LocalBlobStore(tmp_path), PageBudget(1000))
+    prepared = prepare_documents(
+        docs, Exploding(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
+    )
 
+    assert prepared
     assert [p.artifacts for p in prepared] == [None] * len(prepared)
 
 
@@ -198,7 +205,7 @@ def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
     blob = LocalBlobStore(tmp_path)
     docs = _path_b_docs(blob, count=2)
     parser = Counting()
-    prepare_documents(docs, parser, blob, PageBudget(1))
+    prepare_documents(docs, parser, blob, PageBudget(1), owner_user=None)
 
     assert Counting.calls == 1  # 第一份用掉 2 页，预算见底，第二份不再发
 
@@ -212,10 +219,79 @@ def test_permanent_failure_still_records_the_document(tmp_path: Path) -> None:
 
     blob = LocalBlobStore(tmp_path)
     docs = _path_b_docs(blob)
-    prepared = prepare_documents(docs, Unsupported(), blob, PageBudget(1000))
+    prepared = prepare_documents(docs, Unsupported(), blob, PageBudget(1000), owner_user=None)
 
     assert prepared
     for item in prepared:
         assert item.doc.blocks == []
         assert item.artifacts is not None
         assert item.artifacts.engine == "textin:unsupported"
+
+
+# --- 私有材料闸门要接到 prepare_documents 这一层（05 ruling P-25） ----------
+
+
+def test_private_document_is_blocked_through_prepare_documents(tmp_path: Path) -> None:
+    """`owner_user` 现在是必填关键字参数：闸门只在直接调用 parser.parse(...,
+    owner_user=...) 时生效，不强制 prepare_documents 转发这个参数的话，
+    第一条用户上传路径接进来那一刻，闸门就是摆设——这个测试就是
+    "闸门真的接到管线上了" 的证据。"""
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob)
+    with pytest.raises(PrivateDocumentEgressBlocked):
+        prepare_documents(docs, MockDocumentParser(), blob, PageBudget(1000), owner_user="u-42")
+
+
+def test_private_document_passes_when_the_mock_gate_is_open(tmp_path: Path) -> None:
+    """反过来也要成立：MockDocumentParser 不能把 owner_user 当空气——
+    以前不管传不传、传什么，它都照常返回结果，测试也就测不出闸门有没有接上。"""
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob)
+    prepared = prepare_documents(
+        docs,
+        MockDocumentParser(allow_private=True),
+        blob,
+        PageBudget(1000),
+        owner_user="u-42",
+    )
+    assert prepared
+    assert prepared[0].doc.blocks
+
+
+# --- 两条廉价但值得现在修的边角：丢失的原件、既无块也无原件的文档 -----------
+
+
+def test_missing_blob_does_not_discard_earlier_prepared_documents(tmp_path: Path) -> None:
+    """blob.get() 以前在 try 外面：FileNotFoundError 会直接炸穿整个循环，
+    把本次 run 已经处理好、还没来得及 return 的全部文档一起丢掉。"""
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob, count=2)
+    docs[1] = replace(docs[1], raw_bytes_ref="raw/does-not-exist.pdf")  # 从没 put 过
+
+    prepared = prepare_documents(
+        docs, MockDocumentParser(), blob, PageBudget(1000), owner_user=None
+    )
+
+    assert len(prepared) == 2
+    assert prepared[0].doc.blocks, "第一份文档的原件在，应该正常解析"
+    assert prepared[1].doc.blocks == []
+    assert prepared[1].artifacts is not None
+    assert prepared[1].artifacts.engine == "blob:missing"
+
+
+def test_document_with_no_content_gets_a_marker_not_a_silent_drop(tmp_path: Path) -> None:
+    """既没有块也没有原件的文档以前直接 continue：不写行、不留记号，
+    下次分区重跑会对着同一份文档再判一次"没东西可做"，永远停不下来——和
+    ParsePermanent 分支的处理方式不对称。"""
+    blob = LocalBlobStore(tmp_path)
+    [doc] = _path_b_docs(blob)
+    doc = replace(doc, raw_bytes_ref=None)
+
+    prepared = prepare_documents(
+        [doc], MockDocumentParser(), blob, PageBudget(1000), owner_user=None
+    )
+
+    assert len(prepared) == 1
+    assert prepared[0].doc.blocks == []
+    assert prepared[0].artifacts is not None
+    assert prepared[0].artifacts.engine == "skipped:no_content"
