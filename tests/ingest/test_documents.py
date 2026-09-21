@@ -1,12 +1,16 @@
 """文档入库：反规范化列一致、整份回滚、重解析不改 known_at。"""
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import psycopg
 import pytest
 
+from ragdemo.adapters.announcements import NormalizedDocument
 from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid
@@ -173,3 +177,128 @@ def test_reparse_marks_old_blocks_superseded_but_keeps_them(writer: DocumentWrit
         (first.doc_id,),
     ).fetchone()  # type: ignore[misc]
     assert old_alive == old_superseded > 0
+
+
+# --- Finding C: 去重检查要只认活着的行 -------------------------------------
+
+
+@pytest.mark.db
+def test_reingest_after_reparse_returns_the_live_doc_id(writer: DocumentWriter) -> None:
+    """重解析后，同一个 (source, content_hash) 对应两行：被取代的旧行与新的
+    活跃行——原始字节没变，变的只是解析结果。再次摄入同一份原始文档时，
+    去重检查必须只认 superseded_at IS NULL 的那一行；否则可能把旧行的
+    doc_id 当作「已存在，跳过」返回——那个 doc_id 在 asof.document 里不可见，
+    调用方一旦信了 DocumentWriteResult.doc_id 就会引用一份死文档。
+    """
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    reparsed = writer.reparse_document(
+        doc, chunks, desc, supersedes_doc_id=first.doc_id  # type: ignore[arg-type]
+    )
+
+    again = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    assert again.skipped is True
+    assert again.doc_id == reparsed.doc_id
+    assert again.doc_id != first.doc_id
+
+
+# --- Finding D: 并发首次写入要降级为 skipped，不能崩溃 ----------------------
+
+
+@pytest.mark.db
+def test_concurrent_first_write_degrades_to_skipped(
+    writer: DocumentWriter, temp_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """两份从未见过的文档并发写入：两条连接都在各自的存在性检查里判定
+    "不存在"，然后都去插入——分区唯一索引 document_dedup_uk
+    （008_document_dedup_partial.sql）保证数据不会重复，但落败的一方原本
+    会拿到未处理的 UniqueViolation，直接把整个 run 炸掉（CLAUDE.md §1.6：
+    并发摄入同一条新公告是增量触发模型下的正常路径，不是例外）。
+
+    用真实的第二个连接重放这个竞态窗口，而不是起线程：真正让两条连接在
+    INSERT 语句上互相阻塞、再解开需要真的并发（线程/协程）；这里改成对
+    时序的确定性重放——先在 conn_b 上做一次真实的存在性检查（确认此刻
+    确实不存在），再让 conn_a 完整写入并提交（赢家），然后把 conn_b
+    "写入前的那次"存在性检查结果钉在刚才真实观察到的"不存在"，逼它跟
+    真並发场景一样往下走到 INSERT。except 分支里恢复用的第二次存在性
+    检查不打补丁——用真实、当下的数据，因为落败方必须能看到赢家刚提交
+    的活跃行，这也是为什么本测试特意不用 REPEATABLE READ 事务隔离去模拟
+    竞态：那样会让 except 里的重新查询也困在旧快照里，读不到赢家的提交，
+    而这个模块实际使用的连接从未设置过非默认隔离级别（一律是 Postgres
+    默认的 READ COMMITTED），钉住存在性检查的返回值比改变隔离级别更贴近
+    真实的并发场景。
+    """
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+
+    content_hash = cast(NormalizedDocument, doc).content_hash
+
+    conn_b = psycopg.connect(temp_db)
+    writer_b = DocumentWriter(conn_b, ingest_run_id="r2", source="mock-announcements")
+
+    # conn_b 此刻真实检查一次：这份文档确实还不存在。
+    assert writer_b._live_doc_id(content_hash) is None
+
+    # conn_a（赢家）完整写入并提交。
+    winner = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    writer.conn.commit()
+    assert winner.skipped is False
+
+    # 把 conn_b 第一次存在性检查的结果钉在刚才观察到的"不存在"，模拟它的
+    # 检查发生在赢家提交之前；之后（异常处理里恢复用的那次）放行到真实实现。
+    real_live_doc_id = writer_b._live_doc_id
+    call_count = 0
+
+    def _stale_first_check(content_hash: str) -> int | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None
+        return real_live_doc_id(content_hash)
+
+    monkeypatch.setattr(writer_b, "_live_doc_id", _stale_first_check)
+
+    loser = writer_b.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    assert loser.skipped is True
+    assert loser.doc_id == winner.doc_id
+    assert loser.block_ids == []
+    (n,) = writer.conn.execute("SELECT count(*) FROM core.document").fetchone()  # type: ignore[misc]
+    assert n == 1
+
+
+# --- Finding E: 实体解析失败要留痕，不能悄无声息 ----------------------------
+
+
+@pytest.mark.db
+def test_unresolved_entity_ref_still_writes_and_warns(
+    writer: DocumentWriter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """entity_ref 非空但在 core.entity 里找不到匹配行（典型场景：新上市实体
+    还没有回填代码列）：文档必须照常写入——拒绝会在增量触发模型下
+    （CLAUDE.md §1.6）一直挡住这个实体的全部公告，直到有人手工建好
+    core.entity 行。但也不能像"政策/宏观文档没有 entity_ref"那样悄无声息，
+    这是数据质量问题，需要有人能看到。
+    """
+    doc = replace(
+        cast(NormalizedDocument, _docs()[0]),
+        entity_ref="NOT-A-REAL-CODE",
+        content_hash="unresolved-entity-hash",
+    )
+    chunks, desc = _prepare(doc)
+
+    with caplog.at_level(logging.WARNING, logger="ragdemo.ingest.documents"):
+        result = writer.write_document(doc, chunks, desc)
+
+    assert result.skipped is False
+    (entity_id,) = writer.conn.execute(
+        "SELECT entity_id FROM core.document WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert entity_id is None
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("entity_ref" in r.getMessage() for r in warnings)
+    assert any(getattr(r, "entity_ref", None) == "NOT-A-REAL-CODE" for r in warnings)
+    assert any(getattr(r, "ingest_run_id", None) == "r1" for r in warnings)
