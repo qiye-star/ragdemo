@@ -6,13 +6,22 @@
 描述必须只陈述表里有什么。让小模型顺手「总结一下」，等于在检索层就
 掺进了未经验证、无来源的判断——而输出中每个论断都必须可溯源。
 """
+
 from __future__ import annotations
 
 import re
 from typing import Protocol, runtime_checkable
 
 INTERPRETATION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(显示|说明|表明|反映|意味着|体现出)"),
+    # 显示/说明/表明/反映/意味着/体现出 只有在用作谓语（后面接宾语，构成一个论断）
+    # 时才是「解读」。它们裸接标点或收尾，是被用作名词——最典型的是「说明」：
+    # 资产减值准备等附注表格几乎都有一列字面叫「说明」（备注列），
+    # MockTableDescriber 把列名原样列进描述，"...、说明，共 N 行。" 这种句子
+    # 里的「说明」后面紧跟顿号/逗号，不是在下论断。用零宽断言排除"紧跟标点或
+    # 收尾"的用法，四个必测样例（显示公司业绩大幅改善 / 说明增长强劲 /
+    # 表明景气度回升 / 预计将继续增长，均后接实词）不受影响，见 test_describe.py
+    # 与本文件同目录测试里的 test_neutral_column_name_is_not_rejected。
+    re.compile(r"(显示|说明|表明|反映|意味着|体现出)(?=[^，。！？；、\s])"),
     re.compile(r"(改善|恶化|强劲|疲软|亮眼|承压|超预期|不及预期)"),
     re.compile(r"(预计|预期|有望|将会|料将)"),
     re.compile(r"(大幅|显著|明显)(增长|下滑|提升|下降)"),

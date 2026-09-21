@@ -1,4 +1,5 @@
 """表格描述：只描述表里有什么，不做任何解读或数值推断。"""
+
 from __future__ import annotations
 
 import pytest
@@ -56,3 +57,32 @@ def test_describer_exposes_prompt_version() -> None:
     d = MockTableDescriber()
     assert d.prompt_version
     assert d.model
+
+
+# --- 以下是本任务在 brief 必测用例之外新增的回归测试 ---
+#
+# 附注类表格（如资产减值准备明细表）在真实财报里几乎必有一列字面叫「说明」
+# （备注列）。MockTableDescriber 把表头原样列进描述，若解读词只按裸子串匹配，
+# "...、说明，共 N 行。" 这种纯粹枚举列名的句子会被误判为解读而拦截——
+# 这是对 brief 给出的 INTERPRETATION_PATTERNS 第一条 `(显示|说明|表明|反映|
+# 意味着|体现出)` 的修正：只在这些词后面紧跟实词（构成"V+宾语"的论断）时才算
+# 解读，紧跟顿号/逗号/句末（说明书上用作名词/列名）不算。
+
+
+def test_neutral_column_name_is_not_rejected() -> None:
+    """「说明」作为表格列名（附注表格的备注列）出现时，不是在下论断，不应拦截。"""
+    text = "存货表，列为 项目、期末余额、说明，共 1 行。"
+    assert validate_description(text) == text
+
+
+def test_mock_describer_handles_table_with_notes_column() -> None:
+    table = "| 项目 | 期末余额 | 说明 |\n| 存货跌价准备 | 120 | 计提比例调整 |"
+    desc = MockTableDescriber().describe(table, title="附注", section_path="附注 > 存货")
+    assert "说明" in desc
+    assert "1 行" in desc
+
+
+def test_interpretation_word_followed_by_predicate_is_still_rejected() -> None:
+    """「说明」后面接实词、构成完整论断时，仍然要拦截——不能因为上面的放宽而漏判。"""
+    with pytest.raises(DescriptionRejected):
+        validate_description("本表说明公司经营情况良好。")
