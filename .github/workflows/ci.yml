@@ -28,14 +28,14 @@ jobs:
       - run: make up
       - run: uv run ragdemo db migrate
         env:
-          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@127.0.0.1:5432/ragdemo
       - run: uv run ragdemo db seed
         env:
-          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@127.0.0.1:5432/ragdemo
       - run: uv run ragdemo db check
         env:
-          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@127.0.0.1:5432/ragdemo
       - run: uv run pytest tests -v -m "db and not seed_full"
         env:
-          RAGDEMO_ADMIN_DSN: postgresql://postgres:ragdemo@localhost:5432/postgres
-          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+          RAGDEMO_ADMIN_DSN: postgresql://postgres:ragdemo@127.0.0.1:5432/postgres
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@127.0.0.1:5432/ragdemo

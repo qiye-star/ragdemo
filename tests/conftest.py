@@ -9,8 +9,10 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 
+# 用 127.0.0.1 而不是 localhost：compose 只绑回环 IPv4，而 localhost 在本机
+# 先解析到 ::1，psycopg 会在那里卡满整个 connect 超时才回退到 IPv4。
 ADMIN_DSN = os.environ.get(
-    "RAGDEMO_ADMIN_DSN", "postgresql://postgres:ragdemo@localhost:5433/postgres"
+    "RAGDEMO_ADMIN_DSN", "postgresql://postgres:ragdemo@127.0.0.1:5433/postgres"
 )
 
 
