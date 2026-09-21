@@ -24,14 +24,22 @@ def _is_secret(key: str) -> bool:
     return any(name in lowered for name in SECRET_PARAM_NAMES)
 
 
+def _strip_value(value: object) -> object:
+    """对非 Mapping 的值做同样的递归：Mapping 原样剥离，list/tuple 逐个元素下潜，
+    其余标量原样透传。"""
+    if isinstance(value, Mapping):
+        return strip_secrets(value)
+    if isinstance(value, list | tuple):
+        return type(value)(_strip_value(item) for item in value)
+    return value
+
+
 def strip_secrets(params: Mapping[str, Any]) -> dict[str, Any]:
     """返回一份剥离了认证字段的副本。输入不被修改。"""
     out: dict[str, Any] = {}
     for key, value in params.items():
         if _is_secret(str(key)):
             out[key] = REDACTED
-        elif isinstance(value, Mapping):
-            out[key] = strip_secrets(value)
         else:
-            out[key] = value
+            out[key] = _strip_value(value)
     return out
