@@ -257,14 +257,21 @@ def test_insufficient_balance_is_not_retryable() -> None:
 
 @pytest.mark.parametrize("code", [30203, 500])
 def test_service_faults_are_retryable(code: int) -> None:
-    with pytest.raises(ParseRetryable):
+    """这两个码在 _RETRYABLE 映射表里——不是靠未知错误码兜底分支蒙混过关
+    （那条兜底测的是 test_unknown_code_is_treated_as_retryable）。以前
+    _RETRYABLE 没被 raise_for_code 消费，这条测试虽然绿但测的不是它看起来
+    测的东西：把断言绑到映射表专属的消息文案上，_RETRYABLE 不接回
+    raise_for_code 这个测试就会失败。"""
+    with pytest.raises(ParseRetryable, match="已知的可重试错误码"):
         TextInParser.raise_for_code(code)
 
 
 def test_unknown_code_is_treated_as_retryable() -> None:
-    """退避三次后失败，比永久丢掉一份文档安全。"""
-    with pytest.raises(ParseRetryable):
+    """退避三次后失败，比永久丢掉一份文档安全——这条走的是未知错误码兜底
+    分支，不在 _RETRYABLE 映射表里，消息文案上不应该带映射表的专属标记。"""
+    with pytest.raises(ParseRetryable) as excinfo:
         TextInParser.raise_for_code(49999)
+    assert "已知的可重试错误码" not in str(excinfo.value)
 
 
 def _mock_parser(

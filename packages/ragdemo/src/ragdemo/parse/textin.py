@@ -355,6 +355,8 @@ class TextInParser:
         marker = _PERMANENT.get(code)
         if marker is not None:
             raise ParsePermanent(marker, code)
+        if code in _RETRYABLE:
+            raise ParseRetryable(f"xParse 服务故障 code={code}（已知的可重试错误码），退避重试")
         # 未知错误码按可重试处理：退避三次后失败，比永久丢掉一份文档安全。
         raise ParseRetryable(f"xParse 错误 code={code}")
 
