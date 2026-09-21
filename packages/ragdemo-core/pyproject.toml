@@ -1,0 +1,15 @@
+[project]
+name = "ragdemo-core"
+version = "0.1.0"
+description = "AI 产业链时点研究引擎 · 底层：迁移、时点会话、Schema 不变量"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ragdemo_core"]

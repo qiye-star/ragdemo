@@ -1,0 +1,46 @@
+# uv workspace 虚拟根：本文件不是一个包，只承载工作区成员声明与全仓库统一的工具配置。
+# 代码在 packages/ 下：ragdemo-core 是底层，ragdemo 是业务层。
+# 依赖只能自上而下（docs/01-architecture.md §5），由包边界物理强制。
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+ragdemo-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "detect-secrets>=1.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["packages/ragdemo-core/src", "packages/ragdemo/src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+# 本仓库的注释、docstring 与种子数据都是中文，全角标点是正常内容而非笔误。
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["packages", "tests"]
+mypy_path = "packages/ragdemo-core/src:packages/ragdemo/src"
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "db: 需要数据库的测试",
+    "seed_full: 需要完整种子数据（W9.1 全量录入）才会通过的验收断言",
+]

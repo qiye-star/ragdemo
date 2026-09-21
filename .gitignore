@@ -20,7 +20,7 @@ build/
 .superpowers/
 
 # 数据与运行时产物
-db/seed/*.csv
-!db/seed/README.md
+# 注意：db/seed/*.csv 是**提交进仓库**的。P0 验收（docs/10-roadmap.md）要求
+# 在干净 clone 上 `make seed` 就能复现四张表的计数，忽略它等于让验收不可复现。
 data/
 *.log

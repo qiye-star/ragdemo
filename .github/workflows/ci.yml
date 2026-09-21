@@ -1,0 +1,41 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --all-packages
+      - run: make lint
+      - run: make typecheck
+      # 不带 db 标记的单元测试；需要数据库的测试见下一个 job
+      - run: uv run pytest -v -m "not db and not seed_full"
+
+  db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --all-packages
+      - run: make up
+      - run: uv run ragdemo db migrate
+        env:
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+      - run: uv run ragdemo db seed
+        env:
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+      - run: uv run ragdemo db check
+        env:
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+      - run: uv run pytest tests -v -m "db and not seed_full"
+        env:
+          RAGDEMO_ADMIN_DSN: postgresql://postgres:ragdemo@localhost:5432/postgres
+          RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
