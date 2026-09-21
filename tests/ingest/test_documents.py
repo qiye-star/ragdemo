@@ -178,6 +178,65 @@ def test_reparse_marks_old_blocks_superseded_but_keeps_them(writer: DocumentWrit
     assert old_alive == old_superseded > 0
 
 
+# --- 提交必须真的发生，不能只是"同一个连接自己能看见自己的写入" ------------
+
+
+@pytest.mark.db
+def test_write_document_commits_and_is_visible_from_another_connection(
+    writer: DocumentWriter, temp_db: str
+) -> None:
+    """`write_document` 在 `_live_doc_id` 那次 SELECT 时就已经隐式开了外层
+    事务，内部的 `with self.conn.transaction()` 因此只是 SAVEPOINT——没有
+    显式 commit 的话，写进去的文档与块只有在同一个连接上读得到，换一个
+    连接就什么都看不到，进程一崩溃就真的全丢。所有读回断言都在 writer.conn
+    这同一个连接上做的话，测不出这个问题（同一事务内自己当然能看见自己
+    未提交的写入）——必须换一个独立连接。"""
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    other_conn = psycopg.connect(temp_db)
+    try:
+        (doc_count,) = other_conn.execute(
+            "SELECT count(*) FROM core.document WHERE doc_id = %s", (result.doc_id,)
+        ).fetchone()  # type: ignore[misc]
+        assert doc_count == 1
+        (block_count,) = other_conn.execute(
+            "SELECT count(*) FROM core.doc_block WHERE doc_id = %s", (result.doc_id,)
+        ).fetchone()  # type: ignore[misc]
+        assert block_count == len(result.block_ids) > 0
+    finally:
+        other_conn.close()
+
+
+@pytest.mark.db
+def test_reparse_document_commits_and_is_visible_from_another_connection(
+    writer: DocumentWriter, temp_db: str
+) -> None:
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    second = writer.reparse_document(
+        doc,  # type: ignore[arg-type]
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,
+    )
+
+    other_conn = psycopg.connect(temp_db)
+    try:
+        (superseded_at,) = other_conn.execute(
+            "SELECT superseded_at FROM core.document WHERE doc_id = %s", (first.doc_id,)
+        ).fetchone()  # type: ignore[misc]
+        assert superseded_at is not None
+        (new_doc_count,) = other_conn.execute(
+            "SELECT count(*) FROM core.document WHERE doc_id = %s", (second.doc_id,)
+        ).fetchone()  # type: ignore[misc]
+        assert new_doc_count == 1
+    finally:
+        other_conn.close()
+
+
 # --- Finding C: 去重检查要只认活着的行 -------------------------------------
 
 

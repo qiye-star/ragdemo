@@ -39,7 +39,7 @@ class DocumentWriteResult:
 class ParseArtifacts:
     """路径 B 的解析产物引用。路径 A（供应商结构化接口）没有这些，传 None。
 
-    engine 形如 'textin:4.2.1+a3f19c02'——版本与参数指纹缺一不可，
+    engine 形如 'textin:4.2.1+a3f19c02d4e17b5f'——版本与参数指纹缺一不可，
     参数一改切块结果就变，而评测集的 gold_block_ids 绑在切块结果上
     （docs/05-document-pipeline.md §2.2）。
     """
@@ -109,6 +109,15 @@ class DocumentWriter:
             if live_id is None:
                 raise  # 不是预期中的那种冲突，原样抛出而不是吞掉未知错误
             return DocumentWriteResult(live_id, [], skipped=True)
+        # `with self.conn.transaction()` 只是 SAVEPOINT——self._live_doc_id
+        # 顶上那次 SELECT 已经在这个连接上隐式开了外层事务（ragdemo_core/
+        # db/migrate.py:61-64 记录过同一个坑，embed/batch.py 的按批提交是
+        # 同一个修复）。没有这个显式 commit()，没有任何调用方会替它提交：
+        # doc_blocks_loaded 资产循环调 write_document 但从不 commit，
+        # definitions.py 目前也没有接这几个资产；测试之所以"看起来通过"，
+        # 是因为断言都在写入用的同一个连接上读——同一事务内自己能看见自己
+        # 未提交的写入，换一个连接就什么都看不到，进程一崩溃就真的全丢。
+        self.conn.commit()
         return DocumentWriteResult(doc_id, block_ids, skipped=False)
 
     def _live_doc_id(self, content_hash: str) -> int | None:
@@ -168,6 +177,7 @@ class DocumentWriter:
                 artifacts=artifacts,
             )
             block_ids = self._insert_blocks(doc, doc_id, entity_id, chunks, descriptions)
+        self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
         return DocumentWriteResult(doc_id, block_ids, skipped=False)
 
     # --- 内部 -------------------------------------------------------------
