@@ -116,6 +116,17 @@ class VectorIndex(Protocol):
         """索引中当前的向量条数。"""
         ...
 
+    def existing_ids(self, block_ids: Sequence[int]) -> set[int]:
+        """返回这批 block_id 中索引里已存在的那些。
+
+        Task 10 一致性核对（ADR-0009 后果 2）用它判定 PG 已嵌入的块有没有
+        真的写进索引——`embed_pending_blocks()` 的待办队列是 `embedding
+        IS NULL`，一旦 PG 提交成功而 `upsert()` 失败，这些块下次重跑不会
+        再被选中，于是永久缺席于索引；`existing_ids()` 是发现这类偏移的
+        唯一手段，不能靠 `count()`（只有总数，看不出具体缺了哪些）。
+        """
+        ...
+
 
 def collection_name(owner_user: str | None) -> str:
     """把 owner_user 规范化成合法的 Chroma collection 名。
@@ -255,6 +266,12 @@ class ChromaVectorIndex:
     def count(self) -> int:
         return self._collection.count()
 
+    def existing_ids(self, block_ids: Sequence[int]) -> set[int]:
+        if not block_ids:
+            return set()
+        result = self._collection.get(ids=[str(block_id) for block_id in block_ids])
+        return {int(block_id) for block_id in result["ids"]}
+
 
 class PgVectorIndex:
     """pgvector 实现。ADR-0009 后果 4：保留它既为可替换性，
@@ -344,6 +361,16 @@ class PgVectorIndex:
         ).fetchone()
         assert row is not None
         return int(row[0])
+
+    def existing_ids(self, block_ids: Sequence[int]) -> set[int]:
+        if not block_ids:
+            return set()
+        rows = self._conn.execute(
+            "SELECT block_id FROM core.doc_block"
+            " WHERE block_id = ANY(%s) AND embedding IS NOT NULL",
+            (list(block_ids),),
+        ).fetchall()
+        return {int(r[0]) for r in rows}
 
 
 def _is_private_host(host: str) -> bool:
