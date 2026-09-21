@@ -21,3 +21,12 @@ allowlist:
   - host: api.deepseek.com          # 生成模型
     inject_credential: MODEL_API_KEY
     inject_as: bearer
+
+  # MCP 网关（windIFinD-mcp）：聚合 Tushare / 万得 / 同花顺 / AkShare / 财经新闻。
+  # 它自己持有上游凭证，所以这里注入的是**访问网关本身**的凭据，不是数据商的。
+  #
+  # 故意不写死具体主机名：网关地址是部署配置，各环境不同；而且把一个尚未加鉴权的
+  # 内部服务地址固化进已提交文件，等于扩大它的暴露面。部署时按实际地址取消注释。
+  # - host: <你的网关主机名>
+  #   inject_credential: MCP_GATEWAY_TOKEN
+  #   inject_as: bearer

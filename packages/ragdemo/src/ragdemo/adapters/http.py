@@ -159,6 +159,64 @@ class HttpClient:
             f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
         ) from last_error
 
+    def post_text(
+        self,
+        endpoint: str,
+        body: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> RawResponse:
+        """POST JSON 体，返回**原始响应文本**（payload 是 str）。
+
+        与 get_json 有一处刻意的不同：它对任何 HTTP 状态码都返回 RawResponse，
+        不因状态码抛异常。MCP 网关把业务含义放在响应体里——实测 HTTP 500 也带着
+        一个可读的 JSON-RPC error（`search_stock` 稳定复现），状态码本身不足以
+        分类，硬按状态码抛会把可诊断的上游故障变成一句「返回 500」。分类交给
+        调用方，这一层只负责限流、重试、配额与计费。
+
+        只有连传输层都没拿到响应（连不上、超时）才抛 UpstreamUnavailable。
+        """
+        if self.daily_quota is not None and self.calls_today >= self.daily_quota:
+            raise QuotaExceeded(f"{self.provider} 已达每日配额 {self.daily_quota}")
+
+        last_error: Exception | None = None
+        last_response: httpx.Response | None = None
+        merged = {"Content-Type": "application/json", **dict(headers or {})}
+
+        for attempt in range(1, self.policy.max_attempts + 1):
+            wait = self.bucket.acquire()
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                response = self._client.post(endpoint, json=dict(body), headers=merged)
+            except httpx.TransportError as exc:
+                last_error = exc
+            else:
+                self.calls_today += 1
+                last_response = response
+                if response.status_code not in self.policy.retry_on_status:
+                    break
+                last_error = _error_for(response)
+
+            if attempt < self.policy.max_attempts:
+                time.sleep(_backoff_seconds(last_error, attempt, self.policy))
+
+        if last_response is None:
+            raise UpstreamUnavailable(
+                f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍未拿到响应"
+            ) from last_error
+
+        return RawResponse(
+            provider=self.provider,
+            endpoint=endpoint,
+            params=body,
+            payload=last_response.text,
+            http_status=last_response.status_code,
+            fetched_at=datetime.now(UTC),
+            cost_cents=self.cost_per_call_cents,
+        )
+
 
 def _error_for(response: httpx.Response) -> Exception:
     if response.status_code == 429:
