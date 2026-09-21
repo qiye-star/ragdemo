@@ -9,6 +9,12 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 
+# `corpus` / `as_of_2024` 原本放在 tests/retrieval/conftest.py 里，
+# 但 conftest 的夹具只对该目录子树可见——兄弟目录 tests/evals/ 与仓库根的
+# tests/test_p1_acceptance.py 都取不到，检索评测和 P1 验收正好都要用它。
+# 改成模块 tests/corpus.py + 在根 conftest 注册为插件，全套测试都能看见。
+pytest_plugins = ["tests.corpus"]
+
 # 用 127.0.0.1 而不是 localhost：compose 只绑回环 IPv4，而 localhost 在本机
 # 先解析到 ::1，psycopg 会在那里卡满整个 connect 超时才回退到 IPv4。
 ADMIN_DSN = os.environ.get(
