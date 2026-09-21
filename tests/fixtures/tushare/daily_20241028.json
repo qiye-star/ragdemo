@@ -1,0 +1,5 @@
+{"code": 0, "msg": null, "data": {
+  "fields": ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "vol", "amount"],
+  "items": [
+    ["688256.SH", "20241028", 512.0, 528.8, 509.1, 524.3, 510.0, 42150.0, 2189000.0]
+  ]}}
