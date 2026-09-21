@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 import psycopg
 
@@ -146,9 +147,11 @@ def check_point_in_time_leaks(
         row = conn.execute(sql, {"probe": probe_as_of}).fetchone()
         if row is None:
             raise RuntimeError(f"泄漏自检 {name} 没有返回任何行，这不应该发生")
+        # sum() 在 PostgreSQL 里返回 numeric，psycopg 把它映射成 Decimal 而不是 int，
+        # 所以这里两种都要接。
         count = row[0]
-        if not isinstance(count, int):
-            raise TypeError(f"泄漏自检 {name} 返回了非整数: {count!r}")
+        if isinstance(count, bool) or not isinstance(count, int | Decimal):
+            raise TypeError(f"泄漏自检 {name} 返回了非计数值: {count!r}")
         if count:
-            found[name] = count
+            found[name] = int(count)
     return found
