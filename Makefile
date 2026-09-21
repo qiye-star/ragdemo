@@ -11,7 +11,7 @@ RAGDEMO_DSN       ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGD
 RAGDEMO_ADMIN_DSN ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGDEMO_DB_PORT)/postgres
 export POSTGRES_PASSWORD RAGDEMO_DB_PORT RAGDEMO_DSN RAGDEMO_ADMIN_DSN
 
-.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster
+.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster backup restore
 
 install:
 	uv sync --all-packages
@@ -52,3 +52,12 @@ clean:
 
 dagster:
 	uv run dagster dev -m ragdemo.ingest.definitions
+
+# 备份 PG 与 Chroma 到同一时间戳的一对快照，见 infra/runbook-backup.md。
+backup:
+	bash scripts/backup.sh
+
+# 恢复：FILE 指向 PG dump，脚本会自动配对同一时间戳的 Chroma 快照一起恢复。
+# 例：make restore FILE=/var/backups/ragdemo/ragdemo-20260921T030000Z.dump
+restore:
+	CONFIRM=yes bash scripts/restore.sh $(FILE)

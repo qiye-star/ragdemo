@@ -24,5 +24,46 @@ services:
       timeout: 3s
       retries: 20
 
+  chroma:
+    # 版本固定，不用 latest（理由同 paradedb：版本漂移会让行为静默改变）。
+    # 版本号对齐 packages/ragdemo/pyproject.toml 锁定的 chromadb 客户端版本
+    # （见 uv.lock 中 chromadb 的解析结果），避免服务端与客户端协议不一致。
+    # adr/0009：Chroma 只承担向量候选生成，pgvector/PG 仍是系统真相与时点权威；
+    # 因此 Chroma 只能本地自建（这里），不得使用 Chroma Cloud（CLAUDE.md §0 数据境内存储）。
+    image: chromadb/chroma:1.5.9
+    container_name: ragdemo-chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      # 关闭匿名遥测：不把任何调用信息发到境外服务（CLAUDE.md §0 数据境内存储）。
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      # 只绑回环地址，不暴露公网，理由同 paradedb。
+      # 宿主端口默认 8001 而非官方镜像默认的 8000：8000 在开发机上常被其他服务占用。
+      - "127.0.0.1:${RAGDEMO_CHROMA_PORT:-8001}:8000"
+    volumes:
+      # 官方镜像把持久化数据放在 /data，挂具名 volume 而不是匿名 volume，
+      # 这样容器重建（升级镜像版本、`docker compose down` 不带 -v）不会丢数据。
+      - chromadata:/data
+    healthcheck:
+      # 镜像内没有 curl/wget，用镜像自带的 python 探活 v2 heartbeat 接口。
+      test:
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request as u; u.urlopen('http://localhost:8000/api/v2/heartbeat')\""
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  egress-proxy:
+    build: ./egress-proxy
+    container_name: ragdemo-egress
+    environment:
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  chromadata:

@@ -1,0 +1,23 @@
+# 出网白名单。密钥只在代理层注入，业务容器的环境变量中没有任何供应商密钥。
+# 不在名单内的域名直接拒绝——即使某个依赖被投毒，它也无法把数据发到任意地址。
+default_action: deny
+log: full           # 记录 host / path / 状态码 / 字节数 / 耗时；不记录请求体
+
+allowlist:
+  - host: api.tushare.pro
+    inject_credential: TUSHARE_TOKEN
+    inject_as: body_json            # tushare 把 token 放在 JSON body 的 token 字段
+  - host: data.sec.gov
+    inject_credential: null
+  - host: www.sec.gov
+    inject_credential: null
+  - host: api.textin.com            # 文档解析（adr/0008）
+    inject_credential: [TEXTIN_APP_ID, TEXTIN_SECRET_CODE]
+    inject_as: header               # x-ti-app-id / x-ti-secret-code
+    headers: [x-ti-app-id, x-ti-secret-code]
+  - host: api.siliconflow.cn        # 嵌入与重排（adr/0004）
+    inject_credential: EMBEDDING_API_KEY
+    inject_as: bearer
+  - host: api.deepseek.com          # 生成模型
+    inject_credential: MODEL_API_KEY
+    inject_as: bearer
