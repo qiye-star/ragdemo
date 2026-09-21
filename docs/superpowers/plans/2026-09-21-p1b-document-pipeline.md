@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把归一化文档变成可检索的块——按结构切分、构造父子块、生成表格描述、校验元数据、向量化入库，全程保持时点语义与幂等。
+**Goal:** 把原始文档变成可检索的块——解析（含 JSON 与 Markdown 产物落盘）、按结构切分、构造父子块、生成表格描述、校验元数据、向量化入库，全程保持时点语义与幂等。
 
-**Architecture:** 纯函数的切块器（`chunker.py`）不碰数据库，只做 `NormalizedDocument → list[Chunk]`；`DocumentWriter` 负责把块连同反规范化列写进 `core.document` / `core.doc_block`；嵌入是**独立的 Dagster 资产**，以 `embedding IS NULL` 为待办队列，因此天然可断点续传。
+**Architecture:** 路径 B 的解析走 TextIn xParse 托管 API，产物（完整响应 JSON + Markdown）落对象存储，key 由「原始字节哈希 + 参数指纹」决定，因而同时是成本缓存与重切块的数据源；切块的输入是响应里的 `detail[]` 而不是 `markdown`（后者没有页码）。纯函数的切块器（`chunker.py`）不碰数据库，只做 `NormalizedDocument → list[Chunk]`；`DocumentWriter` 负责把块连同反规范化列写进 `core.document` / `core.doc_block`；嵌入是**独立的 Dagster 资产**，以 `embedding IS NULL` 为待办队列，因此天然可断点续传。
 
-**Tech Stack:** Python 3.11+ / psycopg 3 / pgvector / Dagster / pytest
+**Tech Stack:** Python 3.11+ / psycopg 3 / pgvector / Dagster / httpx / TextIn xParse / pytest
 
-**Spec:** [`docs/05-document-pipeline.md`](../../05-document-pipeline.md)、[`docs/02-data-model.md`](../../02-data-model.md) §5
+**Spec:** [`docs/05-document-pipeline.md`](../../05-document-pipeline.md)、[`docs/02-data-model.md`](../../02-data-model.md) §5、[`docs/adr/0008`](../../adr/0008-textin-xparse-document-parsing.md)
 **工作流：** [`docs/11-sdlc.md`](../../11-sdlc.md) §3 的 W2.1–W2.5
 **前置：** [P0](2026-09-21-p0-foundation.md) 全部验收 + [P1a](2026-09-21-p1a-ingestion.md) Task 1/3/8
 
@@ -47,6 +47,7 @@
 | `known_at_for(publish_at, lag)` | P1a Task 8 |
 | `temp_db` fixture、`migrate()` | P0 Task 2/3 |
 | `core.document` / `core.doc_block` / `core.embedding_cache` | P0 Task 7 |
+| `core.document.parse_json_ref` / `parse_md_ref` / `parse_warnings` | 迁移 `007_parse_artifacts.sql`（随 adr/0008 新增，已落盘） |
 
 > **仓库布局**：本仓库是 **uv workspace 双包**结构——底层 `packages/ragdemo-core/src/ragdemo_core/`
 > （迁移、时点会话、Schema 不变量）与业务层 `packages/ragdemo/src/ragdemo/`（接入、解析、检索、Agent）。
@@ -66,6 +67,15 @@
 - **重新解析不改 `known_at`**：沿用原文档的 `known_at`，否则该文档在历史回测中凭空消失。
 - 元数据校验任一项不过，**整份文档回滚**，不写半份。
 - 嵌入缓存主键是 `(content_hash, model, owner_user)` 三列。
+- **切块的输入是 xParse 的 `detail[]`，不是 `markdown`**——后者没有页码，
+  而 CLAUDE.md §0 要求每个数字绑定 `[block_id | page]`。
+- **`parse_engine` 必须是 `textin:<版本>+<参数指纹>`**。只记版本不够：
+  参数一改切块结果就变，评测集的 `gold_block_ids` 会静默失效。
+- **调用计费 API 前先查产物缓存**（`parse/textin/<content_hash>/<param_fp>.json`）。
+  同一份文档在同一套参数下只解析一次。
+- **私有文档不外送**：`owner_user` 非空且 `TEXTIN_ALLOW_PRIVATE` 未开时直接拒绝。
+- **认证头不进业务代码**：`x-ti-app-id` / `x-ti-secret-code` 由出网代理注入
+  （`09-compliance-security.md` §4.1）。测试夹具里也不得出现。
 - 提交信息用 Conventional Commits。
 
 ---
@@ -81,7 +91,8 @@
 | `packages/ragdemo/src/ragdemo/parse/filters.py` | 页眉页脚、目录、会计政策模板的过滤规则 |
 | `packages/ragdemo/src/ragdemo/parse/describe.py` | `TableDescriber` 协议 + Mock + prompt 版本 |
 | `packages/ragdemo/src/ragdemo/parse/validate.py` | 元数据完整性校验 8 项 |
-| `packages/ragdemo/src/ragdemo/parse/mineru.py` | MinerU 封装（独立容器、超时、warnings） |
+| `packages/ragdemo/src/ragdemo/parse/textin.py` | TextIn xParse 封装：参数指纹、错误码分类、`detail[]` → 块、产物落盘 |
+| `packages/ragdemo-core/src/ragdemo_core/blob.py` | `BlobStore` 协议 + `LocalBlobStore`（解析产物与原始件的对象存储） |
 | `packages/ragdemo/src/ragdemo/ingest/documents.py` | `DocumentWriter`：文档与块入库、版本化重解析 |
 | `packages/ragdemo/src/ragdemo/embed/__init__.py` | 包声明 |
 | `packages/ragdemo/src/ragdemo/embed/base.py` | `Embedder` 协议、`l2_normalize`、`embedding_input` |
@@ -1102,10 +1113,15 @@ git commit -m "feat(parse): 元数据完整性校验 8 项，一次报全部违�
 - Consumes: Task 2/3/4/5；P1a Task 8 的 `NormalizedDocument` 与 `known_at_for`
 - Produces:
   - `DocumentWriter(conn, *, ingest_run_id: str, source: str, disclosure_lag: timedelta = timedelta(0))`
-    - `write_document(doc, chunks, descriptions) -> DocumentWriteResult`
-    - `reparse_document(doc, chunks, descriptions, *, supersedes_doc_id: int) -> DocumentWriteResult`
+    - `write_document(doc, chunks, descriptions, *, artifacts: ParseArtifacts | None = None) -> DocumentWriteResult`
+    - `reparse_document(doc, chunks, descriptions, *, supersedes_doc_id: int, artifacts: ParseArtifacts | None = None) -> DocumentWriteResult`
   - `DocumentWriteResult(doc_id: int, block_ids: list[int], skipped: bool)`
+  - `ParseArtifacts(engine: str, json_ref: str | None, md_ref: str | None, warnings: list[str])`
   - `MetadataInvalid(RuntimeError)`
+
+`ParseArtifacts` 定义在这里而不是 `parse/` 包里，是为了保持依赖方向：
+`ingest` 可以 import `parse`，反过来不行（`01-architecture.md` §6）。
+Task 9 的解析器产出 `ParseResult`，由 Task 10 的资产转成 `ParseArtifacts` 交给写入器。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -1305,10 +1321,11 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.documen
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from ragdemo.adapters.announcements import NormalizedDocument, known_at_for
 from ragdemo.parse.chunker import Chunk
@@ -1324,6 +1341,21 @@ class DocumentWriteResult:
     doc_id: int
     block_ids: list[int]
     skipped: bool
+
+
+@dataclass(frozen=True)
+class ParseArtifacts:
+    """路径 B 的解析产物引用。路径 A（供应商结构化接口）没有这些，传 None。
+
+    engine 形如 'textin:4.2.1+a3f19c02'——版本与参数指纹缺一不可，
+    参数一改切块结果就变，而评测集的 gold_block_ids 绑在切块结果上
+    （docs/05-document-pipeline.md §2.2）。
+    """
+
+    engine: str
+    json_ref: str | None = None
+    md_ref: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 class DocumentWriter:
@@ -1347,6 +1379,8 @@ class DocumentWriter:
         doc: NormalizedDocument,
         chunks: list[Chunk],
         descriptions: Mapping[int, str],
+        *,
+        artifacts: ParseArtifacts | None = None,
     ) -> DocumentWriteResult:
         existing = self.conn.execute(
             "SELECT doc_id FROM core.document WHERE source = %s AND content_hash = %s",
@@ -1357,7 +1391,9 @@ class DocumentWriter:
 
         self._require_valid(doc, chunks, descriptions)
         with self.conn.transaction():
-            doc_id = self._insert_document(doc, known_at=self._known_at(doc))
+            doc_id = self._insert_document(
+                doc, known_at=self._known_at(doc), artifacts=artifacts
+            )
             self.conn.execute(
                 "UPDATE core.document SET version_group_id = %s WHERE doc_id = %s",
                 (doc_id, doc_id),
@@ -1372,6 +1408,7 @@ class DocumentWriter:
         descriptions: Mapping[int, str],
         *,
         supersedes_doc_id: int,
+        artifacts: ParseArtifacts | None = None,
     ) -> DocumentWriteResult:
         """升级解析器或换供应商后重新解析。新增版本，不原地替换。"""
         self._require_valid(doc, chunks, descriptions)
@@ -1389,6 +1426,7 @@ class DocumentWriter:
                 known_at=original_known_at,
                 version_group_id=int(version_group_id),
                 supersedes_doc_id=supersedes_doc_id,
+                artifacts=artifacts,
             )
             block_ids = self._insert_blocks(doc, doc_id, chunks, descriptions)
             self.conn.execute(
@@ -1426,21 +1464,30 @@ class DocumentWriter:
         known_at: object,
         version_group_id: int | None = None,
         supersedes_doc_id: int | None = None,
+        artifacts: ParseArtifacts | None = None,
     ) -> int:
         entity_id = self._entity_id(doc.entity_ref)
+        # 路径 A 走供应商结构化接口，没有解析产物；路径 B 三列都有（05 §2.4）。
+        parse_engine = artifacts.engine if artifacts else f"vendor:{self.source}"
+        json_ref = artifacts.json_ref if artifacts else None
+        md_ref = artifacts.md_ref if artifacts else None
+        warnings = Jsonb(artifacts.warnings if artifacts else [])
         row = self.conn.execute(
             "INSERT INTO core.document (entity_id, doc_type, title, period, publish_at,"
             " language, source, source_url, raw_ref, content_hash, version_group_id,"
             " is_correction, supersedes_doc_id, parse_engine, page_count, valid_from,"
-            " known_at, source_ref, ingest_run_id) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s) "
+            " known_at, source_ref, ingest_run_id,"
+            " parse_json_ref, parse_md_ref, parse_warnings) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,"
+            "%s,%s,%s) "
             "RETURNING doc_id",
             (
                 entity_id, doc.doc_type, doc.title, doc.period, doc.publish_at,
                 doc.language, self.source, doc.source_url, doc.raw_bytes_ref,
                 doc.content_hash, version_group_id, doc.is_correction, supersedes_doc_id,
-                f"vendor:{self.source}", doc.page_count, doc.publish_at.date(),
+                parse_engine, doc.page_count, doc.publish_at.date(),
                 known_at, doc.provider_doc_id, self.ingest_run_id,
+                json_ref, md_ref, warnings,
             ),
         ).fetchone()
         assert row is not None
@@ -2114,70 +2161,864 @@ git commit -m "feat(embed): 批量嵌入与断点续传，相同内容只算一�
 
 ---
 
-## Task 9: MinerU 封装与文档管线资产
+## Task 9: TextIn xParse 封装与解析产物落盘
+
+路径 B 的解析器。取代原计划的 MinerU，理由与推翻条件见
+[`docs/adr/0008`](../../adr/0008-textin-xparse-document-parsing.md)，
+调用契约与参数见 [`docs/05-document-pipeline.md`](../../05-document-pipeline.md) §2。
 
 **Files:**
-- Create: `packages/ragdemo/src/ragdemo/parse/mineru.py`, `packages/ragdemo/src/ragdemo/ingest/assets_docs.py`, `tests/parse/test_mineru.py`, `tests/ingest/test_assets_docs.py`
-- Modify: `infra/docker-compose.yml`（加 mineru 服务）
+- Create: `packages/ragdemo-core/src/ragdemo_core/blob.py`, `packages/ragdemo/src/ragdemo/parse/textin.py`, `tests/test_blob.py`, `tests/parse/test_textin.py`, `tests/fixtures/xparse/annual_report.json`
+- Modify: `packages/ragdemo/pyproject.toml`（加 `httpx`，若 P1a 已加则跳过）
 
 **Interfaces:**
-- Consumes: Task 2–8 全部
+- Consumes: P1a Task 8 的 `NormalizedBlock`
 - Produces:
-  - `ParseResult(blocks: list[NormalizedBlock], page_count: int, engine_version: str, warnings: list[str])`
-  - `DocumentParser` Protocol：`parse(pdf_bytes: bytes, *, lang: str = "zh") -> ParseResult`
-  - `MockDocumentParser`
-  - `MineruParser(endpoint: str, *, timeout_s=600, max_pages=500)`，异常 `ParseTimeout` / `ParseTooLarge`
-  - Dagster 资产 `doc_normalized` / `doc_blocks_loaded` / `block_embeddings`
+  - `ragdemo_core.blob`：`BlobStore` Protocol（`exists` / `get` / `put`）、`LocalBlobStore(root: Path)`
+  - `XPARSE_PARAMS: Mapping[str, str | int]`、`param_fingerprint(params) -> str`、`artifact_keys(content_hash, param_fp) -> tuple[str, str]`
+  - `ParseResult(blocks, page_count, engine_version, markdown, json_ref, md_ref, warnings, from_cache)`
+  - `DocumentParser` Protocol：`parse(file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult`
+  - `MockDocumentParser`、`TextInParser(base_url, blob, *, timeout_s=600.0, allow_private=False, params=XPARSE_PARAMS)`
+  - `PageBudget(remaining: int)`
+  - 异常：`ParseTimeout` / `ParsePermanent(marker, code)` / `ParseRetryable` / `ParseConfigError` / `ParseBudgetExhausted` / `PrivateDocumentEgressBlocked`
+  - 纯函数：`blocks_from_detail(detail, *, page_dims) -> list[NormalizedBlock]`、`table_markdown(cells) -> str`
+
+**给实施者的前置说明**：`parse()` 的签名里**没有 `lang` 参数**——
+那是 MinerU 时代的遗留，xParse 自动判断语种。别照着旧代码加回去。
 
 - [ ] **Step 1: 写失败的测试**
 
-`tests/parse/test_mineru.py`：
+`tests/test_blob.py`：
 
 ```python
-"""MinerU 封装：超时与页数上限不得阻塞分区；warnings 必须保留。"""
+"""对象存储抽象。写入必须原子——半个 JSON 会让缓存命中一份坏数据。"""
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
-from ragdemo.parse.mineru import (
-    MockDocumentParser,
-    ParseResult,
-    ParseTooLarge,
-    enforce_limits,
+from ragdemo_core.blob import BlobStore, LocalBlobStore
+
+
+def test_put_then_get_roundtrip(tmp_path: Path) -> None:
+    store = LocalBlobStore(tmp_path)
+    key = store.put("parse/textin/abc/deadbeef.json", b'{"a":1}')
+    assert key == "parse/textin/abc/deadbeef.json"
+    assert store.get(key) == b'{"a":1}'
+
+
+def test_exists_is_false_before_put(tmp_path: Path) -> None:
+    assert LocalBlobStore(tmp_path).exists("parse/textin/abc/deadbeef.json") is False
+
+
+def test_nested_key_creates_directories(tmp_path: Path) -> None:
+    store = LocalBlobStore(tmp_path)
+    store.put("a/b/c/d.json", b"x")
+    assert (tmp_path / "a" / "b" / "c" / "d.json").read_bytes() == b"x"
+
+
+def test_no_partial_file_is_left_behind(tmp_path: Path) -> None:
+    """写入走临时文件 + 原子替换，目录里不留 .part。"""
+    store = LocalBlobStore(tmp_path)
+    store.put("x/y.json", b"payload")
+    assert [p.name for p in (tmp_path / "x").iterdir()] == ["y.json"]
+
+
+def test_key_escaping_the_root_is_rejected(tmp_path: Path) -> None:
+    """key 由 sha256 拼出，但挡一下路径穿越——写到 root 外面去是静默的。"""
+    with pytest.raises(ValueError, match="越出存储根目录"):
+        LocalBlobStore(tmp_path).put("../../etc/passwd", b"x")
+
+
+def test_local_store_satisfies_the_protocol(tmp_path: Path) -> None:
+    assert isinstance(LocalBlobStore(tmp_path), BlobStore)
+```
+
+`tests/fixtures/xparse/annual_report.json` —— 一份裁剪过的真实形状响应，
+覆盖标题层级、正文、页眉（`content=1`）、含合并单元格的表格：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "version": "4.2.1",
+  "duration": 8123,
+  "result": {
+    "markdown": "# 第三节 主营业务\n\n公司主营云端训练芯片。\n\n<table>...</table>",
+    "total_page_number": 2,
+    "success_count": 2,
+    "detail": [
+      {"page_id": 1, "paragraph_id": 0, "outline_level": -1, "content": 1,
+       "type": "paragraph", "text": "寒武纪 2024 年半年度报告", "position": [0, 0, 600, 0, 600, 40, 0, 40]},
+      {"page_id": 1, "paragraph_id": 1, "outline_level": 0, "content": 0,
+       "type": "paragraph", "text": "第三节 主营业务", "position": [0, 60, 600, 60, 600, 100, 0, 100]},
+      {"page_id": 1, "paragraph_id": 2, "outline_level": 1, "content": 0,
+       "type": "paragraph", "text": "3.2 分部收入", "position": [0, 120, 600, 120, 600, 160, 0, 160]},
+      {"page_id": 1, "paragraph_id": 3, "outline_level": -1, "content": 0,
+       "type": "paragraph", "text": "公司主营云端训练芯片与智能计算集群系统。",
+       "position": [0, 180, 600, 180, 600, 220, 0, 220]},
+      {"page_id": 2, "paragraph_id": 4, "outline_level": -1, "content": 0,
+       "type": "table", "text": "分部收入表",
+       "position": [0, 100, 600, 100, 600, 400, 0, 400],
+       "cells": [
+         {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+         {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+         {"row": 1, "col": 0, "row_span": 1, "col_span": 1, "text": "智能计算"},
+         {"row": 1, "col": 1, "row_span": 1, "col_span": 1, "text": "12,340"},
+         {"row": 1, "col": 2, "row_span": 1, "col_span": 1, "text": "+58.2%"}
+       ]}
+    ],
+    "catalog": {"toc": [[{"hierarchy": 1, "title": "第三节 主营业务", "page_id": 1}]]}
+  },
+  "metrics": [
+    {"page_id": 1, "page_image_width": 600, "page_image_height": 850, "dpi": 144},
+    {"page_id": 2, "page_image_width": 600, "page_image_height": 850, "dpi": 144}
+  ]
+}
+```
+
+`tests/parse/test_textin.py`：
+
+```python
+"""xParse 封装。
+
+最要紧的三条：从 detail[] 切块（markdown 没有页码）、
+parse_engine 带参数指纹（否则评测基线静默失效）、私有文档不外送。
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from ragdemo_core.blob import LocalBlobStore
+from ragdemo.parse.textin import (
+    XPARSE_PARAMS,
+    PageBudget,
+    ParseConfigError,
+    ParsePermanent,
+    ParseRetryable,
+    PrivateDocumentEgressBlocked,
+    TextInParser,
+    artifact_keys,
+    blocks_from_detail,
+    param_fingerprint,
+    table_markdown,
 )
 
-
-def test_mock_parser_returns_blocks_and_version() -> None:
-    result = MockDocumentParser().parse(b"%PDF-1.4 fake")
-    assert isinstance(result, ParseResult)
-    assert result.blocks
-    assert result.engine_version.startswith("mock:")
+FIXTURE = Path("tests/fixtures/xparse/annual_report.json")
 
 
-def test_warnings_are_preserved() -> None:
-    """表格结构不确定的块要在检索中降权、抽取时降置信度（05 §2）。"""
-    result = MockDocumentParser(warnings=["page 12: table structure uncertain"]).parse(b"x")
-    assert result.warnings == ["page 12: table structure uncertain"]
+def _payload() -> dict[str, Any]:
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
-def test_page_limit_is_enforced() -> None:
-    with pytest.raises(ParseTooLarge):
-        enforce_limits(page_count=900, max_pages=500)
+def _detail() -> list[dict[str, Any]]:
+    return _payload()["result"]["detail"]
 
 
-def test_page_limit_boundary_is_inclusive() -> None:
-    enforce_limits(page_count=500, max_pages=500)
+# --- 参数指纹 ---------------------------------------------------------------
+
+def test_fingerprint_is_stable_across_key_order() -> None:
+    assert param_fingerprint({"a": 1, "b": 2}) == param_fingerprint({"b": 2, "a": 1})
 
 
-def test_block_ordinals_are_contiguous() -> None:
-    blocks = MockDocumentParser().parse(b"x").blocks
+def test_fingerprint_changes_when_a_parameter_changes() -> None:
+    """参数一改切块结果就变，评测集的 gold_block_ids 会静默失效（05 §2.2）。"""
+    other = {**XPARSE_PARAMS, "table_flavor": "md"}
+    assert param_fingerprint(XPARSE_PARAMS) != param_fingerprint(other)
+
+
+def test_artifact_keys_carry_both_hash_and_fingerprint() -> None:
+    j, m = artifact_keys("abc123", "deadbeef")
+    assert j == "parse/textin/abc123/deadbeef.json"
+    assert m == "parse/textin/abc123/deadbeef.md"
+
+
+# --- detail[] → NormalizedBlock ---------------------------------------------
+
+def test_headers_and_footers_are_dropped() -> None:
+    """content == 1 是供应商标注的非正文（05 §3.3）。"""
+    texts = [b.content for b in blocks_from_detail(_detail(), page_dims={})]
+    assert "寒武纪 2024 年半年度报告" not in texts
+
+
+def test_outline_level_drives_block_type() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    by_text = {b.content: b.block_type for b in blocks}
+    assert by_text["第三节 主营业务"] == "title"
+    assert by_text["公司主营云端训练芯片与智能计算集群系统。"] == "paragraph"
+
+
+def test_section_path_is_built_from_the_heading_stack() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    body = next(b for b in blocks if b.content.startswith("公司主营"))
+    assert body.section_path == "第三节 主营业务 > 3.2 分部收入"
+
+
+def test_a_heading_gets_its_parents_path_not_its_own() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    sub = next(b for b in blocks if b.content == "3.2 分部收入")
+    assert sub.section_path == "第三节 主营业务"
+
+
+def test_table_becomes_one_block_of_type_table() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    tables = [b for b in blocks if b.block_type == "table"]
+    assert len(tables) == 1
+    assert "智能计算" in tables[0].content
+
+
+def test_ordinals_are_contiguous_from_zero() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
     assert [b.ordinal for b in blocks] == list(range(len(blocks)))
+
+
+def test_page_numbers_are_one_based() -> None:
+    """元数据校验第 6 条要求 page ∈ [1, page_count]，差一会让整份文档回滚。"""
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    assert min(b.page for b in blocks if b.page is not None) == 1
+
+
+def test_zero_based_page_ids_are_shifted_up() -> None:
+    detail = [dict(d, page_id=int(d["page_id"]) - 1) for d in _detail()]
+    blocks = blocks_from_detail(detail, page_dims={})
+    assert min(b.page for b in blocks if b.page is not None) == 1
+
+
+def test_bbox_is_normalised_by_page_size() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={1: (600, 850), 2: (600, 850)})
+    heading = next(b for b in blocks if b.content == "第三节 主营业务")
+    assert heading.bbox == pytest.approx((0.0, 60 / 850, 1.0, 100 / 850))
+
+
+def test_bbox_is_none_when_page_size_is_unknown() -> None:
+    """bbox 可空，P1 没有依赖它的功能——为它让整份文档失败不值得。"""
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    assert all(b.bbox is None for b in blocks)
+
+
+# --- 表格 -------------------------------------------------------------------
+
+def test_merged_cells_are_expanded_not_left_blank() -> None:
+    """留空会让跨列表头匹配不到——BM25 与嵌入都按块的整体文本工作。"""
+    md = table_markdown([
+        {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+        {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+    ])
+    assert md.splitlines()[0] == "| 业务分部 | 2024H1 | 2024H1 |"
+
+
+def test_pipe_inside_a_cell_is_escaped() -> None:
+    md = table_markdown([{"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "a|b"}])
+    assert md.splitlines()[0] == r"| a\|b |"
+
+
+def test_empty_cells_produce_empty_string() -> None:
+    assert table_markdown([]) == ""
+
+
+# --- 私有材料闸门 -----------------------------------------------------------
+
+def test_private_document_is_not_sent_upstream(tmp_path: Path) -> None:
+    """换到托管 API 后新增的风险，MinerU 时代不存在（adr/0008 后果 1）。"""
+    parser = TextInParser("http://proxy.invalid", LocalBlobStore(tmp_path))
+    with pytest.raises(PrivateDocumentEgressBlocked):
+        parser.parse(b"%PDF-1.4", owner_user="u-42")
+
+
+def test_private_document_passes_when_the_gate_is_open(tmp_path: Path) -> None:
+    blob = LocalBlobStore(tmp_path)
+    parser = TextInParser("http://proxy.invalid", blob, allow_private=True)
+    key, _ = artifact_keys(parser.content_hash(b"%PDF-1.4"), parser.param_fp)
+    blob.put(key, json.dumps(_payload(), ensure_ascii=False).encode("utf-8"))
+    assert parser.parse(b"%PDF-1.4", owner_user="u-42").from_cache is True
+
+
+# --- 缓存 -------------------------------------------------------------------
+
+def test_cache_hit_skips_the_billed_api_call(tmp_path: Path) -> None:
+    """xParse 按页计费。同一份文档在同一套参数下永远只解析一次（05 §2.4）。"""
+    blob = LocalBlobStore(tmp_path)
+    parser = TextInParser("http://proxy.invalid", blob)
+    json_key, _ = artifact_keys(parser.content_hash(b"%PDF-1.4"), parser.param_fp)
+    blob.put(json_key, json.dumps(_payload(), ensure_ascii=False).encode("utf-8"))
+
+    result = parser.parse(b"%PDF-1.4")          # base_url 不可达，命中缓存才不会炸
+
+    assert result.from_cache is True
+    assert result.json_ref == json_key
+    assert result.blocks
+
+
+def test_engine_version_carries_vendor_version_and_fingerprint(tmp_path: Path) -> None:
+    blob = LocalBlobStore(tmp_path)
+    parser = TextInParser("http://proxy.invalid", blob)
+    json_key, _ = artifact_keys(parser.content_hash(b"x"), parser.param_fp)
+    blob.put(json_key, json.dumps(_payload(), ensure_ascii=False).encode("utf-8"))
+
+    assert parser.parse(b"x").engine_version == f"textin:4.2.1+{parser.param_fp}"
+
+
+# --- 错误码分类 -------------------------------------------------------------
+
+@pytest.mark.parametrize(("code", "marker"), [
+    (40303, "unsupported"), (40301, "unsupported"), (40425, "unsupported"),
+    (40302, "too_large"), (40422, "corrupt"), (40423, "encrypted"),
+])
+def test_permanent_failures_carry_a_marker(code: int, marker: str) -> None:
+    """永久失败要留记号，否则下次分区重跑会再拉一遍、再失败一遍。"""
+    with pytest.raises(ParsePermanent) as excinfo:
+        TextInParser.raise_for_code(code)
+    assert excinfo.value.marker == marker
+
+
+@pytest.mark.parametrize("code", [40004, 40101, 40102, 40103, 40424, 40427])
+def test_config_errors_fail_loudly(code: int) -> None:
+    """这些是我们的 bug，不是数据问题。重试没有意义。"""
+    with pytest.raises(ParseConfigError):
+        TextInParser.raise_for_code(code)
+
+
+def test_insufficient_balance_is_not_retryable() -> None:
+    """单独列出来：重试会在没钱的时候把分区反复跑满。"""
+    with pytest.raises(ParseConfigError, match="余额"):
+        TextInParser.raise_for_code(40003)
+
+
+@pytest.mark.parametrize("code", [30203, 500])
+def test_service_faults_are_retryable(code: int) -> None:
+    with pytest.raises(ParseRetryable):
+        TextInParser.raise_for_code(code)
+
+
+def test_unknown_code_is_treated_as_retryable() -> None:
+    """退避三次后失败，比永久丢掉一份文档安全。"""
+    with pytest.raises(ParseRetryable):
+        TextInParser.raise_for_code(49999)
+
+
+def test_partial_page_failure_is_a_warning_not_an_error(tmp_path: Path) -> None:
+    blob = LocalBlobStore(tmp_path)
+    parser = TextInParser("http://proxy.invalid", blob)
+    payload = _payload()
+    payload["code"] = 50207
+    payload["result"]["success_count"] = 1
+    json_key, _ = artifact_keys(parser.content_hash(b"x"), parser.param_fp)
+    blob.put(json_key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    result = parser.parse(b"x")
+
+    assert result.blocks
+    assert any("partial" in w for w in result.warnings)
+
+
+# --- 页数预算 ---------------------------------------------------------------
+
+def test_budget_reports_exhaustion() -> None:
+    budget = PageBudget(remaining=10)
+    budget.charge(4)
+    assert budget.exhausted is False
+    budget.charge(6)
+    assert budget.exhausted is True
 ```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `uv run pytest tests/test_blob.py tests/parse/test_textin.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo_core.blob'`
+
+- [ ] **Step 3: 写最小实现**
+
+`packages/ragdemo-core/src/ragdemo_core/blob.py`：
+
+```python
+"""对象存储抽象。
+
+P1 用本地文件系统，P4 接 MinIO（docs/01-architecture.md §4）。
+放在 core 包里是因为它与 db 同层：接入侧存原始 PDF、解析侧存解析产物、
+备份侧存 pg_dump，三处都要用，而它不含任何业务语义。
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class BlobStore(Protocol):
+    def exists(self, key: str) -> bool: ...
+    def get(self, key: str) -> bytes: ...
+    def put(self, key: str, data: bytes) -> str: ...
+
+
+class LocalBlobStore:
+    """本地文件系统实现。key 里的 '/' 映射成目录层级。"""
+
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root)
+
+    def _path(self, key: str) -> Path:
+        # key 由固定前缀 + sha256 拼出，理论上安全；但路径穿越的后果是
+        # 静默写到 root 外面，挡一下的成本远低于事后发现。
+        resolved = (self.root / key).resolve()
+        if not resolved.is_relative_to(self.root.resolve()):
+            raise ValueError(f"key 越出存储根目录: {key!r}")
+        return resolved
+
+    def exists(self, key: str) -> bool:
+        return self._path(key).is_file()
+
+    def get(self, key: str) -> bytes:
+        return self._path(key).read_bytes()
+
+    def put(self, key: str, data: bytes) -> str:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 临时文件 + 原子替换。直接写的话，进程在中途死掉会留下半个 JSON，
+        # 而 exists() 会把它当成缓存命中——那份坏数据会一直被读下去。
+        tmp = path.with_name(path.name + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+        return key
+```
+
+`packages/ragdemo/src/ragdemo/parse/textin.py`：
+
+```python
+"""TextIn xParse 封装（docs/05-document-pipeline.md §2，docs/adr/0008）。
+
+三件事做错都不会报错，只会让结果慢慢变坏：
+
+1. **从 detail[] 切块，不从 markdown 切**。markdown 是一整个字符串，没有页码，
+   而 CLAUDE.md §0 要求每个数字绑定 [block_id | page]。
+2. **parse_engine 要带参数指纹**。参数一改切块结果就变，
+   评测集的 gold_block_ids 会静默失效。
+3. **私有文档不外送**。TEXTIN_ALLOW_PRIVATE 默认 false（adr/0008 后果 1）。
+
+认证头不在这里。按 docs/09-compliance-security.md §4.1，
+x-ti-app-id / x-ti-secret-code 由出网代理转发时注入，
+业务容器的环境变量里没有任何供应商密钥。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Final, Protocol, runtime_checkable
+
+import httpx
+
+from ragdemo_core.blob import BlobStore
+from ragdemo.adapters.announcements import NormalizedBlock
+
+ENDPOINT: Final = "/ai/service/v1/pdf_to_markdown"
+DEFAULT_TIMEOUT_S: Final = 600.0
+
+# 参数集合是版本化的一部分（05 §2.2）。改这里必须同步那张表，
+# 并且知道它会让全部存量文档的 param_fp 变化 —— 也就是一次全量重解析。
+XPARSE_PARAMS: Final[Mapping[str, str | int]] = MappingProxyType({
+    "parse_mode": "auto",
+    "markdown_details": 1,      # detail[] 是切块的唯一输入
+    "apply_document_tree": 1,   # outline_level 的来源
+    "apply_merge": 1,           # 合并跨页表格。财报表格跨页是常态
+    "table_flavor": "html",     # 只影响存档的 markdown；HTML 能表达合并单元格
+    "catalog_details": 1,
+    "page_details": 0,          # 关掉 pages[]：逐行 OCR 能把响应撑大一个数量级
+    "raw_ocr": 0,
+    "char_details": 0,
+    "get_image": "none",        # 图片 URL 30 天过期，存下来就是悬空引用
+    "apply_image_analysis": 0,  # 会把图片送去大模型解读，越过计算/生成分离的边界
+    "formula_level": 0,
+    "paratext_mode": "annotation",
+    "dpi": 144,
+    "page_start": 1,
+    "page_count": 1000,
+})
+
+# 错误码分类。分错的代价是不对称的：把永久失败当成可重试会无限烧钱，
+# 把可重试当成永久失败会静默丢文档。
+_PERMANENT: Final[Mapping[int, str]] = MappingProxyType({
+    40301: "unsupported", 40303: "unsupported", 40425: "unsupported",
+    40302: "too_large", 40422: "corrupt", 40423: "encrypted",
+})
+_CONFIG_ERRORS: Final[frozenset[int]] = frozenset({40004, 40101, 40102, 40103, 40424, 40427})
+_RETRYABLE: Final[frozenset[int]] = frozenset({30203, 500})
+_OUT_OF_CREDIT: Final = 40003
+_PARTIAL_FAILURE: Final = 50207
+_OK: Final[frozenset[int]] = frozenset({0, 200, _PARTIAL_FAILURE})
+
+
+class ParseTimeout(RuntimeError):
+    """解析超时。记 textin:skipped 并告警，不阻塞分区。"""
+
+
+class ParseRetryable(RuntimeError):
+    """供应商侧的临时故障。退避重试。"""
+
+
+class ParseConfigError(RuntimeError):
+    """参数、认证或余额问题。是我们这边的事，重试没有意义。"""
+
+
+class PrivateDocumentEgressBlocked(RuntimeError):
+    """用户私有材料默认不外送（adr/0008 后果 1）。"""
+
+
+class ParsePermanent(RuntimeError):
+    """这份文档永远解析不了。marker 进 parse_engine，作为「别再试了」的记号。"""
+
+    def __init__(self, marker: str, code: int) -> None:
+        super().__init__(f"xParse 永久失败 code={code} ({marker})")
+        self.marker = marker
+        self.code = code
+
+
+@dataclass
+class PageBudget:
+    """每次 Dagster run 的页数预算。
+
+    xParse 按页计费，没有闸门的回填能一夜之间烧穿月度预算。
+    只能**事后扣减**——页数要等响应回来才知道，所以它拦不住当前这一份，
+    拦的是后面还没发出去的那些。回填场景要的正是这个。
+    """
+
+    remaining: int
+
+    def charge(self, pages: int) -> None:
+        self.remaining -= pages
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0
+
+
+@dataclass(frozen=True)
+class ParseResult:
+    blocks: list[NormalizedBlock]
+    page_count: int
+    engine_version: str          # textin:<result.version>+<param_fp>
+    markdown: str
+    json_ref: str | None
+    md_ref: str | None
+    warnings: list[str] = field(default_factory=list)
+    from_cache: bool = False
+
+
+@runtime_checkable
+class DocumentParser(Protocol):
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult: ...
+
+
+def param_fingerprint(params: Mapping[str, Any]) -> str:
+    canonical = json.dumps(dict(sorted(params.items())), separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def artifact_keys(content_hash: str, param_fp: str) -> tuple[str, str]:
+    prefix = f"parse/textin/{content_hash}/{param_fp}"
+    return f"{prefix}.json", f"{prefix}.md"
+
+
+def table_markdown(cells: Sequence[Mapping[str, Any]]) -> str:
+    """cells[] → Markdown 表格，合并单元格展开成重复值。
+
+    重复而不是留空：BM25 与嵌入都按块的整体文本工作，
+    留空会让「智能计算 2024H1 收入」在跨列表头上匹配不到。
+    """
+    if not cells:
+        return ""
+    rows = max(int(c["row"]) + int(c.get("row_span", 1)) for c in cells)
+    cols = max(int(c["col"]) + int(c.get("col_span", 1)) for c in cells)
+    grid = [["" for _ in range(cols)] for _ in range(rows)]
+    for cell in cells:
+        text = str(cell.get("text", "")).replace("|", r"\|").replace("\n", " ").strip()
+        r0, c0 = int(cell["row"]), int(cell["col"])
+        for r in range(r0, r0 + int(cell.get("row_span", 1))):
+            for c in range(c0, c0 + int(cell.get("col_span", 1))):
+                grid[r][c] = text
+    lines = ["| " + " | ".join(grid[0]) + " |", "|" + "---|" * cols]
+    lines += ["| " + " | ".join(row) + " |" for row in grid[1:]]
+    return "\n".join(lines)
+
+
+def _page_offset(detail: Sequence[Mapping[str, Any]]) -> int:
+    """page_id 是否 0 基，首次接入时用真实响应确认，在那之前防御式归一。
+
+    元数据校验第 6 条要求 page ∈ [1, page_count]，差一会让整份文档回滚。
+    """
+    ids = [int(d["page_id"]) for d in detail if d.get("page_id") is not None]
+    return 1 if ids and min(ids) == 0 else 0
+
+
+def _bbox(
+    position: Sequence[float] | None, dims: tuple[int, int] | None
+) -> tuple[float, float, float, float] | None:
+    """四角八点 → 轴对齐 [x0,y0,x1,y1]，按页宽高归一化到 [0,1]。
+
+    归一化让存量 bbox 在换 dpi 后仍然有效。取不到页尺寸就返回 None——
+    bbox 可空，P1 没有依赖它的功能。
+    """
+    if not position or len(position) != 8 or dims is None:
+        return None
+    width, height = dims
+    if not width or not height:
+        return None
+    xs, ys = position[0::2], position[1::2]
+    return (min(xs) / width, min(ys) / height, max(xs) / width, max(ys) / height)
+
+
+def page_dims_from_metrics(
+    metrics: Sequence[Mapping[str, Any]] | None, offset: int
+) -> dict[int, tuple[int, int]]:
+    """页尺寸取自顶层 metrics[]，而不是 pages[]——后者被 page_details=0 关掉了。"""
+    return {
+        int(m["page_id"]) + offset: (
+            int(m.get("page_image_width") or 0),
+            int(m.get("page_image_height") or 0),
+        )
+        for m in metrics or []
+        if m.get("page_id") is not None
+    }
+
+
+def blocks_from_detail(
+    detail: Sequence[Mapping[str, Any]],
+    *,
+    page_dims: Mapping[int, tuple[int, int]],
+) -> list[NormalizedBlock]:
+    offset = _page_offset(detail)
+    stack: list[str] = []
+    blocks: list[NormalizedBlock] = []
+
+    for item in detail:
+        if int(item.get("content", 0) or 0) == 1:
+            continue  # 页眉页脚，供应商标注的非正文（05 §3.3）
+
+        kind = str(item.get("type", "paragraph"))
+        level = int(item.get("outline_level", -1))
+        text = str(item.get("text", "")).strip()
+
+        if kind == "table":
+            block_type, content = "table", table_markdown(item.get("cells") or [])
+        elif kind == "image":
+            block_type, content = "figure", text
+        elif level >= 0:
+            block_type, content = "title", text
+        else:
+            block_type, content = "paragraph", text
+
+        if not content.strip():
+            continue  # NormalizedBlock 拒绝空内容
+
+        if block_type == "title":
+            # 层级跳跃（0 直接到 2）时标题会落在比名义层级浅的位置上。
+            # 这是想要的：section_path 要保持连续，中间不出现空档。
+            del stack[level:]
+            stack.append(text)
+            section_path = " > ".join(stack[:-1])
+        else:
+            section_path = " > ".join(stack)
+
+        page = int(item["page_id"]) + offset if item.get("page_id") is not None else None
+        blocks.append(
+            NormalizedBlock(
+                ordinal=len(blocks),
+                block_type=block_type,
+                section_path=section_path,
+                content=content,
+                page=page,
+                bbox=_bbox(item.get("position"), page_dims.get(page) if page else None),
+                level=level if level >= 0 else None,
+            )
+        )
+    return blocks
+
+
+class MockDocumentParser:
+    """离线开发与测试用。真实解析走 TextInParser。"""
+
+    def __init__(self, warnings: list[str] | None = None) -> None:
+        self._warnings = warnings or []
+
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+        blocks = [
+            NormalizedBlock(0, "title", "", "第一节 公司概况", page=1, level=0),
+            NormalizedBlock(
+                1, "paragraph", "第一节 公司概况",
+                "公司主营云端训练芯片与智能计算集群系统。", page=1,
+            ),
+            NormalizedBlock(
+                2, "table", "第一节 公司概况",
+                "| 指标 | 数值 |\n|---|---|\n| 营业收入 | 12,340 |", page=2,
+            ),
+        ]
+        return ParseResult(
+            blocks=blocks, page_count=2, engine_version="mock:1",
+            markdown="# 第一节 公司概况\n", json_ref=None, md_ref=None,
+            warnings=list(self._warnings),
+        )
+
+
+class TextInParser:
+    """合合信息 TextIn xParse 客户端。"""
+
+    def __init__(
+        self,
+        base_url: str,
+        blob: BlobStore,
+        *,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        allow_private: bool = False,
+        params: Mapping[str, str | int] = XPARSE_PARAMS,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.blob = blob
+        self.timeout_s = timeout_s
+        self.allow_private = allow_private
+        self.params = dict(params)
+        self.param_fp = param_fingerprint(self.params)
+
+    @staticmethod
+    def content_hash(file_bytes: bytes) -> str:
+        return hashlib.sha256(file_bytes).hexdigest()
+
+    @staticmethod
+    def raise_for_code(code: int) -> None:
+        if code in _OK:
+            return
+        if code == _OUT_OF_CREDIT:
+            # 单独一条：重试会在没钱的时候把分区反复跑满。
+            raise ParseConfigError("TextIn 账户余额不足，停止解析并告警")
+        if code in _CONFIG_ERRORS:
+            raise ParseConfigError(f"xParse 参数或认证错误 code={code}，这是我们的 bug")
+        marker = _PERMANENT.get(code)
+        if marker is not None:
+            raise ParsePermanent(marker, code)
+        # 未知错误码按可重试处理：退避三次后失败，比永久丢掉一份文档安全。
+        raise ParseRetryable(f"xParse 错误 code={code}")
+
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+        if owner_user is not None and not self.allow_private:
+            raise PrivateDocumentEgressBlocked(
+                "用户私有材料默认不外送。打开 TEXTIN_ALLOW_PRIVATE 之前，"
+                "先落实数据处理协议与用户告知（docs/adr/0008 后果 1）。"
+            )
+
+        json_key, md_key = artifact_keys(self.content_hash(file_bytes), self.param_fp)
+        if self.blob.exists(json_key):
+            # 缓存命中就不调计费 API。同一份文档在同一套参数下只解析一次（05 §2.4）。
+            return self._to_result(
+                json.loads(self.blob.get(json_key)), json_key, md_key, from_cache=True
+            )
+
+        payload = self._call(file_bytes)
+        self.blob.put(json_key, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        markdown = str((payload.get("result") or {}).get("markdown", ""))
+        self.blob.put(md_key, markdown.encode("utf-8"))
+        return self._to_result(payload, json_key, md_key, from_cache=False)
+
+    def _call(self, file_bytes: bytes) -> dict[str, Any]:
+        try:
+            response = httpx.post(
+                f"{self.base_url}{ENDPOINT}",
+                params=self.params,
+                content=file_bytes,  # 二进制流，不是 multipart
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=self.timeout_s,
+            )
+        except httpx.TimeoutException as exc:
+            raise ParseTimeout(f"xParse 解析超过 {self.timeout_s}s") from exc
+
+        response.raise_for_status()
+        payload: dict[str, Any] = response.json()
+        self.raise_for_code(int(payload.get("code", 0)))
+        return payload
+
+    def _to_result(
+        self, payload: Mapping[str, Any], json_key: str, md_key: str, *, from_cache: bool
+    ) -> ParseResult:
+        code = int(payload.get("code", 200))
+        self.raise_for_code(code)  # 缓存里也可能是一份失败响应
+
+        result = payload.get("result") or {}
+        detail = result.get("detail") or []
+        offset = _page_offset(detail)
+        blocks = blocks_from_detail(
+            detail, page_dims=page_dims_from_metrics(payload.get("metrics"), offset)
+        )
+        page_count = int(result.get("total_page_number") or 0)
+
+        warnings: list[str] = []
+        if code == _PARTIAL_FAILURE:
+            warnings.append(
+                f"partial page failure: {result.get('success_count')}/{page_count} pages parsed"
+            )
+
+        return ParseResult(
+            blocks=blocks,
+            page_count=page_count,
+            engine_version=f"textin:{payload.get('version', 'unknown')}+{self.param_fp}",
+            markdown=str(result.get("markdown", "")),
+            json_ref=json_key,
+            md_ref=md_key,
+            warnings=warnings,
+            from_cache=from_cache,
+        )
+```
+
+依赖（若 P1a 已加 `httpx` 则跳过）——改的是成员包，不是工作区根：
+
+```toml
+# packages/ragdemo/pyproject.toml
+[project]
+dependencies = [
+  "httpx>=0.27",
+]
+```
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `uv run pytest tests/test_blob.py tests/parse/test_textin.py -v`
+Expected: 全部通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add packages/ragdemo-core/src/ragdemo_core/blob.py packages/ragdemo/src/ragdemo/parse/textin.py tests/test_blob.py tests/parse/test_textin.py tests/fixtures/xparse/annual_report.json packages/ragdemo/pyproject.toml
+git commit -m "feat(parse): TextIn xParse 封装、解析产物落盘与成本缓存"
+```
+
+---
+
+## Task 10: 文档管线 Dagster 资产
+
+**Files:**
+- Create: `packages/ragdemo/src/ragdemo/ingest/assets_docs.py`, `tests/ingest/test_assets_docs.py`
+- Modify: `db/migrations/007_parse_artifacts.sql`（已随本次变更创建，此处只确认它在迁移序列里）
+
+**Interfaces:**
+- Consumes: Task 2–9 全部
+- Produces:
+  - `PreparedDocument(doc: NormalizedDocument, artifacts: ParseArtifacts | None)`
+  - `prepare_documents(docs, parser, blob, budget) -> list[PreparedDocument]`
+  - Dagster 资产 `doc_normalized` / `doc_blocks_loaded` / `block_embeddings`
+
+**给实施者的前置说明**：原计划里 `MineruParser` 定义了却从没被任何资产调用过——
+路径 B 是断的。这个任务把它接上：`prepare_documents` 是那段接线，
+它是纯函数（不碰数据库、不建 Dagster 上下文），所以能被大量用例覆盖。
+
+- [ ] **Step 1: 写失败的测试**
 
 `tests/ingest/test_assets_docs.py`：
 
 ```python
-"""文档管线端到端：Mock 公告 → 切块 → 入库 → 嵌入，全部块可检索。"""
+"""文档管线端到端：Mock 公告 → 解析 → 切块 → 入库 → 嵌入，全部块可检索。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -2186,11 +3027,18 @@ import psycopg
 import pytest
 from dagster import build_asset_context
 
-from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
+from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
+from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.ingest.assets_docs import block_embeddings, doc_blocks_loaded, doc_normalized
+from ragdemo.ingest.assets_docs import (
+    block_embeddings,
+    doc_blocks_loaded,
+    doc_normalized,
+    prepare_documents,
+)
 from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.parse.textin import PageBudget, MockDocumentParser, ParsePermanent
 
 MIGRATIONS = Path("db/migrations")
 
@@ -2210,11 +3058,14 @@ def conn(temp_db: str) -> psycopg.Connection:
 
 
 @pytest.mark.db
-def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection) -> None:
+def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
     docs = doc_normalized(ctx, MockAnnouncementProvider())
+    prepared = prepare_documents(
+        docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000)
+    )
     writer = DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements")
-    doc_blocks_loaded(ctx, docs, writer)
+    doc_blocks_loaded(ctx, prepared, writer)
     stats = block_embeddings(ctx, conn, MockEmbedder())
 
     assert stats.written > 0
@@ -2230,176 +3081,198 @@ def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection) -> None:
 
 
 @pytest.mark.db
-def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection) -> None:
+def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
     docs = doc_normalized(ctx, MockAnnouncementProvider())
-    writer = DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements")
-    doc_blocks_loaded(ctx, docs, writer)
+    blob = LocalBlobStore(tmp_path)
+    prepared = prepare_documents(docs, MockDocumentParser(), blob, PageBudget(1000))
+
+    doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements"))
     (after_first,) = conn.execute("SELECT count(*) FROM core.doc_block").fetchone()  # type: ignore[misc]
 
-    doc_blocks_loaded(ctx, docs, DocumentWriter(conn, ingest_run_id="r2", source="mock-announcements"))
+    doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r2", source="mock-announcements"))
     (after_second,) = conn.execute("SELECT count(*) FROM core.doc_block").fetchone()  # type: ignore[misc]
 
     assert after_first == after_second
+
+
+@pytest.mark.db
+def test_parse_artifact_refs_land_in_the_document_row(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    """用户要的「存 JSON + 存 Markdown」在库里的落点就是这两列（05 §2.4）。"""
+    ctx = build_asset_context(partition_key="2024-10-28")
+    docs = [d for d in doc_normalized(ctx, MockAnnouncementProvider()) if not d.blocks]
+    prepared = prepare_documents(
+        docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000)
+    )
+    doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock"))
+
+    rows = conn.execute(
+        "SELECT parse_engine, parse_json_ref, parse_md_ref FROM core.document"
+    ).fetchall()
+    assert rows
+    for engine, json_ref, md_ref in rows:
+        assert engine.startswith("mock:") or engine.startswith("textin:")
+        assert json_ref is not None and md_ref is not None
+
+
+def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
+    """供应商已经给了结构化块，再送去解析既花钱又不如原件准（05 §1）。"""
+    class Exploding(MockDocumentParser):
+        def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> object:
+            raise AssertionError("路径 A 的文档不应该被解析")
+
+    ctx = build_asset_context(partition_key="2024-10-28")
+    docs = [d for d in doc_normalized(ctx, MockAnnouncementProvider()) if d.blocks]
+    prepared = prepare_documents(docs, Exploding(), LocalBlobStore(tmp_path), PageBudget(1000))
+
+    assert [p.artifacts for p in prepared] == [None] * len(prepared)
+
+
+def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
+    """页数预算耗尽就停，不静默烧钱（05 §2.7）。"""
+    class Counting(MockDocumentParser):
+        calls = 0
+
+        def parse(self, file_bytes: bytes, *, owner_user: str | None = None):
+            type(self).calls += 1
+            return super().parse(file_bytes, owner_user=owner_user)
+
+    ctx = build_asset_context(partition_key="2024-10-28")
+    docs = [d for d in doc_normalized(ctx, MockAnnouncementProvider()) if not d.blocks]
+    parser = Counting()
+    prepare_documents(docs, parser, LocalBlobStore(tmp_path), PageBudget(1))
+
+    assert Counting.calls == 1  # 第一份用掉 2 页，预算见底，第二份不再发
+
+
+def test_permanent_failure_still_records_the_document(tmp_path: Path) -> None:
+    """不留记号的话，下次分区重跑会再拉一遍、再失败一遍（05 §2.6）。"""
+    class Unsupported(MockDocumentParser):
+        def parse(self, file_bytes: bytes, *, owner_user: str | None = None):
+            raise ParsePermanent("unsupported", 40303)
+
+    ctx = build_asset_context(partition_key="2024-10-28")
+    docs = [d for d in doc_normalized(ctx, MockAnnouncementProvider()) if not d.blocks]
+    prepared = prepare_documents(docs, Unsupported(), LocalBlobStore(tmp_path), PageBudget(1000))
+
+    assert prepared
+    for item in prepared:
+        assert item.doc.blocks == []
+        assert item.artifacts is not None
+        assert item.artifacts.engine == "textin:unsupported"
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `pytest tests/parse/test_mineru.py tests/ingest/test_assets_docs.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.mineru'`
+Run: `uv run pytest tests/ingest/test_assets_docs.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.assets_docs'`
 
 - [ ] **Step 3: 写最小实现**
-
-`packages/ragdemo/src/ragdemo/parse/mineru.py`：
-
-```python
-"""MinerU 封装。
-
-在独立容器中运行，通过 HTTP 调用：MinerU 内存占用大且偶发崩溃，
-跑在主进程里会拖垮整个管线（docs/05-document-pipeline.md §2）。
-
-版本固定并记录：升级会改变切块结果，必须能区分哪些块是哪个版本解析的，
-否则评测集的 gold_block_ids 会莫名失效。
-"""
-from __future__ import annotations
-
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
-
-import httpx
-
-from ragdemo.adapters.announcements import NormalizedBlock
-
-DEFAULT_TIMEOUT_S = 600
-DEFAULT_MAX_PAGES = 500
-
-
-class ParseTimeout(RuntimeError):
-    """解析超时。记 parse_engine = 'mineru:skipped' 并告警，不阻塞分区。"""
-
-
-class ParseTooLarge(RuntimeError):
-    """超出页数上限。"""
-
-
-@dataclass(frozen=True)
-class ParseResult:
-    blocks: Sequence[NormalizedBlock]
-    page_count: int
-    engine_version: str
-    warnings: list[str] = field(default_factory=list)
-
-
-def enforce_limits(*, page_count: int, max_pages: int = DEFAULT_MAX_PAGES) -> None:
-    if page_count > max_pages:
-        raise ParseTooLarge(f"文档 {page_count} 页，超出上限 {max_pages}")
-
-
-@runtime_checkable
-class DocumentParser(Protocol):
-    def parse(self, pdf_bytes: bytes, *, lang: str = "zh") -> ParseResult: ...
-
-
-class MockDocumentParser:
-    """离线开发与测试用。真实 PDF 解析走 MineruParser。"""
-
-    def __init__(self, warnings: list[str] | None = None) -> None:
-        self._warnings = warnings or []
-
-    def parse(self, pdf_bytes: bytes, *, lang: str = "zh") -> ParseResult:
-        blocks = [
-            NormalizedBlock(0, "title", "", "第一节 公司概况", page=1, level=1),
-            NormalizedBlock(
-                1, "paragraph", "第一节 公司概况",
-                "公司主营云端训练芯片与智能计算集群系统。", page=1,
-            ),
-            NormalizedBlock(
-                2, "table", "第一节 公司概况",
-                "| 指标 | 数值 |\n| 营业收入 | 12,340 |", page=2,
-            ),
-        ]
-        return ParseResult(
-            blocks=blocks, page_count=2, engine_version="mock:1",
-            warnings=list(self._warnings),
-        )
-
-
-class MineruParser:
-    """调用独立容器中的 MinerU 服务。"""
-
-    def __init__(
-        self,
-        endpoint: str,
-        *,
-        timeout_s: float = DEFAULT_TIMEOUT_S,
-        max_pages: int = DEFAULT_MAX_PAGES,
-        engine_version: str,
-    ) -> None:
-        self.endpoint = endpoint
-        self.timeout_s = timeout_s
-        self.max_pages = max_pages
-        self.engine_version = engine_version
-
-    def parse(self, pdf_bytes: bytes, *, lang: str = "zh") -> ParseResult:
-        try:
-            response = httpx.post(
-                self.endpoint,
-                files={"file": ("doc.pdf", pdf_bytes, "application/pdf")},
-                data={"lang": lang},
-                timeout=self.timeout_s,
-            )
-        except httpx.TimeoutException as exc:
-            raise ParseTimeout(f"MinerU 解析超过 {self.timeout_s}s") from exc
-
-        response.raise_for_status()
-        payload = response.json()
-        enforce_limits(page_count=int(payload["page_count"]), max_pages=self.max_pages)
-
-        blocks = [
-            NormalizedBlock(
-                ordinal=i,
-                block_type=str(b["type"]),
-                section_path=str(b.get("section_path", "")),
-                content=str(b["content"]),
-                page=b.get("page"),
-                bbox=tuple(b["bbox"]) if b.get("bbox") else None,
-                level=b.get("level"),
-            )
-            for i, b in enumerate(payload["blocks"])
-        ]
-        return ParseResult(
-            blocks=blocks,
-            page_count=int(payload["page_count"]),
-            engine_version=self.engine_version,
-            warnings=list(payload.get("warnings", [])),
-        )
-```
 
 `packages/ragdemo/src/ragdemo/ingest/assets_docs.py`：
 
 ```python
-"""文档管线的 Dagster 资产。"""
+"""文档管线的 Dagster 资产。
+
+路径 A（供应商结构化接口）的文档自带块，直接入库。
+路径 B 的文档只有一个 raw_bytes_ref，要先送 xParse 解析（docs/05-document-pipeline.md §1）。
+分流在 prepare_documents 里，它是纯函数——不碰数据库、不要 Dagster 上下文。
+"""
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 from dagster import AssetExecutionContext, asset
 
+from ragdemo_core.blob import BlobStore
 from ragdemo.adapters.announcements import AnnouncementProvider, NormalizedDocument
 from ragdemo.adapters.base import FetchContext
 from ragdemo.embed.base import Embedder
 from ragdemo.embed.batch import EmbedStats, embed_pending_blocks
 from ragdemo.ingest.assets import DAILY
-from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.ingest.documents import DocumentWriter, ParseArtifacts
 from ragdemo.parse.chunker import chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
+from ragdemo.parse.textin import (
+    DocumentParser,
+    PageBudget,
+    ParsePermanent,
+    ParseTimeout,
+    PrivateDocumentEgressBlocked,
+)
 from ragdemo.parse.tree import build_tree
 
 UTC = timezone.utc
 LOOKBACK = timedelta(days=1)
+
+
+@dataclass(frozen=True)
+class PreparedDocument:
+    doc: NormalizedDocument
+    artifacts: ParseArtifacts | None
+
+
+def prepare_documents(
+    docs: Sequence[NormalizedDocument],
+    parser: DocumentParser,
+    blob: BlobStore,
+    budget: PageBudget,
+) -> list[PreparedDocument]:
+    prepared: list[PreparedDocument] = []
+    for doc in docs:
+        if doc.blocks:
+            # 路径 A：供应商已经做过表格还原与章节识别，再解析一遍既花钱
+            # 又不如原件准（05 §1 的优先级）。
+            prepared.append(PreparedDocument(doc, None))
+            continue
+        if doc.raw_bytes_ref is None:
+            continue  # 既没有块也没有原件，没东西可做
+        if budget.exhausted:
+            break  # 预算见底就停，剩下的留给下一次 run（05 §2.7）
+
+        try:
+            result = parser.parse(blob.get(doc.raw_bytes_ref))
+        except ParsePermanent as exc:
+            # 记号留在 parse_engine 里，意思是「别再试了」。文档行照写，
+            # 只是没有块——否则下次分区重跑会再拉一遍、再失败一遍。
+            prepared.append(
+                PreparedDocument(
+                    replace(doc, blocks=[]),
+                    ParseArtifacts(engine=f"textin:{exc.marker}", warnings=[str(exc)]),
+                )
+            )
+            continue
+        except ParseTimeout as exc:
+            prepared.append(
+                PreparedDocument(
+                    replace(doc, blocks=[]),
+                    ParseArtifacts(engine="textin:skipped", warnings=[str(exc)]),
+                )
+            )
+            continue
+        except PrivateDocumentEgressBlocked:
+            raise  # 闸门不能被静默吞掉
+
+        if not result.from_cache:
+            budget.charge(result.page_count)
+        prepared.append(
+            PreparedDocument(
+                replace(doc, blocks=list(result.blocks), page_count=result.page_count),
+                ParseArtifacts(
+                    engine=result.engine_version,
+                    json_ref=result.json_ref,
+                    md_ref=result.md_ref,
+                    warnings=list(result.warnings),
+                ),
+            )
+        )
+    return prepared
 
 
 @asset(partitions_def=DAILY, group_name="documents")
@@ -2421,14 +3294,15 @@ def doc_normalized(
 @asset(partitions_def=DAILY, group_name="documents")
 def doc_blocks_loaded(
     ctx: AssetExecutionContext,
-    doc_normalized: list[NormalizedDocument],
+    prepared: Sequence[PreparedDocument],
     writer: DocumentWriter,
 ) -> int:
     cfg = ChunkConfig()
     describer = MockTableDescriber()
     total = 0
-    for doc in doc_normalized:
-        chunks = build_tree(chunk_document(doc, cfg))
+    for item in prepared:
+        doc = item.doc
+        chunks = build_tree(chunk_document(doc, cfg)) if doc.blocks else []
         descriptions = {
             c.ordinal: describer.describe(
                 c.content, title=doc.title, section_path=c.section_path
@@ -2436,7 +3310,7 @@ def doc_blocks_loaded(
             for c in chunks
             if c.block_type == "table"
         }
-        result = writer.write_document(doc, chunks, descriptions)
+        result = writer.write_document(doc, chunks, descriptions, artifacts=item.artifacts)
         if not result.skipped:
             total += len(result.block_ids)
     ctx.log.info("loaded blocks", extra={"run_id": ctx.run_id, "count": total})
@@ -2460,31 +3334,16 @@ def block_embeddings(
     return stats
 ```
 
-`infra/docker-compose.yml` 追加服务（版本按实际镜像固定）：
-
-```yaml
-  mineru:
-    image: opendatalab/mineru:2.1.0
-    container_name: ragdemo-mineru
-    ports:
-      - "127.0.0.1:8100:8000"
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-    restart: unless-stopped
-```
-
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `pytest tests/parse tests/ingest -v`
+Run: `uv run pytest tests/parse tests/ingest -v`
 Expected: 全部通过（含端到端的 BM25 命中）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add packages/ragdemo/src/ragdemo/parse/mineru.py packages/ragdemo/src/ragdemo/ingest/assets_docs.py tests/parse/test_mineru.py tests/ingest/test_assets_docs.py infra/docker-compose.yml
-git commit -m "feat(parse): MinerU 封装与文档管线 Dagster 资产"
+git add packages/ragdemo/src/ragdemo/ingest/assets_docs.py tests/ingest/test_assets_docs.py
+git commit -m "feat(ingest): 文档管线 Dagster 资产，接通路径 B 解析"
 ```
 
 ---
@@ -2496,28 +3355,50 @@ git commit -m "feat(parse): MinerU 封装与文档管线 Dagster 资产"
 | 工作流 | 出口条件 | 任务 | 覆盖 |
 |---|---|---|---|
 | W2.1 切块器、父子块、`is_leaf` | 表格不切分；`is_leaf` 与父子关系一致 | Task 2, 3 | ✅ |
-| W2.2 MinerU 封装 | 超时不阻塞分区；`warnings` 落库 | Task 9 | ✅ |
+| W2.2 xParse 封装 + 产物落盘 | 超时不阻塞分区；`parse_warnings` 落库；缓存命中不重复调用计费 API；私有文档被拦下 | Task 9, 10 | ✅ |
 | W2.3 `content_desc` | 表格块 100% 有描述；不含解读 | Task 4 | ✅ |
 | W2.4 嵌入器 | 断点续传；缓存主键含 `model` 与 `owner_user` | Task 7, 8 | ✅ |
 | W2.5 元数据校验与幂等重建 | 任一项不过整份回滚；重解析沿用原 `known_at` | Task 5, 6 | ✅ |
 | 切块长度规范冲突 | 文档与实现一致 | Task 1 | ✅ |
 
-**类型一致性检查**：`Chunk` 在 Task 2 定义，Task 3/5/6 使用，字段一致；
-`ChunkConfig` 在 Task 1 定义，Task 2/3/9 使用；`validate_chunks(doc, chunks, descriptions)`
-在 Task 5 定义、Task 6 调用，三参数一致；`Embedder.embed` 在 Task 7 定义，
-Task 8/9 使用；`EmbedStats` 在 Task 8 定义，Task 9 返回；`DocumentWriter.write_document`
-在 Task 6 定义，Task 9 调用，参数顺序一致。
+**类型一致性检查**：`Chunk` 在 Task 2 定义，Task 3/5/6/10 使用，字段一致；
+`ChunkConfig` 在 Task 1 定义，Task 2/3/10 使用；`validate_chunks(doc, chunks, descriptions)`
+在 Task 5 定义、Task 6 调用，三参数一致；`ParseArtifacts` 在 Task 6 定义
+（不在 `parse/` 里，以保持 `ingest → parse` 的单向依赖），Task 9 的 `ParseResult`
+由 Task 10 转成它；`DocumentWriter.write_document(doc, chunks, descriptions, *, artifacts=None)`
+在 Task 6 定义、Task 10 调用，签名一致；`Embedder.embed` 在 Task 7 定义，
+Task 8/10 使用；`EmbedStats` 在 Task 8 定义，Task 10 返回；`BlobStore` 在 Task 9
+定义，Task 10 使用。
 
-**已知缺口（有意留给 P1c）**：
-`warnings` 的落库字段目前只在 `ParseResult` 里，尚未写入数据库——
-它的消费方是检索降权与抽取置信度，属于 P1c/P2。届时在 `document` 上加一列
-`parse_warnings jsonb`（新增迁移，只加不改）。
+**与 MinerU 方案的差异**（本计划在 [adr/0008](../../adr/0008-textin-xparse-document-parsing.md)
+之后重写过 Task 9，读旧代码或旧文档的人注意）：
+
+- `DocumentParser.parse()` **没有 `lang` 参数**了——xParse 自动判断语种；
+- 不再需要 `mineru` 容器，`infra/docker-compose.yml` 不加服务；
+- 不再有 `ParseTooLarge` / `enforce_limits`：托管 API 的页数上限是成本问题不是内存问题，
+  换成 `PageBudget`（而且事后扣减——页数要等响应回来才知道，
+  它拦的是后面那些还没发出去的）；
+- 新增 `ragdemo_core.blob`，因为解析产物要落盘。
+
+**已经修掉的前一版缺口**：`parse_warnings` 此前只活在 `ParseResult` 里、没有落库位置，
+现在有了 `core.document.parse_warnings`（迁移 `007_parse_artifacts.sql`）。
+
+**已知缺口（有意留给 P1c / P4）**：
+
+- `LocalBlobStore` 是本地文件系统实现。多副本部署时解析缓存不共享，
+  会重复付费。P4 接 MinIO 时换实现，`BlobStore` 协议不变。
+- `page_id` 是否 0 基尚未用真实响应确认。封装里做了防御式归一，
+  首次接入后把实测结论回写 `docs/05-document-pipeline.md` §2.5。
+- `parse_warnings` 的**消费方**（检索降权、抽取置信度降档）在 P1c/P2。
 
 ---
 
 ## 完成之后
 
-1. 在 [`docs/10-roadmap.md`](../../10-roadmap.md) P1 的「MinerU 封装、切块器、父子块构造、
-   元数据校验」与「嵌入器 + 批处理 + 缓存 + 断点续传」两项上打勾。
-2. 把实测结论回写 [`docs/05-document-pipeline.md`](../../05-document-pipeline.md)。
-3. 执行 [P1c 检索与验收](2026-09-21-p1c-retrieval-and-acceptance.md)。
+1. 在 [`docs/10-roadmap.md`](../../10-roadmap.md) P1 的「TextIn xParse 封装（含解析产物落盘）、
+   切块器、父子块构造、元数据校验」与「嵌入器 + 批处理 + 缓存 + 断点续传」两项上打勾。
+2. 把实测结论回写 [`docs/05-document-pipeline.md`](../../05-document-pipeline.md)——
+   特别是 §2.5 的 `page_id` 基数，以及 §2.6 里实际遇到的错误码。
+3. 确认 `api.textin.com` 已在出网代理白名单里，且密钥只在代理层
+   （[`docs/09-compliance-security.md`](../../09-compliance-security.md) §4.1）。
+4. 执行 [P1c 检索与验收](2026-09-21-p1c-retrieval-and-acceptance.md)。

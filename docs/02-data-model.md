@@ -418,8 +418,15 @@ CREATE TABLE core.document (
   version_group_id  bigint NOT NULL,        -- 同一份文档的所有版本共享
   is_correction     boolean NOT NULL DEFAULT false,
   supersedes_doc_id bigint REFERENCES core.document,
-  parse_engine      text,                   -- vendor:<name> / mineru:<version>
+  parse_engine      text,                   -- vendor:<name> / textin:<版本>+<参数指纹>
   page_count        int,
+  -- 以下三列由迁移 007_parse_artifacts.sql 追加（adr/0008）。
+  -- 解析产物存对象存储、表里只留 key，与 §4 的 provider_snapshot.response_ref 同理：
+  -- 一份 500 页年报的解析响应可达数十 MB，进 jsonb 会 TOAST 到拖垮 pg_dump，
+  -- 而它从来不参与关系查询。
+  parse_json_ref    text,                   -- xParse 完整响应 JSON 的对象存储 key
+  parse_md_ref      text,                   -- result.markdown 的对象存储 key
+  parse_warnings    jsonb NOT NULL DEFAULT '[]'::jsonb,
   owner_tenant      text,                   -- 多租户隔离；NULL = 公共空间
   owner_user        text,                   -- 用户私有空间；NULL = 非私有
   valid_from        date NOT NULL,
@@ -435,12 +442,23 @@ CREATE UNIQUE INDEX document_dedup_uk ON core.document (source, content_hash);
 CREATE INDEX document_entity   ON core.document (entity_id, doc_type, publish_at DESC);
 CREATE INDEX document_version  ON core.document (version_group_id, known_at DESC);
 CREATE INDEX document_known_at ON core.document (known_at);
+CREATE INDEX document_parse_engine ON core.document (parse_engine);   -- 007：按解析器分组评测
 CREATE INDEX document_owner    ON core.document (owner_tenant, owner_user)
   WHERE owner_tenant IS NOT NULL OR owner_user IS NOT NULL;
 ```
 
 `owner_tenant` / `owner_user` 同时为 NULL 表示公共空间。权限模型见
 `09-compliance-security.md` §3。
+
+`parse_json_ref` 的 key 形如 `parse/textin/<content_hash>/<param_fp>.json`，
+同时是**成本缓存键**——调用按页计费的解析 API 前先查它是否存在
+（`05-document-pipeline.md` §2.4）。
+
+**给 `core.document` 加列必须同时重建 `asof.document`**：视图用 `SELECT *`，
+列清单在 `CREATE VIEW` 时就固定了，新列不会自动出现。应用层只允许查 `asof` 视图
+（CLAUDE.md §1.1），漏掉这一步的后果是新列在整个应用侧永远不可见——不报错，只是查不到。
+迁移 007 用 `CREATE OR REPLACE VIEW` 重建（只允许在末尾追加列，正好够用，
+且会保留 `GRANT`；`DROP` + 重建则不会）。
 
 ### 5.2 `core.doc_block`
 

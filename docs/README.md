@@ -22,7 +22,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | [02-data-model.md](02-data-model.md) | 全量 PostgreSQL DDL 与逐字段数据字典 | 后端、数据 |
 | [03-point-in-time.md](03-point-in-time.md) | **时点一致性规范**：三时间戳语义、`as_of` 查询、更正处理、防泄漏 | 所有人 |
 | [04-ingestion.md](04-ingestion.md) | 数据源、适配器接口、Dagster 资产与分区、限流重试 | 数据工程 |
-| [05-document-pipeline.md](05-document-pipeline.md) | 解析、切块、父子块、元数据、向量化 | 数据工程 |
+| [05-document-pipeline.md](05-document-pipeline.md) | TextIn xParse 解析与产物落盘、切块、父子块、元数据、向量化 | 数据工程 |
 | [06-retrieval.md](06-retrieval.md) | 过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开 | 后端 |
 | [07-agents.md](07-agents.md) | Agent 目录、工具外壳层、编排、prompt 版本化、验证器 | AI 工程 |
 | [08-evaluation.md](08-evaluation.md) | 三套评测集、指标阈值、观点评分公式、CI 门禁 | 所有人 |
@@ -30,7 +30,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | [10-roadmap.md](10-roadmap.md) | P0–P6 **交付什么**：阶段产出与阶段级量化验收 | 所有人 |
 | [11-sdlc.md](11-sdlc.md) | **怎么交付**：生命周期规范、工作流分解、依赖与并行、变更控制 | 所有人，排期时必读 |
 | [glossary.md](glossary.md) | 术语表 | 所有人 |
-| [adr/](adr/README.md) | 架构决策记录（7 篇） | 所有人 |
+| [adr/](adr/README.md) | 架构决策记录（8 篇） | 所有人 |
 | [superpowers/plans/](superpowers/plans/) | 每阶段一份可执行的 TDD 逐步计划 | 执行者 |
 
 ## 与项目简报的章节映射
@@ -52,6 +52,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | §10 仓库结构建议 | `01-architecture.md` §5 |
 | §11 工程约定 | `/CLAUDE.md` §3 + `11-sdlc.md` §2（DoR/DoD）、§6（变更控制） |
 | §12 开放问题 | `adr/0001`–`adr/0007`（全部已决策） |
+| —（简报之外的后续决策） | `adr/0008` 文档解析供应商 |
 | §13 术语表 | `glossary.md` |
 
 ## 对简报的四处修正
@@ -97,3 +98,14 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 （`EXPLAIN` 验证需要真实数据量，3 行测试数据下优化器根本不会走索引）；
 `06` §3.3 的 pgvector 迭代扫描参数效果；召回率指标。
 这些都在 `10-roadmap.md` 的 P0/P1 验收项中。
+
+## 变更记录
+
+| 日期 | 变更 | 影响面 |
+|---|---|---|
+| 2026-09-21 | **路径 B 的解析器由 MinerU 换为合合信息 TextIn xParse**（[adr/0008](adr/0008-textin-xparse-document-parsing.md)）。解析产物（完整响应 JSON + Markdown）落对象存储，`core.document` 增三列，迁移 `007_parse_artifacts.sql` | `01` §1/§4/§5、`02` §5.1、`04` §1、`05` §1–2/§3.3/§7.2/§8、`09` §4.1、`10` P1/P4、`11` W2.2、`CLAUDE.md` §2、P1b Task 6/9/10 |
+
+`007_parse_artifacts.sql` 已在真实 ParadeDB 上执行验证：迁移 001–007 全序列
+0 error；三个新列确实出现在 `asof.document` 视图中（`CREATE OR REPLACE VIEW`
+重建过），且 `app_read` 的 SELECT 授权在重建后保留。
+P1b Task 9 的解析器纯函数与缓存路径也已按计划里的夹具实跑通过。

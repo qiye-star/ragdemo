@@ -11,7 +11,7 @@
 | B. 实体解析 | L1 | `entity` / `entity_alias` / `entity_relation`，别名消歧 | `02-data-model.md` §2 |
 | C. 口径归一 | L2 | `node_metric` 指标字典、AI 收入拆分规则、财年与币种转换 | `02-data-model.md` §3 |
 | D. 时点管理 | L3 | 双时间轴、更正处理、`as_of` 安全视图 | `03-point-in-time.md` |
-| E. 文档管线 | L5 | 结构化公告落库、MinerU 解析、切块、元数据、向量化 | `05-document-pipeline.md` |
+| E. 文档管线 | L5 | 结构化公告落库、TextIn xParse 解析、切块、元数据、向量化 | `05-document-pipeline.md` |
 | F. 权限隔离 | L4 | C 端私有空间；B 端多租户 / SSO / 项目隔离 / 审计 | `09-compliance-security.md` §3 |
 | G. 检索路由 | L6 | 意图路由、结构化查询翻译、元数据过滤、混合检索、重排、父子块 | `06-retrieval.md` |
 | H. Agent 层 | — | 产业链映射 → 基本面 → 事件 → 宏观政策 → 多空辩论 → 观点入库 → 复盘 | `07-agents.md` |
@@ -136,7 +136,7 @@
 ├── api                FastAPI（P4 起对外；P1–P3 仅内网 CLI 调用）
 ├── worker             LangGraph Agent 执行器
 ├── egress-proxy       出网代理：域名白名单 + 凭据注入 + 调用日志
-└── minio（可选）      原始 PDF / 用户上传件对象存储
+└── minio              原始 PDF、用户上传件、解析产物（JSON + Markdown）对象存储
 ```
 
 **出网代理是强制的**。所有对外部 API 的调用（供应商、模型、嵌入）都经 `egress-proxy`：
@@ -164,7 +164,7 @@ ragdemo/
   src/
     adapters/               # tushare / announcements / edgar / rss / mcp_shell
     ingest/                 # dagster 资产、分区、时点写入中间件
-    parse/                  # mineru 封装、切块、元数据
+    parse/                  # xparse 封装、切块、元数据
     retrieval/              # 过滤、混合、重排、父子块、同义词
     entities/               # 解析、别名、消歧
     metrics/                # 指标字典、口径转换、计算

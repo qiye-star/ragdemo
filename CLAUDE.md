@@ -71,6 +71,7 @@ Agent 与应用层**只允许查询 `asof` schema 下的安全视图**，不得�
 | 公告数据源 | 先定 `AnnouncementProvider` 抽象接口，不锁定供应商 | 0005 |
 | 前端 | P1–P3 无前端，CLI + Markdown/HTML + 推送；P4 再上 Web | 0006 |
 | 观点评分 | 价格分（相对环节超额收益）与论据分**双轨分存，不合并** | 0007 |
+| 文档解析 | 合合信息 TextIn xParse（托管 API），取代 MinerU | 0008 |
 
 ## 3. 工程约定
 

@@ -56,7 +56,7 @@ make db-init && make seed && make test-schema
 - [ ] EDGAR 适配器（10-K / 10-Q / 8-K 列表与全文）
 - [ ] 时点写入中间件：`known_at` 计算、更正处理、幂等写入
 - [ ] 实体解析三层降级 + `entity_resolution_queue`
-- [ ] MinerU 封装、切块器、父子块构造、元数据校验
+- [ ] TextIn xParse 封装（含解析产物落盘）、切块器、父子块构造、元数据校验
 - [ ] 嵌入器 + 批处理 + 缓存 + 断点续传
 - [ ] `RetrievalService`：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块
 - [ ] `eval_retrieval` 录入工具 + 评测脚本 + CI 集成
@@ -133,7 +133,7 @@ make db-init && make seed && make test-schema
 
 - [ ] Web 简报（阅读、追问、溯源点击定位到页面/bbox）
 - [ ] Excel 导出（保留公式）
-- [ ] 用户上传 → MinerU → 私有空间检索
+- [ ] 用户上传 → 解析 → 私有空间检索（先解决 `TEXTIN_ALLOW_PRIVATE` 闸门，见 adr/0008）
 - [ ] RLS 策略与私有隔离测试
 - [ ] 账号体系（登录、会话）
 

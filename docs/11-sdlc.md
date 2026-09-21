@@ -139,7 +139,7 @@
 | # | 任务 | 规范 | 出口条件 |
 |---|---|---|---|
 | W2.1 | 切块器：结构切分、父子块、`is_leaf` | [05](05-document-pipeline.md) §3–4 | 表格块不被切分的单测；`is_leaf` 与父子关系一致 |
-| W2.2 | MinerU 封装（独立容器 + 队列 + 超时） | [05](05-document-pipeline.md) §2 | 超时文档不阻塞分区；`warnings` 落库 |
+| W2.2 | TextIn xParse 封装 + 解析产物落盘 | [05](05-document-pipeline.md) §2 | 超时文档不阻塞分区；`parse_warnings` 落库；缓存命中不重复调用计费 API；私有文档被闸门拦下 |
 | W2.3 | `content_desc` 生成 | [05](05-document-pipeline.md) §3.2 | 表格块 100% 有 `content_desc`；描述不含解读与推断 |
 | W2.4 | 嵌入器：批处理、内容哈希缓存、断点续传 | [05](05-document-pipeline.md) §5.3 | 中断后重跑只处理 `embedding IS NULL`；缓存主键含 `model` 与 `owner_user` |
 | W2.5 | 元数据校验（8 项）与幂等重建 | [05](05-document-pipeline.md) §6–7 | 任一项不满足整份文档回滚；重解析沿用原 `known_at` |

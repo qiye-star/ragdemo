@@ -165,6 +165,9 @@ allowlist:
     inject_credential: TUSHARE_TOKEN
   - host: www.sec.gov
     inject_credential: null
+  - host: api.textin.com                 # 文档解析（adr/0008）
+    inject_credential: [TEXTIN_APP_ID, TEXTIN_SECRET_CODE]
+    inject_as: header                    # x-ti-app-id / x-ti-secret-code
   - host: <model-api-host>
     inject_credential: MODEL_API_KEY
 default_action: deny
