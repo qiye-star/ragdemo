@@ -146,6 +146,9 @@ def check_point_in_time_leaks(
         row = conn.execute(sql, {"probe": probe_as_of}).fetchone()
         if row is None:
             raise RuntimeError(f"泄漏自检 {name} 没有返回任何行，这不应该发生")
-        if row[0]:
-            found[name] = int(row[0])
+        count = row[0]
+        if not isinstance(count, int):
+            raise TypeError(f"泄漏自检 {name} 返回了非整数: {count!r}")
+        if count:
+            found[name] = count
     return found
