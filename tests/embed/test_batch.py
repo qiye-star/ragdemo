@@ -45,6 +45,10 @@ class RecordingVectorIndex:
     def count(self) -> int:
         return len(self.upserted)
 
+    def existing_ids(self, block_ids: Sequence[int]) -> set[int]:
+        upserted_ids = {item.block_id for item in self.upserted}
+        return {block_id for block_id in block_ids if block_id in upserted_ids}
+
 
 class CountingEmbedder(MockEmbedder):
     """统计实际调用次数，用于验证缓存与批大小。"""
