@@ -45,10 +45,16 @@ services:
       # 这样容器重建（升级镜像版本、`docker compose down` 不带 -v）不会丢数据。
       - chromadata:/data
     healthcheck:
-      # 镜像内没有 curl/wget，用镜像自带的 python 探活 v2 heartbeat 接口。
+      # chromadb/chroma:1.5.9 是精简 Debian 镜像：既没有 curl/wget，**也没有 python**
+      # （实测 `python -c ...` 探针一律 exit 127 "python: not found"，容器永远 unhealthy，
+      # 而 `make up` 用的是 `up -d --wait`，会一直卡到超时）。
+      # 镜像里有 bash，用它的 /dev/tcp 直接发一个 HTTP/1.0 请求并断言 200——
+      # 只探端口通不够，进程起来但路由没注册时端口也是通的。
       test:
-        - "CMD-SHELL"
-        - "python -c \"import urllib.request as u; u.urlopen('http://localhost:8000/api/v2/heartbeat')\""
+        - "CMD"
+        - "bash"
+        - "-c"
+        - "exec 3<>/dev/tcp/localhost/8000; printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\n\\r\\n' >&3; grep -q '200 OK' <&3"
       interval: 3s
       timeout: 3s
       retries: 20
