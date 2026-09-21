@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# 环境与密钥
+.env
+.env.local
+*.pem
+*.key
+
+# Superpowers SDD 工作区（临时产物，非仓库内容）
+.superpowers/
+
+# 数据与运行时产物
+db/seed/*.csv
+!db/seed/README.md
+data/
+*.log
