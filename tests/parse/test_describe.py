@@ -86,3 +86,51 @@ def test_interpretation_word_followed_by_predicate_is_still_rejected() -> None:
     """「说明」后面接实词、构成完整论断时，仍然要拦截——不能因为上面的放宽而漏判。"""
     with pytest.raises(DescriptionRejected):
         validate_description("本表说明公司经营情况良好。")
+
+
+# --- Finding B: Pattern 3「预计/预期」误伤真实披露文件里的固定科目/列名 ---
+#
+# 「预计负债」是几乎每张资产负债表都有的标准会计科目；「预计总投资额」
+# 「预期信用损失」是募集资金/应收款附注表格里的标准列名。MockTableDescriber
+# 把表头原样列进描述，裸子串匹配会把这些名词短语误判为前瞻性论断，
+# 拦截整份文档。
+
+
+def test_provision_column_name_is_not_rejected() -> None:
+    """「预计负债」是资产负债表的标准科目名，不是"预计会怎样"的论断。"""
+    text = "资产负债表，列为 项目、期末余额、预计负债，共 5 行。"
+    assert validate_description(text) == text
+
+
+def test_estimated_fundraising_column_name_is_not_rejected() -> None:
+    """「预计总投资额」是募集资金披露表格的标准列名。"""
+    text = "分部收入表，列为 业务分部、预计总投资额、说明，共 2 行。"
+    assert validate_description(text) == text
+
+
+def test_expected_credit_loss_column_name_is_not_rejected() -> None:
+    """「预期信用损失」是应收款项减值附注的标准会计准则术语（CAS 22）。"""
+    text = "应收账款附注，列为 项目、期末余额、预期信用损失，共 3 行。"
+    assert validate_description(text) == text
+
+
+def test_forecast_with_explicit_period_is_still_rejected() -> None:
+    """放宽名词短语用法后，真正的前瞻性论断依然要拦截。"""
+    with pytest.raises(DescriptionRejected):
+        validate_description("公司预计2025年营收将实现两位数增长。")
+
+
+def test_forecast_via_expectation_verb_is_still_rejected() -> None:
+    """「预期」用作动词、后面跟着方向性判断时，依然要拦截。"""
+    with pytest.raises(DescriptionRejected):
+        validate_description("行业景气度回升，预期公司业绩持续改善。")
+
+
+def test_mock_describer_handles_table_with_provision_column() -> None:
+    """MockTableDescriber 对真实资产负债表（含"预计负债"列）不应该报错。"""
+    table = "| 项目 | 期末余额 | 预计负债 |\n| 应付职工薪酬 | 340 | 12 |"
+    desc = MockTableDescriber().describe(
+        table, title="资产负债表", section_path="第四节 > 资产负债表"
+    )
+    assert "预计负债" in desc
+    assert "1 行" in desc

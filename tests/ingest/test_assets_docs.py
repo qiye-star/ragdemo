@@ -40,7 +40,7 @@ def _xparse_payload() -> dict[str, Any]:
     return cast("dict[str, Any]", json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8")))
 
 
-def _normalized(ctx: Any) -> list[NormalizedDocument]:
+def _normalized(ctx: Any) -> list[NormalizedDocument]:  # noqa: ANN401
     """`doc_normalized` 是 `@asset` 装饰的函数：Dagster 的 `AssetsDefinition.__call__`
     对直接调用一律标注返回 `object`（不看被装饰函数的真实签名，见
     `dagster._core.definitions.assets.definition.assets_definition.AssetsDefinition.__call__`）。

@@ -34,6 +34,7 @@
 | [0006](0006-no-frontend-until-p4.md) | P1–P3 不做 Web 前端 | 已接受 | 2026-09-21 |
 | [0007](0007-opinion-scoring-dual-track.md) | 观点评分双轨制，分开存不合并 | 已接受 | 2026-09-21 |
 | [0008](0008-textin-xparse-document-parsing.md) | 通用文档解析用 TextIn xParse，取代 MinerU | 已接受 | 2026-09-21 |
+| [0009](0009-chroma-as-vector-candidate-generator.md) | Chroma 承担向量召回，pgvector 保留为时点权威 | 已接受 | 2026-09-21 |
 
 ## 什么时候要写新 ADR
 
