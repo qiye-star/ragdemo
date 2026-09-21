@@ -123,3 +123,53 @@ def test_write_facts_reports_counts_per_outcome(writer: PointInTimeWriter) -> No
     t = datetime(2024, 10, 28, 18, 32, tzinfo=UTC)
     counts = writer.write_facts([_record(12340.5, t), _record(12340.5, t)])
     assert counts == {WriteOutcome.INSERTED: 1, WriteOutcome.SKIPPED_IDENTICAL: 1}
+
+
+@pytest.mark.db
+def test_scale_factor_converts_provider_unit_before_write_and_compare(
+    temp_db: str,
+) -> None:
+    """metric_source_map.scale_factor 是「供应商单位 -> 本系统单位」的换算系数。
+
+    这里模拟一个用元（而不是本系统的万元）报数的供应商：scale_factor=0.0001。
+    一条原始值 1234050000.0（元）的记录写库后，存的应该是换算过的
+    123405.0（万元），不是原始的元值——否则同一 metric_id 下不同供应商的
+    量纲不一致会被 write_fact 的「值不同即更正」逻辑误判成真实数值变化。
+    """
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, entity_type, l1_layer,"
+        " l2_segment, l3_node, primary_node, tushare_code) "
+        "VALUES ('CN.688256','寒武纪-U','listed','算力','AI芯片',"
+        " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
+    )
+    conn.execute(
+        "INSERT INTO core.node_metric (metric_id, metric_name, metric_role,"
+        " frequency, source_type, definition, unit) "
+        "VALUES ('revenue_total','营业收入','confirming','quarterly','filing','合并口径','CNY')"
+    )
+    conn.execute(
+        "INSERT INTO core.metric_source_map "
+        " (metric_id, provider, provider_field, scale_factor) "
+        "VALUES ('revenue_total','tushare','revenue_total',0.0001)"
+    )
+    conn.commit()
+    writer = PointInTimeWriter(conn, ingest_run_id="r1", source="tushare")
+
+    # 供应商原始值是元；scale_factor=0.0001 换算成本系统的万元单位。
+    raw_yuan_value = 1234050000.0
+    outcome = writer.write_fact(
+        _record(raw_yuan_value, datetime(2024, 10, 28, 18, 32, tzinfo=UTC))
+    )
+    assert outcome is WriteOutcome.INSERTED
+
+    (stored_value,) = conn.execute("SELECT value FROM core.fin_fact").fetchone()  # type: ignore[misc]
+    assert abs(float(stored_value) - 123405.0) < 1e-6
+
+    # 用同一原始值（元）再写一次：换算后与已存的万元值相同，应判定为幂等跳过，
+    # 而不是因为「1234050000.0 != 123405.0」误判成一次更正。
+    repeat = writer.write_fact(
+        _record(raw_yuan_value, datetime(2024, 10, 29, 18, 32, tzinfo=UTC))
+    )
+    assert repeat is WriteOutcome.SKIPPED_IDENTICAL

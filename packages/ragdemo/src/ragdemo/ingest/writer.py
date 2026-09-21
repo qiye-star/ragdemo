@@ -51,7 +51,7 @@ class PointInTimeWriter:
         self.ingest_run_id = ingest_run_id
         self.source = source
         self._entity_cache: dict[str, str] = {}
-        self._metric_cache: dict[str, str] = {}
+        self._metric_cache: dict[str, tuple[str, Decimal]] = {}
 
     # --- 标识映射 ---------------------------------------------------------
 
@@ -67,11 +67,19 @@ class PointInTimeWriter:
             self._entity_cache[entity_ref] = str(row[0])
         return self._entity_cache[entity_ref]
 
-    def _metric_id(self, metric_field: str) -> str:
+    def _metric_lookup(self, metric_field: str) -> tuple[str, Decimal]:
+        """返回 (metric_id, scale_factor)。scale_factor 是「供应商单位 -> 本系统
+        单位」的换算系数（core.metric_source_map 的列注释），NOT NULL DEFAULT 1。
+
+        不同供应商可能用不同量纲报同一个 metric_id（例如一个报元、一个报万元）——
+        不在这里应用 scale_factor，write_fact() 里的「值相同则跳过、不同则更正」
+        逻辑会把纯粹的单位差异误判成真实的数值变化，静默地把整条历史序列写错
+        10 万倍。见 docs/superpowers/plans 的 review 记录（本文件 Finding 5）。
+        """
         key = f"{self.source}:{metric_field}"
         if key not in self._metric_cache:
             row = self.conn.execute(
-                "SELECT metric_id FROM core.metric_source_map "
+                "SELECT metric_id, scale_factor FROM core.metric_source_map "
                 " WHERE provider = %s AND provider_field = %s ORDER BY priority LIMIT 1",
                 (self.source, metric_field),
             ).fetchone()
@@ -79,15 +87,21 @@ class PointInTimeWriter:
                 raise UnknownMetricField(
                     f"{self.source} 的字段 {metric_field!r} 未在 metric_source_map 中登记"
                 )
-            self._metric_cache[key] = str(row[0])
+            self._metric_cache[key] = (str(row[0]), cast(Decimal, row[1]))
         return self._metric_cache[key]
 
     # --- 写入 -------------------------------------------------------------
 
     def write_fact(self, record: FactRecord) -> WriteOutcome:
-        """写一条事实。已存在相同值则跳过，值不同则走更正流程。"""
+        """写一条事实。已存在相同值则跳过，值不同则走更正流程。
+
+        写库前用 metric_source_map.scale_factor 把供应商原始单位换算成本系统
+        单位——同一个 metric_id 的不同供应商可能量纲不同（元 vs 万元），
+        不换算就直接比较/入库，会把单纯的单位差异误判成数值变更。
+        """
         entity_id = self._entity_id(record.entity_ref)
-        metric_id = self._metric_id(record.metric_field)
+        metric_id, scale_factor = self._metric_lookup(record.metric_field)
+        scaled_value = record.value * float(scale_factor)
 
         with self.conn.transaction():
             live = self.conn.execute(
@@ -107,7 +121,7 @@ class PointInTimeWriter:
                         f"{entity_id}/{metric_id}/{record.period}: 新数据 known_at "
                         f"{record.known_at} 早于现有 {existing_known_at}"
                     )
-                if abs(float(existing_value) - record.value) < _VALUE_EPSILON:
+                if abs(float(existing_value) - scaled_value) < _VALUE_EPSILON:
                     return WriteOutcome.SKIPPED_IDENTICAL
                 self.conn.execute(
                     "UPDATE core.fin_fact SET superseded_at = %s "
@@ -129,7 +143,7 @@ class PointInTimeWriter:
                     metric_id,
                     record.period,
                     record.period_end,
-                    record.value,
+                    scaled_value,
                     record.unit,
                     record.currency,
                     record.valid_from,
