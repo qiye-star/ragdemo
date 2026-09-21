@@ -5,8 +5,11 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ragdemo.adapters.base import Adapter, RawResponse
+import httpx
+
+from ragdemo.adapters.base import Adapter, FetchContext, RawResponse
 from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
+from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from tests.contracts.adapter_contract import AdapterContract
 
 FIXTURES = Path("tests/fixtures/edgar")
@@ -57,3 +60,41 @@ def test_two_filings_same_day_are_ordered_by_acceptance_time() -> None:
         key=lambda f: f.acceptance_datetime,
     )
     assert [f.form_type for f in same_day] == ["8-K", "10-Q"]
+
+
+def test_http_client_payload_flattens_submissions_envelope() -> None:
+    """真实 HttpClient 分支也要展开 submissions envelope，
+    防止 known_at() 因 acceptanceDateTime 嵌套而 KeyError。"""
+    # 模拟未展开的 EDGAR 原始响应
+    envelope = json.loads(
+        (FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=envelope)
+
+    transport = httpx.MockTransport(handler)
+    client = HttpClient(
+        provider="edgar",
+        base_url="https://data.sec.gov",
+        policy=RetryPolicy(max_attempts=1, backoff_base_s=0.0),
+        bucket=TokenBucket(rate_per_minute=10_000),
+        transport=transport,
+    )
+    adapter = EdgarAdapter(client=client)
+    ctx = FetchContext(ingest_run_id="test-run", partition_date=datetime.now(UTC).date())
+
+    # 获取 fetch() 的输出
+    responses = list(adapter.fetch(ctx, cik=1045810))
+    assert len(responses) == 1
+    raw = responses[0]
+
+    # 验证 payload 已展开为行列表（每行有直接顶层的 acceptanceDateTime）
+    assert isinstance(raw.payload, list)
+    assert len(raw.payload) == 3
+    for row in raw.payload:
+        assert isinstance(row, dict)
+        assert "acceptanceDateTime" in row
+        # 验证 known_at() 能正确处理该记录（不会因嵌套结构 KeyError）
+        known_at = adapter.known_at(row)
+        assert known_at.tzinfo is not None

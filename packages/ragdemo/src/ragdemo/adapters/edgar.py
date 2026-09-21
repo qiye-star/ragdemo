@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -91,7 +91,8 @@ class EdgarAdapter:
             return
         assert self._client is not None
         cik = str(params["cik"]).zfill(10)
-        yield self._client.get_json(f"/submissions/CIK{cik}.json", {})
+        raw = self._client.get_json(f"/submissions/CIK{cik}.json", {})
+        yield replace(raw, payload=_rows(raw.payload))
 
     def known_at(self, record: Any) -> datetime:  # noqa: ANN401
         """acceptanceDateTime 是 EDGAR 公开受理该申报的精确时刻。"""
