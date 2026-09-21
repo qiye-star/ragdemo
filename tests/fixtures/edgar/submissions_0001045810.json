@@ -1,0 +1,7 @@
+{"cik": "1045810", "name": "NVIDIA CORP", "filings": {"recent": {
+  "accessionNumber": ["0001045810-24-000316", "0001045810-24-000299", "0001045810-24-000250"],
+  "form": ["10-Q", "8-K", "DEF 14A"],
+  "filingDate": ["2024-11-20", "2024-11-20", "2024-05-30"],
+  "acceptanceDateTime": ["2024-11-20T16:31:24.000Z", "2024-11-20T16:05:11.000Z", "2024-05-30T17:02:00.000Z"],
+  "primaryDocument": ["nvda-20241027.htm", "nvda-8k.htm", "nvda-def14a.htm"]
+}}}
