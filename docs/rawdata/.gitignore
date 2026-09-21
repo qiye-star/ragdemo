@@ -1,0 +1,4 @@
+# 原始 PDF 不入 git：体积大，且研报属第三方版权材料。
+# 元数据（manifest.jsonl）与说明（README.md）保留追踪。
+*.pdf
+failures.log
