@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -363,3 +364,129 @@ def test_unresolved_entity_ref_still_writes_and_warns(
     assert any("entity_ref" in r.getMessage() for r in warnings)
     assert any(getattr(r, "entity_ref", None) == "NOT-A-REAL-CODE" for r in warnings)
     assert any(getattr(r, "ingest_run_id", None) == "r1" for r in warnings)
+
+
+# --- Finding 2：owner_user 必须真正落到 document 与 doc_block 两张表 -------
+#
+# 以前 _insert_document / _insert_blocks 的 INSERT 列清单里压根没有
+# owner_tenant / owner_user——db/migrations/006_asof_views_and_roles.sql 的
+# 整套行级隔离都建立在这两列上，写库这一步把它们悄悄丢了，
+# TEXTIN_ALLOW_PRIVATE 一旦打开，私有材料就会被存成公共行，直接违反
+# CLAUDE.md §0"用户上传材料私有隔离：不得进入公共检索空间"。
+
+
+@pytest.mark.db
+def test_owner_user_is_persisted_on_both_document_and_doc_block(writer: DocumentWriter) -> None:
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc, owner_user="u1")  # type: ignore[arg-type]
+
+    (doc_owner,) = writer.conn.execute(
+        "SELECT owner_user FROM core.document WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert doc_owner == "u1"
+
+    block_owners = {
+        r[0]
+        for r in writer.conn.execute(
+            "SELECT owner_user FROM core.doc_block WHERE doc_id = %s", (result.doc_id,)
+        ).fetchall()
+    }
+    assert block_owners == {"u1"}
+
+
+@pytest.mark.db
+def test_ordinary_public_path_is_unchanged(writer: DocumentWriter) -> None:
+    """不传 owner_user——绝大多数既有调用方的写法——必须继续落公共行
+    （owner_user 列为 NULL）：这条修复不能悄悄改变既有行为。"""
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    (doc_owner,) = writer.conn.execute(
+        "SELECT owner_user FROM core.document WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert doc_owner is None
+
+    block_owners = {
+        r[0]
+        for r in writer.conn.execute(
+            "SELECT owner_user FROM core.doc_block WHERE doc_id = %s", (result.doc_id,)
+        ).fetchall()
+    }
+    assert block_owners == {None}
+
+
+@pytest.mark.db
+def test_reparse_preserves_the_original_documents_owner(writer: DocumentWriter) -> None:
+    """重解析是同一份文档换了个解析结果，不是换了归属——不能借道
+    reparse_document 把一份私有文档的新版本悄悄写成公共行（也不能反过来）。
+    与 known_at 的处理方式一致：沿用被取代那份文档的值，不接受调用方传入。"""
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    first = writer.write_document(doc, chunks, desc, owner_user="u1")  # type: ignore[arg-type]
+
+    second = writer.reparse_document(
+        doc,  # type: ignore[arg-type]
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,
+    )
+
+    (doc_owner,) = writer.conn.execute(
+        "SELECT owner_user FROM core.document WHERE doc_id = %s", (second.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert doc_owner == "u1"
+
+
+@pytest.mark.db
+def test_private_document_is_invisible_to_other_users_through_rls(
+    writer: DocumentWriter, temp_db: str
+) -> None:
+    """只看 owner_user 列的值还不够证明"私有材料不进入公共检索空间"——
+    db/migrations/006_asof_views_and_roles.sql 的 doc_visibility /
+    block_visibility 策略才是真正决定"谁能看见"的地方：
+
+        (owner_tenant IS NULL AND owner_user IS NULL)                  -- 公共
+     OR (owner_tenant = current_setting('app.tenant', true)
+         AND owner_user IS NULL)                                       -- 租户私有
+     OR (owner_user = current_setting('app.user', true))               -- 用户私有
+
+    这里起一个真实的 app_read 角色，通过 RLS 验证：u2 经 asof.document
+    读不到 u1 的私有文档，只看得到公共文档；u1 自己两者都看得到。
+    （tests/db/test_asof_layer.py 已经用原始 SQL 验证过这套策略本身生效；
+    这里验证的是 DocumentWriter.write_document 写出来的行确实落在
+    这套策略预期的位置上——即 Finding 2 修的那条写入路径。）
+    """
+    docs = _docs()
+    public_doc = cast(NormalizedDocument, docs[0])
+    private_doc = cast(NormalizedDocument, docs[1])
+    public_chunks, public_desc = _prepare(public_doc)
+    private_chunks, private_desc = _prepare(private_doc)
+
+    writer.write_document(public_doc, public_chunks, public_desc)
+    writer.write_document(private_doc, private_chunks, private_desc, owner_user="u1")
+
+    app_read_user = f"apptest_{uuid.uuid4().hex[:10]}"
+    password = "not-a-real-secret"  # 测试库里的一次性口令，不是任何环境的真实凭据
+    writer.conn.execute(f"CREATE USER \"{app_read_user}\" PASSWORD '{password}'")
+    writer.conn.execute(f'GRANT app_read TO "{app_read_user}"')
+    writer.conn.commit()
+    try:
+
+        def _titles_visible_to(user: str) -> set[str]:
+            with (
+                psycopg.connect(temp_db, user=app_read_user, password=password) as c,
+                c.transaction(),
+            ):
+                c.execute("SELECT set_config('app.as_of', '2025-06-01T00:00:00+00:00', true)")
+                c.execute("SELECT set_config('app.user', %s, true)", (user,))
+                rows = c.execute("SELECT title FROM asof.document").fetchall()
+            return {r[0] for r in rows}
+
+        assert _titles_visible_to("u2") == {public_doc.title}
+        assert _titles_visible_to("u1") == {public_doc.title, private_doc.title}
+    finally:
+        writer.conn.execute(f'DROP OWNED BY "{app_read_user}"')
+        writer.conn.execute(f'DROP USER IF EXISTS "{app_read_user}"')
+        writer.conn.commit()

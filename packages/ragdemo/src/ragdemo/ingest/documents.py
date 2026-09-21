@@ -72,8 +72,20 @@ class DocumentWriter:
         chunks: list[Chunk],
         descriptions: Mapping[int, str],
         *,
+        owner_user: str | None = None,
         artifacts: ParseArtifacts | None = None,
     ) -> DocumentWriteResult:
+        """`owner_user` 为 None（缺省）时写公共行——与改动前的行为完全一致。
+
+        非 None 时这份文档与它的全部块都落进用户私有空间：
+        db/migrations/006_asof_views_and_roles.sql 的 doc_visibility /
+        block_visibility 策略把 owner_user IS NULL 当作"公共"，这里不写这一
+        列的话，TEXTIN_ALLOW_PRIVATE 一旦打开，私有材料就会被悄悄存成公共行
+        ——正是 CLAUDE.md §0"用户上传材料私有隔离"要防的事。`owner_tenant`
+        不在这次修的范围内：现有代码库里没有任何地方产出租户级别的归属
+        （embed / retrieval 也只认 owner_user），引入它需要的是 P4 才该做的
+        租户模型设计决定，这里保持它恒为 NULL。
+        """
         existing = self._live_doc_id(doc.content_hash)
         if existing is not None:
             return DocumentWriteResult(existing, [], skipped=True)
@@ -83,7 +95,11 @@ class DocumentWriter:
         try:
             with self.conn.transaction():
                 doc_id = self._insert_document(
-                    doc, known_at=self._known_at(doc), entity_id=entity_id, artifacts=artifacts
+                    doc,
+                    known_at=self._known_at(doc),
+                    entity_id=entity_id,
+                    artifacts=artifacts,
+                    owner_user=owner_user,
                 )
                 self.conn.execute(
                     "UPDATE core.document SET version_group_id = %s WHERE doc_id = %s",
@@ -144,15 +160,21 @@ class DocumentWriter:
         supersedes_doc_id: int,
         artifacts: ParseArtifacts | None = None,
     ) -> DocumentWriteResult:
-        """升级解析器或换供应商后重新解析。新增版本，不原地替换。"""
+        """升级解析器或换供应商后重新解析。新增版本，不原地替换。
+
+        归属沿用被取代的那份文档——重解析是同一份文档换了个解析结果，不是
+        换了归属；这里不接受调用方传 owner_user，就像 known_at 不接受调用方
+        传一样（改了归属会让这份文档从它原本该属于的私有空间里消失，
+        或者反过来混进公共空间）。
+        """
         self._require_valid(doc, chunks, descriptions)
         row = self.conn.execute(
-            "SELECT known_at, version_group_id FROM core.document WHERE doc_id = %s",
+            "SELECT known_at, version_group_id, owner_user FROM core.document WHERE doc_id = %s",
             (supersedes_doc_id,),
         ).fetchone()
         if row is None:
             raise ValueError(f"被取代的文档 {supersedes_doc_id} 不存在")
-        original_known_at, version_group_id = row
+        original_known_at, version_group_id, original_owner_user = row
         entity_id = self._resolve_entity_id(doc.entity_ref)
 
         with self.conn.transaction():
@@ -175,6 +197,7 @@ class DocumentWriter:
                 version_group_id=int(version_group_id),
                 supersedes_doc_id=supersedes_doc_id,
                 artifacts=artifacts,
+                owner_user=original_owner_user,
             )
             block_ids = self._insert_blocks(doc, doc_id, entity_id, chunks, descriptions)
         self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
@@ -207,6 +230,7 @@ class DocumentWriter:
         version_group_id: int | None = None,
         supersedes_doc_id: int | None = None,
         artifacts: ParseArtifacts | None = None,
+        owner_user: str | None = None,
     ) -> int:
         # 路径 A 走供应商结构化接口，没有解析产物；路径 B 三列都有（05 §2.4）。
         parse_engine = artifacts.engine if artifacts else f"vendor:{self.source}"
@@ -216,10 +240,10 @@ class DocumentWriter:
         row = self.conn.execute(
             "INSERT INTO core.document (entity_id, doc_type, title, period, publish_at,"
             " language, source, source_url, raw_ref, content_hash, version_group_id,"
-            " is_correction, supersedes_doc_id, parse_engine, page_count, valid_from,"
-            " known_at, source_ref, ingest_run_id,"
+            " is_correction, supersedes_doc_id, parse_engine, page_count, owner_user,"
+            " valid_from, known_at, source_ref, ingest_run_id,"
             " parse_json_ref, parse_md_ref, parse_warnings) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,"
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,%s,"
             "%s,%s,%s) "
             "RETURNING doc_id",
             (
@@ -238,6 +262,7 @@ class DocumentWriter:
                 supersedes_doc_id,
                 parse_engine,
                 doc.page_count,
+                owner_user,
                 doc.publish_at.date(),
                 known_at,
                 doc.provider_doc_id,
@@ -258,8 +283,13 @@ class DocumentWriter:
         chunks: list[Chunk],
         descriptions: Mapping[int, str],
     ) -> list[int]:
-        known_at, publish_at = self.conn.execute(
-            "SELECT known_at, publish_at FROM core.document WHERE doc_id = %s", (doc_id,)
+        # owner_user 从刚插入的 document 行读回，而不是让调用方另传一份——
+        # 与 known_at / publish_at 同样的道理（本方法原有的反规范化列），
+        # 单一数据源保证 doc_block.owner_user 不可能与 document.owner_user
+        # 打架（02 §5.3：block 的反规范化列必须与 document 完全一致）。
+        known_at, publish_at, owner_user = self.conn.execute(
+            "SELECT known_at, publish_at, owner_user FROM core.document WHERE doc_id = %s",
+            (doc_id,),
         ).fetchone()  # type: ignore[misc]
 
         ordinal_to_block_id: dict[int, int] = {}
@@ -273,9 +303,9 @@ class DocumentWriter:
             row = self.conn.execute(
                 "INSERT INTO core.doc_block (doc_id, parent_block_id, block_type,"
                 " section_path, ordinal, page, bbox, content, content_desc, tokens,"
-                " is_leaf, entity_id, doc_type, publish_at, valid_from, known_at,"
+                " is_leaf, entity_id, doc_type, publish_at, owner_user, valid_from, known_at,"
                 " source, source_ref, ingest_run_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "RETURNING block_id",
                 (
                     doc_id,
@@ -292,6 +322,7 @@ class DocumentWriter:
                     entity_id,
                     doc.doc_type,
                     publish_at,
+                    owner_user,
                     doc.publish_at.date(),
                     known_at,
                     self.source,
