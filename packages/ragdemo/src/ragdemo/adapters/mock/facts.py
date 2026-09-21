@@ -6,10 +6,12 @@ known_at 一律由 partition_date 推导，因此回填历史分区时天然落�
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Any
 
 from ragdemo.adapters.base import FactRecord, FetchContext, RawResponse
+
+CST = timezone(timedelta(hours=8))
 
 _DEFAULT_ROWS: tuple[dict[str, Any], ...] = (
     {"ts_code": "688256.SH", "field": "revenue_total", "period": "2024Q3",
@@ -49,9 +51,9 @@ class MockFactAdapter:
         )
 
     def known_at(self, record: Any) -> datetime:  # noqa: ANN401
-        """公告日当日 23:59:59 —— 只给日期不给时间时的保守取法。"""
+        """公告日当日 23:59:59 本地时区（CST，UTC+8）—— 只给日期不给时间时的保守取法。"""
         ann = date.fromisoformat(str(record["ann_date"]))
-        return datetime.combine(ann, time(23, 59, 59), tzinfo=UTC)
+        return datetime.combine(ann, time(23, 59, 59), tzinfo=CST)
 
     def parse(self, raw: RawResponse) -> Iterator[FactRecord]:
         for row in raw.payload:
