@@ -1,7 +1,9 @@
 """批量嵌入：只处理 embedding IS NULL，命中缓存不重算，可中断可续跑。"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 import psycopg
@@ -9,9 +11,37 @@ import pytest
 
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
+from ragdemo.retrieval.vector_index import VectorCandidate, VectorItem
 from ragdemo_core.db.migrate import migrate
 
 MIGRATIONS = Path("db/migrations")
+
+
+class RecordingVectorIndex:
+    """内存假实现，只用来断言 embed_pending_blocks 有没有在正确的时机调用它。"""
+
+    def __init__(self) -> None:
+        self.upserted: list[VectorItem] = []
+
+    def upsert(self, items: Sequence[VectorItem]) -> None:
+        self.upserted.extend(items)
+
+    def query(
+        self,
+        vector: Sequence[float],
+        *,
+        k: int,
+        as_of: datetime | None = None,
+        entity_id: str | None = None,
+        doc_type: str | None = None,
+    ) -> list[VectorCandidate]:
+        raise NotImplementedError("本测试不需要 query")
+
+    def delete(self, block_ids: Sequence[int]) -> None:
+        raise NotImplementedError("本测试不需要 delete")
+
+    def count(self) -> int:
+        return len(self.upserted)
 
 
 class CountingEmbedder(MockEmbedder):
@@ -120,3 +150,43 @@ def test_written_vectors_are_normalised(conn: psycopg.Connection) -> None:
         " WHERE embedding IS NOT NULL"
     ).fetchone()  # type: ignore[misc]
     assert float(norm) == pytest.approx(1.0, abs=1e-3)
+
+
+@pytest.mark.db
+def test_index_defaults_to_none_and_indexed_stays_zero(conn: psycopg.Connection) -> None:
+    """不传 index 时（现状默认路径），indexed 恒为 0，不影响既有调用方。"""
+    _add_blocks(conn, ["甲", "乙"])
+    stats = embed_pending_blocks(conn, MockEmbedder())
+    assert stats.indexed == 0
+
+
+@pytest.mark.db
+def test_index_is_upserted_after_pg_commit(conn: psycopg.Connection) -> None:
+    """传入 index 时，同一批块提交到 PG 之后要写进向量索引，indexed 计数要对。"""
+    _add_blocks(conn, ["甲", "乙", "丙"])
+    index = RecordingVectorIndex()
+
+    stats = embed_pending_blocks(conn, MockEmbedder(), index=index)
+
+    assert stats.written == 3
+    assert stats.indexed == 3
+    assert len(index.upserted) == 3
+    assert {item.block_id for item in index.upserted} == {
+        int(r[0])
+        for r in conn.execute("SELECT block_id FROM core.doc_block WHERE embedding IS NOT NULL")
+    }
+    # 先 PG 提交后写索引：调用发生时，PG 里已经能查到这些块的 embedding。
+    written_before_index_call = conn.execute(
+        "SELECT count(*) FROM core.doc_block WHERE embedding IS NOT NULL"
+    ).fetchone()
+    assert written_before_index_call is not None
+    assert written_before_index_call[0] == 3
+
+
+@pytest.mark.db
+def test_index_not_called_when_no_pending_blocks(conn: psycopg.Connection) -> None:
+    """没有待嵌入块时提前返回，不该调用向量索引。"""
+    index = RecordingVectorIndex()
+    stats = embed_pending_blocks(conn, MockEmbedder(), index=index)
+    assert stats.indexed == 0
+    assert index.upserted == []
