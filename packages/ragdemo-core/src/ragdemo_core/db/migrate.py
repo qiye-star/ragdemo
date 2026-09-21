@@ -48,6 +48,7 @@ def discover(directory: Path) -> list[Migration]:
 def _applied(conn: psycopg.Connection[tuple[object, ...]]) -> dict[str, str]:
     with conn.transaction():
         conn.execute(_MIGRATIONS_TABLE)
+    conn.commit()
     rows = conn.execute("SELECT version, checksum FROM public.schema_migrations").fetchall()
     return {str(v): str(c) for v, c in rows}
 
@@ -55,7 +56,13 @@ def _applied(conn: psycopg.Connection[tuple[object, ...]]) -> dict[str, str]:
 def migrate(conn: psycopg.Connection[tuple[object, ...]], directory: Path) -> list[str]:
     """执行尚未执行的迁移，返回本次新执行的 version 列表。
 
-    每条迁移在独立事务中执行：失败则整条回滚，不留半截 schema。
+    每条迁移是一个独立的、**执行完立即提交**的事务：
+    失败则该条整体回滚不留半截 schema，而它之前已成功的迁移保持已提交。
+
+    显式 commit 不能省。psycopg 的 `conn.transaction()` 开的是 SAVEPOINT 而不是
+    顶层事务，省掉它整批迁移会挤在同一个外层事务里：中途失败时连接上下文退出
+    会把前面全部成功的迁移一起回滚掉，而 schema_migrations 里也什么都没留下，
+    重跑时无从判断进度。
     """
     already = _applied(conn)
     newly: list[str] = []
@@ -73,5 +80,6 @@ def migrate(conn: psycopg.Connection[tuple[object, ...]], directory: Path) -> li
                 "INSERT INTO public.schema_migrations (version, checksum) VALUES (%s, %s)",
                 (m.version, m.checksum),
             )
+        conn.commit()
         newly.append(m.version)
     return newly

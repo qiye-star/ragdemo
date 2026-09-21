@@ -1,0 +1,31 @@
+metric_id,l3_node,metric_name,metric_role,frequency,source_type,extraction_hint,direction,definition,unit
+revenue_total,,营业收入,confirming,quarterly,filing,合并利润表首行,1,合并报表口径营业收入,CNY
+revenue_forecast,,营业收入（业绩预告）,leading,irregular,announcement,业绩预告正文的收入区间,1,业绩预告给出的营业收入区间中值；与快报、正式财报是三条独立指标，互不构成更正,CNY
+revenue_flash,,营业收入（业绩快报）,leading,irregular,announcement,业绩快报主要财务数据表,1,业绩快报口径营业收入，未经审计,CNY
+ai_revenue_pct,,AI 相关收入占比,confirming,quarterly,derived,,1,AI 相关业务收入除以营业收入；分子口径由 core.ai_revenue_rule 逐家定义,ratio
+gross_margin,,毛利率,confirming,quarterly,derived,,1,营业收入减营业成本再除以营业收入,ratio
+rd_expense,,研发费用,confirming,quarterly,filing,合并利润表研发费用行,1,合并报表口径研发费用，不含资本化部分,CNY
+rd_expense_ratio,,研发费用率,confirming,quarterly,derived,,1,研发费用除以营业收入,ratio
+net_profit_attributable,,归母净利润,confirming,quarterly,filing,合并利润表归属于母公司股东的净利润行,1,归属于母公司所有者的净利润,CNY
+inventory,,存货,leading,quarterly,filing,合并资产负债表存货行,1,期末存货净额；单看方向有歧义，须与合同负债、预付款项同看,CNY
+contract_liability,,合同负债,leading,quarterly,filing,合并资产负债表合同负债行,1,期末合同负债；预收款变动通常领先于确认收入,CNY
+prepayment,,预付款项,leading,quarterly,filing,合并资产负债表预付款项行,1,期末预付款项；锁定代工与封测产能通常先表现为预付款上升,CNY
+capex,,资本开支,leading,quarterly,filing,现金流量表投资活动部分,1,购建固定资产、无形资产和其他长期资产支付的现金,CNY
+operating_cash_flow,,经营活动现金流净额,confirming,quarterly,filing,现金流量表经营活动小计,1,经营活动产生的现金流量净额,CNY
+foundry_utilization,晶圆代工,晶圆代工产能利用率,leading,quarterly,ir_page,法说会简报「产能利用率」页,1,先进制程产线的产能利用率,ratio
+foundry_hpc_revenue_pct,晶圆代工,高效能运算收入占比,confirming,quarterly,ir_page,法说会简报分平台营收占比表,1,高效能运算平台收入占总收入比重,ratio
+cowos_capacity,先进封装,CoWoS 月产能,leading,quarterly,ir_page,法说会问答中的先进封装产能表述,1,CoWoS 系列先进封装的月产能,pcs
+advanced_packaging_revenue,先进封装,先进封装收入,confirming,quarterly,filing,分部报告按封装类型的收入表,1,先进封装业务的分部收入,CNY
+packaging_equipment_orders,封装设备,封装设备在手订单,leading,quarterly,filing,年报「在手订单」段落,1,期末先进封装专用设备的在手订单金额,CNY
+test_equipment_orders,测试设备,测试设备在手订单,leading,quarterly,filing,年报「在手订单」段落,1,期末测试机与分选机的在手订单金额,CNY
+abf_substrate_utilization,载板,ABF 载板稼动率,leading,monthly,vendor_api,,1,ABF 载板产线的稼动率,ratio
+hbm_bit_shipment,HBM,HBM 位元出货量,leading,quarterly,vendor_api,,1,HBM 产品的位元出货量,pcs
+hbm_asp,HBM,HBM 平均单价,confirming,quarterly,vendor_api,,1,HBM 产品的平均销售单价,USD
+dram_server_spot_price,服务器内存,服务器 DRAM 现货价,leading,daily,vendor_api,,1,服务器用 DDR5 颗粒现货均价,USD
+enterprise_ssd_shipment,企业级SSD,企业级 SSD 出货量,confirming,quarterly,vendor_api,,1,数据中心用固态硬盘出货容量,pcs
+ai_server_shipment,AI服务器,AI 服务器出货量,confirming,quarterly,vendor_api,,1,搭载加速卡的服务器整机出货台数,pcs
+accelerator_card_shipment,云端训练芯片,加速卡出货量,confirming,quarterly,filing,年报「主要产品产销量情况」表,1,云端训练加速卡的出货张数,pcs
+server_cpu_shipment,通用服务器CPU,服务器 CPU 出货量,confirming,quarterly,filing,年报「主要产品产销量情况」表,1,服务器 CPU 的出货颗数,pcs
+optical_module_800g_shipment,光模块,800G 光模块出货量,leading,quarterly,vendor_api,,1,800G 及以上速率光模块的出货只数,pcs
+liquid_cooling_order,液冷散热,液冷新签订单金额,leading,quarterly,announcement,重大合同公告与年报订单段落,1,期内新签液冷相关订单的合同金额,CNY
+compute_rental_price,算力租赁,算力租赁报价,leading,monthly,vendor_api,,1,单卡单月的智能算力租赁报价,CNY

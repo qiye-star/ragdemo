@@ -148,3 +148,20 @@ def test_load_all_reports_counts_per_table(
     counts = load_all(db, tmp_path)
     assert counts["core.entity"] == 1
     assert counts["core.entity_alias"] == 1
+
+
+@pytest.mark.db
+def test_blank_optional_cells_become_null_not_empty_string(
+    db: psycopg.Connection[tuple[object, ...]], tmp_path: Path
+) -> None:
+    """tushare_code 带 UNIQUE：两家海外实体都留空时，写空串会在第二行撞唯一键。"""
+    overseas = (
+        "US.NVDA,NVIDIA Corporation,英伟达,NVIDIA,listed,NASDAQ,,"
+        "算力,AI芯片,云端训练芯片,云端训练芯片,US,active,1999-01-22,USD,1,\n"
+        "US.AMD,Advanced Micro Devices Inc.,AMD,AMD,listed,NASDAQ,,"
+        "算力,AI芯片,通用服务器CPU,通用服务器CPU,US,active,1972-09-27,USD,12,\n"
+    )
+    assert load_entities(db, _csv(tmp_path, overseas)) == 2
+    row = db.execute("SELECT count(*) FROM core.entity WHERE tushare_code IS NULL").fetchone()
+    assert row is not None
+    assert row[0] == 2

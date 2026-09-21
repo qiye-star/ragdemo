@@ -1,0 +1,31 @@
+from_entity,to_entity,relation_type,strength,share_estimate,direction_note,evidence_type,valid_from,confidence
+CN.688041,CN.603019,supplies_to,0.90,,海光的 CPU 与 DCU 是中科曙光服务器整机的核心部件,expert,2022-08-12,medium
+CN.603019,CN.688041,invests_in,0.90,,中科曙光是海光信息的主要股东,announcement,2022-08-12,high
+CN.688041,CN.000977,supplies_to,0.30,,浪潮信息的国产化机型可选海光平台,expert,2022-08-12,low
+CN.688041,CN.000938,supplies_to,0.30,,新华三国产化服务器可选海光平台,expert,2022-08-12,low
+CN.688041,US.AMD,depends_on,0.90,,x86 指令集授权与初代微架构来自与 AMD 的合资安排,expert,2022-08-12,medium
+CN.688041,TW.2330,depends_on,0.60,,早期产品由台积电代工；列入美国实体清单后先进制程供给受限,expert,2022-08-12,low
+CN.688041,CN.002156,depends_on,0.60,,封装测试环节依赖国内封测厂,expert,2022-08-12,low
+CN.688041,CN.688008,depends_on,0.30,,服务器平台需要配套内存接口芯片,expert,2022-08-12,low
+CN.688041,CN.688047,competes_with,0.60,,国产服务器 CPU 的两条主要路线：x86 兼容与自主指令集,expert,2022-08-12,medium
+CN.688041,US.INTC,competes_with,0.90,,服务器 CPU 市场的主要在位者,expert,2022-08-12,high
+CN.688041,US.AMD,competes_with,0.60,,同属 x86 阵营，面向不同区域市场,expert,2022-08-12,medium
+CN.688041,US.NVDA,substitutes,0.60,,DCU 在国内市场对受管制的数据中心 GPU 形成替代,expert,2023-01-01,medium
+CN.688041,CN.688256,competes_with,0.60,,国产 AI 加速卡的主要同业,expert,2022-08-12,medium
+US.NVDA,TW.2330,depends_on,0.90,,数据中心 GPU 由台积电先进制程代工并使用其 CoWoS 封装,expert,2020-01-01,high
+US.AMD,TW.2330,depends_on,0.90,,数据中心产品由台积电代工,expert,2020-01-01,high
+US.NVDA,KR.000660,depends_on,0.90,,数据中心 GPU 配套 HBM,expert,2020-01-01,high
+CN.002156,US.AMD,supplies_to,0.90,,通富微电承接 AMD 的封装测试外包,expert,2016-01-01,medium
+CN.600584,CN.688256,supplies_to,0.30,,国内加速卡的封测外包选项之一,expert,2020-07-20,low
+CN.300604,CN.002156,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
+CN.300604,CN.600584,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
+CN.688256,CN.603019,supplies_to,0.30,,智算整机可选国产加速卡,expert,2020-07-20,low
+CN.688047,CN.603019,supplies_to,0.30,,信创整机可选自主指令集平台,expert,2022-06-24,low
+CN.002463,CN.000977,supplies_to,0.60,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
+CN.002463,CN.603019,supplies_to,0.30,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
+CN.300308,CN.000938,supplies_to,0.30,,数据中心互联采购光模块,expert,2020-01-01,low
+CN.002837,CN.603019,supplies_to,0.60,,智算中心交付配套液冷方案,expert,2021-01-01,low
+CN.688008,CN.000977,supplies_to,0.60,,服务器内存模组配套内存接口芯片,expert,2019-07-22,medium
+KR.000660,CN.000977,supplies_to,0.30,,服务器内存供应,expert,2020-01-01,low
+CN.000977,CN.603019,competes_with,0.90,,国内 AI 服务器整机市场的主要同业,expert,2015-01-01,medium
+CN.000938,CN.000977,competes_with,0.60,,国内服务器与网络设备市场的同业,expert,2015-01-01,medium

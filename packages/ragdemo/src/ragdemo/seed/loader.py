@@ -24,6 +24,12 @@ SEED_TZ = UTC
 SEED_RUN_ID = "seed"
 SEED_SOURCE = "manual:seed"
 
+# 这些列在 core.entity 里可空。空单元格必须写 NULL 而不是空串：
+# tushare_code 带 UNIQUE 约束，多家海外实体都写 '' 会在第二行就撞唯一键。
+NULLABLE_ENTITY_COLUMNS = frozenset(
+    {"name_short", "name_en", "market", "tushare_code", "hq_country", "currency", "notes"}
+)
+
 Connection = psycopg.Connection[tuple[object, ...]]
 
 
@@ -75,7 +81,8 @@ def _validate_entities(rows: list[dict[str, str]], taxonomy: Taxonomy) -> list[d
 
         out.append(
             {
-                **row,
+                **{k: (v or None) for k, v in row.items() if k in NULLABLE_ENTITY_COLUMNS},
+                **{k: v for k, v in row.items() if k not in NULLABLE_ENTITY_COLUMNS},
                 "l3_node": nodes,
                 "listed_date": date.fromisoformat(row["listed_date"]),
                 "fiscal_year_end": int(row["fiscal_year_end"]) if row["fiscal_year_end"] else None,

@@ -1,0 +1,16 @@
+trigger_node,trigger_event,affected_node,direction,lag_days,mechanism,weight_field,confidence,author
+先进封装,capacity_expansion,云端训练芯片,1,90,CoWoS 产能是 AI 加速卡出货的硬瓶颈，扩产直接放开下游的产出上限,share_estimate,high,founder
+先进封装,capacity_expansion,封装设备,1,60,新增封装产能要先采购键合、减薄与光刻设备，设备订单落地早于产能落地,,high,founder
+先进封装,capacity_expansion,测试设备,1,90,封装产能扩张后测试工序同步扩容，测试机与分选机需求随之上升,,medium,founder
+先进封装,capacity_expansion,载板,1,60,先进封装每片都要配套 ABF 载板，载板需求与封装产能同步放大,,medium,founder
+云端训练芯片,capacity_expansion,HBM,1,60,每张训练卡配套多颗 HBM，加速卡放量直接拉动 HBM 位元需求,,high,founder
+云端训练芯片,capacity_expansion,AI服务器,1,30,加速卡供给放开后整机厂才能交付，整机出货紧随芯片供给,,high,founder
+AI服务器,capacity_expansion,光模块,1,30,集群规模扩大后节点间互联需求同步上升，单集群光模块用量随之增加,,high,founder
+AI服务器,capacity_expansion,PCB,1,60,AI 服务器主板的层数与面积远高于通用服务器，单机 PCB 价值量显著提升,,medium,founder
+AI服务器,capacity_expansion,液冷散热,1,60,高功率密度机柜的风冷已接近极限，新增算力交付带动液冷渗透率上行,,medium,founder
+AI服务器,capacity_expansion,服务器电源,1,60,单机柜功率上升推高电源模块的功率等级与单机价值量,,medium,founder
+云端训练芯片,export_control,通用服务器CPU,1,180,高端加速卡供给受限时，国产自主路线的采购意愿上升,,medium,founder
+云端训练芯片,export_control,晶圆代工,-1,90,受管制的加速卡无法在海外先进制程投片，相关代工订单流失,,medium,founder
+晶圆代工,capex_guidance,封装设备,1,180,代工厂上调资本开支指引后，设备招标通常在其后两个季度内落地,,medium,founder
+算力租赁,capacity_expansion,AI服务器,1,90,算力租赁商扩容要先采购整机，租赁产能指引领先于整机订单,,medium,founder
+HBM,capacity_expansion,服务器内存,-1,90,HBM 与标准 DRAM 争夺同一晶圆产能，HBM 扩产会挤压标准内存的供给,,medium,founder

@@ -1,0 +1,19 @@
+entity_id,name_full,name_short,name_en,entity_type,market,tushare_code,l1_layer,l2_segment,l3_node,primary_node,hq_country,status,listed_date,currency,fiscal_year_end,notes
+CN.688041,海光信息技术股份有限公司,海光信息,Hygon Information Technology,listed,SSE,688041.SH,算力,AI芯片,通用服务器CPU|云端训练芯片,通用服务器CPU,CN,active,2022-08-12,CNY,12,本批种子数据的核心标的；产品为 x86 服务器 CPU 与 DCU 加速卡
+CN.603019,曙光信息产业股份有限公司,中科曙光,Sugon,listed,SSE,603019.SH,算力,服务器与网络,AI服务器|通用服务器|IDC,AI服务器,CN,active,2014-11-06,CNY,12,既是海光信息的主要股东，也是其整机客户
+CN.000977,浪潮电子信息产业股份有限公司,浪潮信息,Inspur Electronic Information,listed,SZSE,000977.SZ,算力,服务器与网络,AI服务器|通用服务器,AI服务器,CN,active,1998-06-16,CNY,12,上市日期需与供应商数据核对
+CN.000938,紫光股份有限公司,紫光股份,Unisplendour,listed,SZSE,000938.SZ,算力,服务器与网络,交换机|AI服务器,交换机,CN,active,1999-11-17,CNY,12,新华三母公司；上市日期需与供应商数据核对
+CN.688256,中科寒武纪科技股份有限公司,寒武纪-U,Cambricon,listed,SSE,688256.SH,算力,AI芯片,云端训练芯片|边缘推理芯片,云端训练芯片,CN,active,2020-07-20,CNY,12,
+CN.688047,龙芯中科技术股份有限公司,龙芯中科,Loongson,listed,SSE,688047.SH,算力,AI芯片,通用服务器CPU,通用服务器CPU,CN,active,2022-06-24,CNY,12,自主 LoongArch 指令集路线
+CN.002156,通富微电子股份有限公司,通富微电,TFME,listed,SZSE,002156.SZ,算力,芯片制造,先进封装,先进封装,CN,active,2007-08-16,CNY,12,上市日期需与供应商数据核对
+CN.600584,江苏长电科技股份有限公司,长电科技,JCET,listed,SSE,600584.SH,算力,芯片制造,先进封装,先进封装,CN,active,2003-06-03,CNY,12,上市日期需与供应商数据核对
+CN.300604,杭州长川科技股份有限公司,长川科技,Hangzhou Changchuan Technology,listed,SZSE,300604.SZ,算力,芯片制造,测试设备,测试设备,CN,active,2017-04-17,CNY,12,上市日期需与供应商数据核对
+CN.688008,澜起科技股份有限公司,澜起科技,Montage Technology,listed,SSE,688008.SH,算力,存储,服务器内存,服务器内存,CN,active,2019-07-22,CNY,12,内存接口芯片
+CN.300308,中际旭创股份有限公司,中际旭创,Innolight,listed,SZSE,300308.SZ,算力,服务器与网络,光模块,光模块,CN,active,2012-05-25,CNY,12,上市主体原为中际装备；上市日期需与供应商数据核对
+CN.002463,沪士电子股份有限公司,沪电股份,WUS Printed Circuit,listed,SZSE,002463.SZ,算力,服务器与网络,PCB,PCB,CN,active,2010-02-05,CNY,12,上市日期需与供应商数据核对
+CN.002837,深圳市英维克科技股份有限公司,英维克,Envicool,listed,SZSE,002837.SZ,算力,数据中心配套,液冷散热,液冷散热,CN,active,2016-12-08,CNY,12,上市日期需与供应商数据核对
+TW.2330,台湾积体电路制造股份有限公司,台积电,TSMC,listed,TWSE,,算力,芯片制造,晶圆代工|先进封装,晶圆代工,TW,active,1994-09-05,TWD,12,CoWoS 先进封装产能是 AI 加速卡的主要瓶颈环节
+US.NVDA,NVIDIA Corporation,英伟达,NVIDIA,listed,NASDAQ,,算力,AI芯片,云端训练芯片|云端推理芯片,云端训练芯片,US,active,1999-01-22,USD,1,财年于每年 1 月末结束
+US.AMD,Advanced Micro Devices Inc.,AMD,AMD,listed,NASDAQ,,算力,AI芯片,云端训练芯片|通用服务器CPU,通用服务器CPU,US,active,1972-09-27,USD,12,海光信息 x86 技术授权的来源方；上市日期需核对
+US.INTC,Intel Corporation,英特尔,Intel,listed,NASDAQ,,算力,AI芯片,通用服务器CPU,通用服务器CPU,US,active,1971-10-13,USD,12,上市日期需核对
+KR.000660,SK hynix Inc.,SK海力士,SK hynix,listed,KRX,,算力,存储,HBM|服务器内存,HBM,KR,active,1996-12-26,KRW,12,HBM 主要供应商；上市日期需核对
