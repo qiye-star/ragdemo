@@ -16,6 +16,7 @@ dev = [
     "pre-commit>=3.8",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
+    "dagster-webserver>=1.8",
 ]
 
 [tool.ruff]

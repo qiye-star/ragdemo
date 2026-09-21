@@ -11,7 +11,7 @@ RAGDEMO_DSN       ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGD
 RAGDEMO_ADMIN_DSN ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGDEMO_DB_PORT)/postgres
 export POSTGRES_PASSWORD RAGDEMO_DB_PORT RAGDEMO_DSN RAGDEMO_ADMIN_DSN
 
-.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean
+.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster
 
 install:
 	uv sync --all-packages
@@ -49,3 +49,6 @@ accept-p0:
 
 clean:
 	$(COMPOSE) down -v
+
+dagster:
+	uv run dagster dev -m ragdemo.ingest.definitions
