@@ -5,6 +5,31 @@
 
 is_leaf 必须是显式的列：表格块既是父块也是叶子块，用「有没有父块」判断
 会把所有表格排除出召回。
+
+**返回列表的实际契约（brief 的 Produces 行，逐字实现）**：所有父块在前，
+按各自小节在输入里第一次出现的顺序排列；然后是全部叶子块，严格按输入
+`leaves` 的原始顺序——不做任何按 section_path 的重新分组或重排。表格叶子
+和普通叶子在这一层混排，位置就是它们在原文档里的位置。`ordinal` 在这个
+「先父块、后叶子」的完整列表上从 0 连续重排。
+
+这带来一个需要显式接受的推论：`ordinal` 只在叶子层内部编码真实的阅读
+顺序（同小节内、跨小节间叶子的相对次序 = 原文档顺序），不跨父子两层
+编码顺序——父块是没有独立文档位置的合成聚合体，排在所有叶子之前是
+这层信息的正确表达，不是妥协。docs/02-data-model.md §5.2 「文档内顺序，
+用于还原上下文」这条注释因此应理解为：对叶子层排序即可还原阅读顺序；
+父块本身不参与「还原顺序」这件事，它只用 section_path/parent_ordinal
+被叶子引用。
+
+已知局限（有意不修，见 task-3-report.md）：`split_text` 切分长段落时相邻
+叶子之间会有 `cfg.overlap_chars` 个字符的真实重叠（chunker.py 既有设计，
+供检索用）。`build_tree` 拼接同小节多个叶子为父块内容时**不去重**这部分
+重叠——`Chunk` 不携带"这个叶子来自原文档哪个 block"的信息，也不携带
+`cfg.overlap_chars`，无法可靠区分"两个叶子是同一个 block 切出的相邻
+片段（该去重）"还是"两个叶子来自小节内两个独立 block，只是巧合首尾
+有共同字符（不该去重）"。在没有这个信息的前提下做启发式猜测，风险是
+把小节内两段本不相关的正文误判为重叠而丢字符，比"父块正文里重复
+一点重叠字符"更严重，所以选择记录为已知局限而不是发明一个不保真的
+启发式。
 """
 
 from __future__ import annotations
@@ -12,49 +37,43 @@ from __future__ import annotations
 from ragdemo.parse.chunker import Chunk
 
 _TABLE = "table"
-_SECTION = "section"
-
-_GroupKey = tuple[str, str]
 
 
 def build_tree(leaves: list[Chunk]) -> list[Chunk]:
-    """为每个小节建一个父块，返回父块 + 叶子块的完整列表，ordinal 重排且连续。
+    """为每个小节建一个父块，返回「父块在前、叶子在后」的完整列表。
 
-    表格块直接透传：它既是叶子（可召回）也没有父块（不能只给片段，05 §4.2 规则 3）。
+    父块：按小节在输入里首次出现的顺序排列，ordinal 从 0 开始。
+    叶子：紧随所有父块之后，严格按输入 `leaves` 的原始顺序——不重新分组、
+    不按 section_path 聚拢，表格叶子和普通叶子混排在它们原本的位置。
 
-    分组用 `section_path` 做键（docs/05-document-pipeline.md §4.2 规则 1：同一小节的
-    内容构成一个父块），但发出顺序按每个分组在输入里第一次出现的位置来——不是
-    先发完所有表格再发所有小节。`doc_block.ordinal` 的注释是「文档内顺序，用于
-    还原上下文」（docs/02-data-model.md §5.2），如果表格被整体挪到最前面，按
-    ordinal 排序还原出的阅读顺序就和原文档对不上了。
+    表格块（block_type == "table"）不参与父块聚合：它既是叶子（可召回）
+    也没有父块（不能只给片段，05 §4.2 规则 3），但它仍然按输入顺序出现
+    在叶子层里，保留在原文档中的相对位置。
     """
-    groups: dict[_GroupKey, list[Chunk]] = {}
-    order: list[_GroupKey] = []
-    for index, leaf in enumerate(leaves):
-        key: _GroupKey = (
-            (_TABLE, str(index)) if leaf.block_type == "table" else (_SECTION, leaf.section_path)
-        )
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(leaf)
+    section_order: list[str] = []
+    by_section: dict[str, list[Chunk]] = {}
+    for leaf in leaves:
+        if leaf.block_type == _TABLE:
+            continue
+        if leaf.section_path not in by_section:
+            by_section[leaf.section_path] = []
+            section_order.append(leaf.section_path)
+        by_section[leaf.section_path].append(leaf)
 
     out: list[Chunk] = []
-    next_ordinal = 0
-    for key in order:
-        kind = key[0]
-        members = groups[key]
-        if kind == _TABLE:
-            out.append(_with_ordinal(members[0], next_ordinal, parent=None, is_leaf=True))
-            next_ordinal += 1
-            continue
+    parent_ordinal_of: dict[str, int] = {}
+    for ordinal, section in enumerate(section_order):
+        parent_ordinal_of[section] = ordinal
+        out.append(_make_parent(by_section[section], ordinal))
 
-        parent_ordinal = next_ordinal
-        out.append(_make_parent(members, parent_ordinal))
+    next_ordinal = len(section_order)
+    for leaf in leaves:
+        if leaf.block_type == _TABLE:
+            out.append(_with_ordinal(leaf, next_ordinal, parent=None, is_leaf=True))
+        else:
+            parent = parent_ordinal_of[leaf.section_path]
+            out.append(_with_ordinal(leaf, next_ordinal, parent=parent, is_leaf=True))
         next_ordinal += 1
-        for member in members:
-            out.append(_with_ordinal(member, next_ordinal, parent=parent_ordinal, is_leaf=True))
-            next_ordinal += 1
 
     return out
 

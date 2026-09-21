@@ -96,28 +96,64 @@ def test_every_leaf_parent_ordinal_resolves_to_a_parent_in_the_result() -> None:
             assert leaf.parent_ordinal in parent_ordinals
 
 
-def test_table_keeps_its_relative_position_between_sections() -> None:
-    """docs/02-data-model.md §5.2：`doc_block.ordinal` 的注释是「文档内顺序，
-    用于还原上下文」。brief 参考实现的两遍扫描（先转发所有表格、再逐小节建父块）会把
-    表格一律搬到最前面：三块 [第一节段落, 表格, 第二节段落] 经过它会变成
-    [表格, 第一节父块+子块, 第二节父块+子块]——按 ordinal 排序还原出的顺序
-    与原文档不符，破坏了这条注释承诺的语义。这里锁住修正后的行为：
-    表格仍然夹在两个小节父块之间。"""
+def test_table_sandwiched_within_one_section_keeps_relative_leaf_position() -> None:
+    """修复回归测试（fix round 1, finding 1）——审查者亲自执行代码验证的反例：
+    一张表格夹在**同一小节**的两段之间（不是两个不同小节之间）。旧实现按
+    section_path 分组、把同小节的成员拉到分组首次出现的位置发出，会导致
+    该小节的两个叶子被拽到一起、表格被挤到最后——
+    build_tree([甲(第一节), 表格(第一节), 乙(第一节)]) 曾经产出
+    [第一节父块, 甲, 乙, 表格]，表格丢失了它原本夹在两段中间的位置。
+
+    新契约：叶子层严格按输入顺序排列，不做任何按 section_path 的分组/重排，
+    所以表格在叶子层里的位置就是它在原文档里的位置。"""
     tree = build_tree(
         [
-            _leaf(0, "第一节", "甲"),
-            _leaf(1, "第一节", "table-between", "table"),
-            _leaf(2, "第二节", "乙"),
+            _leaf(0, "第一节", "before-table"),
+            _leaf(1, "第一节", "table-content", "table"),
+            _leaf(2, "第一节", "after-table"),
         ]
     )
-    ordered = sorted(tree, key=lambda c: c.ordinal)
-    table_index = next(i for i, c in enumerate(ordered) if c.block_type == "table")
+    leaves_in_order = [c for c in tree if c.is_leaf]
+    assert [c.content for c in leaves_in_order] == [
+        "before-table",
+        "table-content",
+        "after-table",
+    ]
+    # 表格仍然没有父块；两侧的段落都归属同一个（唯一的）第一节父块。
+    table = next(c for c in leaves_in_order if c.block_type == "table")
+    prose = [c for c in leaves_in_order if c.block_type != "table"]
+    assert table.parent_ordinal is None
+    parent = next(c for c in tree if not c.is_leaf)
+    assert {c.parent_ordinal for c in prose} == {parent.ordinal}
 
-    # 表格前面是第一节的父块（其后紧跟第一节的叶子），表格后面紧接第二节的父块。
-    assert ordered[0].section_path == "第一节" and not ordered[0].is_leaf
-    assert table_index > 0
-    assert ordered[table_index + 1].section_path == "第二节"
-    assert not ordered[table_index + 1].is_leaf
+
+def test_parents_come_first_then_leaves_in_original_input_order() -> None:
+    """brief 第 9 行「返回父块在前、叶子块在后的完整列表」的字面契约：
+    整个返回列表前半段全是父块（按小节首次出现顺序），后半段是全部叶子
+    （表格与普通叶子混排），且叶子子序列必须与输入 `leaves` 的顺序完全
+    一致——不允许任何按小节的重新分组。用一个「表格夹在两个不同小节
+    之间、且其中一个小节还提前部分重复」的形状钉住这一点。"""
+    leaves = [
+        _leaf(0, "第一节", "甲"),
+        _leaf(1, "第一节", "table-between", "table"),
+        _leaf(2, "第二节", "乙"),
+        _leaf(3, "第一节", "丙"),  # 第一节在表格、第二节之后又出现一次
+    ]
+    tree = build_tree(leaves)
+
+    parents = [c for c in tree if not c.is_leaf]
+    result_leaves = [c for c in tree if c.is_leaf]
+
+    # 父块在前：tree 的前 len(parents) 个元素全部是父块。
+    assert tree[: len(parents)] == parents
+    # 父块顺序 = 各小节首次出现顺序（第一节先于第二节）。
+    assert [p.section_path for p in parents] == ["第一节", "第二节"]
+    # 叶子严格按输入原始顺序，内容逐一对应，不重新分组。
+    assert [c.content for c in result_leaves] == [leaf.content for leaf in leaves]
+    # 第一节的父块内容涵盖了不连续出现的两段（甲、丙），表格不计入。
+    section1_parent = next(p for p in parents if p.section_path == "第一节")
+    assert "甲" in section1_parent.content and "丙" in section1_parent.content
+    assert "table-between" not in section1_parent.content
 
 
 def test_parent_content_does_not_repeat_the_section_header_per_leaf() -> None:
