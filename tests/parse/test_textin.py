@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -30,11 +30,11 @@ FIXTURE = Path("tests/fixtures/xparse/annual_report.json")
 
 
 def _payload() -> dict[str, Any]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(FIXTURE.read_text(encoding="utf-8")))
 
 
 def _detail() -> list[dict[str, Any]]:
-    return _payload()["result"]["detail"]
+    return cast("list[dict[str, Any]]", _payload()["result"]["detail"])
 
 
 # --- 参数指纹 ---------------------------------------------------------------
