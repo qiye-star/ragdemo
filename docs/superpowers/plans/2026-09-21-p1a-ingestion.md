@@ -4,7 +4,7 @@
 
 **Goal:** 让外部数据能按正确的时点语义进入数据库——适配器只负责拉取与归一化，入库统一走时点写入中间件，更正与幂等由数据库约束兜底。
 
-**Architecture:** 三层。**适配器层**（`src/ragdemo/adapters/`）把各供应商的返回归一化成 `FactRecord` / `NormalizedDocument`，并各自实现 `known_at()`——只有它知道原始字段的语义。**中间件层**（`src/ragdemo/ingest/writer.py`）是全部入库路径的唯一闸门，负责幂等、更正事务、`superseded_at` 标记。**编排层**（Dagster 日分区资产）调度前两层，要求幂等可回填。
+**Architecture:** 三层。**适配器层**（`packages/ragdemo/src/ragdemo/adapters/`）把各供应商的返回归一化成 `FactRecord` / `NormalizedDocument`，并各自实现 `known_at()`——只有它知道原始字段的语义。**中间件层**（`packages/ragdemo/src/ragdemo/ingest/writer.py`）是全部入库路径的唯一闸门，负责幂等、更正事务、`superseded_at` 标记。**编排层**（Dagster 日分区资产）调度前两层，要求幂等可回填。
 
 **Tech Stack:** Python 3.11+ / psycopg 3 / httpx / Dagster / pytest
 
@@ -21,13 +21,20 @@
 | 假设的接口 | 来自 | 用在 |
 |---|---|---|
 | `temp_db` pytest fixture → 空库 DSN | P0 Task 2 | 全部数据库测试 |
-| `ragdemo.db.migrate.migrate(conn, Path) -> list[str]` | P0 Task 3 | 全部数据库测试的建表 |
-| `ragdemo.db.session.as_of_session(conn, as_of, *, tenant, user)` | P0 Task 10 | Task 3、Task 9 |
-| `ragdemo.db.session.NaiveDatetimeError` | P0 Task 10 | Task 1 复用同一异常语义 |
+| `ragdemo_core.db.migrate.migrate(conn, Path) -> list[str]` | P0 Task 3 | 全部数据库测试的建表 |
+| `ragdemo_core.db.session.as_of_session(conn, as_of, *, tenant, user)` | P0 Task 10 | Task 3、Task 9 |
+| `ragdemo_core.db.session.NaiveDatetimeError` | P0 Task 10 | Task 1 复用同一异常语义 |
 | `core.fin_fact` 的 `fin_fact_live_uk` 部分唯一索引 | P0 Task 6 | Task 3 依赖它拦截漏打标记 |
 | `core.provider_snapshot` 表 | P0 Task 6 | Task 4 |
 | `core.entity_resolution_queue` 表 | P0 Task 8 | Task 9 |
 | `pytest` 标记 `db` | P0 Task 1 | 全部数据库测试 |
+
+> **仓库布局**：本仓库是 **uv workspace 双包**结构——底层 `packages/ragdemo-core/src/ragdemo_core/`
+> （迁移、时点会话、Schema 不变量）与业务层 `packages/ragdemo/src/ragdemo/`（接入、解析、检索、Agent）。
+> 依赖方向由包边界物理强制（[`01-architecture.md`](../../01-architecture.md) §5）：
+> `ragdemo` 依赖 `ragdemo-core`，反向 import 会因包边界而失败。
+> 装依赖用 `uv sync`，跑命令用 `uv run`，**不要 `pip install -e .`**。
+> 测试在仓库根的 `tests/`，不在包内。
 
 ## Global Constraints
 
@@ -49,21 +56,21 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/ragdemo/adapters/__init__.py` | 包声明 |
-| `src/ragdemo/adapters/base.py` | `FetchContext` / `RawResponse` / `FactRecord` / `Adapter` / `FactAdapter` 协议 |
-| `src/ragdemo/adapters/errors.py` | `AdapterError` / `RateLimited` / `QuotaExceeded` / `UpstreamUnavailable` |
-| `src/ragdemo/adapters/http.py` | 限流 + 重试 + 配额的 HTTP 客户端 |
-| `src/ragdemo/adapters/secrets.py` | 参数中的认证字段剥离 |
-| `src/ragdemo/adapters/announcements.py` | `NormalizedBlock` / `NormalizedDocument` / `AnnouncementProvider` 协议 |
-| `src/ragdemo/adapters/tushare.py` | Tushare 财务与行情适配器 |
-| `src/ragdemo/adapters/edgar.py` | SEC EDGAR 适配器 |
-| `src/ragdemo/adapters/mock/facts.py` | `MockFactAdapter`（一等公民，P1 管线靠它跑通） |
-| `src/ragdemo/adapters/mock/announcements.py` | `MockAnnouncementProvider` |
-| `src/ragdemo/ingest/snapshot.py` | `provider_snapshot` 落库 |
-| `src/ragdemo/ingest/writer.py` | **时点写入中间件**（全部入库的唯一闸门） |
-| `src/ragdemo/entities/resolver.py` | 实体解析三层降级 + 人工队列 |
-| `src/ragdemo/ingest/assets.py` | Dagster 资产与日分区 |
-| `src/ragdemo/ingest/definitions.py` | Dagster `Definitions` 与传感器 |
+| `packages/ragdemo/src/ragdemo/adapters/__init__.py` | 包声明 |
+| `packages/ragdemo/src/ragdemo/adapters/base.py` | `FetchContext` / `RawResponse` / `FactRecord` / `Adapter` / `FactAdapter` 协议 |
+| `packages/ragdemo/src/ragdemo/adapters/errors.py` | `AdapterError` / `RateLimited` / `QuotaExceeded` / `UpstreamUnavailable` |
+| `packages/ragdemo/src/ragdemo/adapters/http.py` | 限流 + 重试 + 配额的 HTTP 客户端 |
+| `packages/ragdemo/src/ragdemo/adapters/secrets.py` | 参数中的认证字段剥离 |
+| `packages/ragdemo/src/ragdemo/adapters/announcements.py` | `NormalizedBlock` / `NormalizedDocument` / `AnnouncementProvider` 协议 |
+| `packages/ragdemo/src/ragdemo/adapters/tushare.py` | Tushare 财务与行情适配器 |
+| `packages/ragdemo/src/ragdemo/adapters/edgar.py` | SEC EDGAR 适配器 |
+| `packages/ragdemo/src/ragdemo/adapters/mock/facts.py` | `MockFactAdapter`（一等公民，P1 管线靠它跑通） |
+| `packages/ragdemo/src/ragdemo/adapters/mock/announcements.py` | `MockAnnouncementProvider` |
+| `packages/ragdemo/src/ragdemo/ingest/snapshot.py` | `provider_snapshot` 落库 |
+| `packages/ragdemo/src/ragdemo/ingest/writer.py` | **时点写入中间件**（全部入库的唯一闸门） |
+| `packages/ragdemo/src/ragdemo/entities/resolver.py` | 实体解析三层降级 + 人工队列 |
+| `packages/ragdemo/src/ragdemo/ingest/assets.py` | Dagster 资产与日分区 |
+| `packages/ragdemo/src/ragdemo/ingest/definitions.py` | Dagster `Definitions` 与传感器 |
 | `tests/contracts/adapter_contract.py` | 任何适配器都必须通过的契约测试基类 |
 | `tests/fixtures/<provider>/` | 脱敏后的真实响应样本（录制回放） |
 
@@ -72,7 +79,7 @@
 ## Task 1: 适配器协议与错误类型
 
 **Files:**
-- Create: `src/ragdemo/adapters/__init__.py`, `src/ragdemo/adapters/base.py`, `src/ragdemo/adapters/errors.py`
+- Create: `packages/ragdemo/src/ragdemo/adapters/__init__.py`, `packages/ragdemo/src/ragdemo/adapters/base.py`, `packages/ragdemo/src/ragdemo/adapters/errors.py`
 - Test: `tests/adapters/__init__.py`, `tests/adapters/test_base.py`
 
 **Interfaces:**
@@ -167,13 +174,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/__init__.py`：
+`packages/ragdemo/src/ragdemo/adapters/__init__.py`：
 
 ```python
 """外部数据源适配器。业务代码只 import 本包的协议，不 import 供应商 SDK。"""
 ```
 
-`src/ragdemo/adapters/errors.py`：
+`packages/ragdemo/src/ragdemo/adapters/errors.py`：
 
 ```python
 """适配器错误类型。"""
@@ -201,7 +208,7 @@ class UpstreamUnavailable(AdapterError):
     部分数据入库比没数据更糟，下游会以为数据完整。"""
 ```
 
-`src/ragdemo/adapters/base.py`：
+`packages/ragdemo/src/ragdemo/adapters/base.py`：
 
 ```python
 """适配器协议与归一化数据结构。
@@ -315,7 +322,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters tests/adapters
+git add packages/ragdemo/src/ragdemo/adapters tests/adapters
 git commit -m "feat(adapters): 适配器协议与错误类型，入口强制时区与非未来 known_at"
 ```
 
@@ -327,7 +334,7 @@ Mock 不是测试脚手架，是**一等公民**——公告供应商选定前�
 （[adr/0005](../../adr/0005-announcement-provider-abstraction.md)）。
 
 **Files:**
-- Create: `src/ragdemo/adapters/mock/__init__.py`, `src/ragdemo/adapters/mock/facts.py`, `tests/contracts/__init__.py`, `tests/contracts/adapter_contract.py`, `tests/contracts/test_mock_facts.py`
+- Create: `packages/ragdemo/src/ragdemo/adapters/mock/__init__.py`, `packages/ragdemo/src/ragdemo/adapters/mock/facts.py`, `tests/contracts/__init__.py`, `tests/contracts/adapter_contract.py`, `tests/contracts/test_mock_facts.py`
 
 **Interfaces:**
 - Consumes: Task 1 的全部协议
@@ -447,13 +454,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.mock'
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/mock/__init__.py`：
+`packages/ragdemo/src/ragdemo/adapters/mock/__init__.py`：
 
 ```python
 """Mock 适配器。它们是一等公民：公告供应商选定前，P1 管线靠它们跑通。"""
 ```
 
-`src/ragdemo/adapters/mock/facts.py`：
+`packages/ragdemo/src/ragdemo/adapters/mock/facts.py`：
 
 ```python
 """Mock 事实适配器。
@@ -538,7 +545,7 @@ Expected: 7 passed（5 条契约 + 2 条专属）
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/mock tests/contracts
+git add packages/ragdemo/src/ragdemo/adapters/mock tests/contracts
 git commit -m "feat(adapters): 契约测试基类与 Mock 事实适配器"
 ```
 
@@ -550,7 +557,7 @@ git commit -m "feat(adapters): 契约测试基类与 Mock 事实适配器"
 （[`docs/11-sdlc.md`](../../11-sdlc.md) §5.4）。
 
 **Files:**
-- Create: `src/ragdemo/ingest/__init__.py`, `src/ragdemo/ingest/writer.py`, `tests/ingest/__init__.py`, `tests/ingest/test_writer.py`
+- Create: `packages/ragdemo/src/ragdemo/ingest/__init__.py`, `packages/ragdemo/src/ragdemo/ingest/writer.py`, `tests/ingest/__init__.py`, `tests/ingest/test_writer.py`
 
 **Interfaces:**
 - Consumes: Task 1 的 `FactRecord`；P0 的 `core.fin_fact` 与 `fin_fact_live_uk`
@@ -582,7 +589,7 @@ import psycopg
 import pytest
 
 from ragdemo.adapters.base import FactRecord
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.ingest.writer import (
     OutOfOrderCorrection,
     PointInTimeWriter,
@@ -695,13 +702,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/ingest/__init__.py`：
+`packages/ragdemo/src/ragdemo/ingest/__init__.py`：
 
 ```python
 """入库层。时点写入中间件是全部事实与文档进入数据库的唯一路径。"""
 ```
 
-`src/ragdemo/ingest/writer.py`：
+`packages/ragdemo/src/ragdemo/ingest/writer.py`：
 
 ```python
 """时点写入中间件。
@@ -845,7 +852,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/ingest tests/ingest
+git add packages/ragdemo/src/ragdemo/ingest tests/ingest
 git commit -m "feat(ingest): 时点写入中间件，幂等写入与追加式更正"
 ```
 
@@ -854,7 +861,7 @@ git commit -m "feat(ingest): 时点写入中间件，幂等写入与追加式更
 ## Task 4: 原始响应留存与密钥剥离
 
 **Files:**
-- Create: `src/ragdemo/adapters/secrets.py`, `src/ragdemo/ingest/snapshot.py`, `tests/adapters/test_secrets.py`, `tests/ingest/test_snapshot.py`
+- Create: `packages/ragdemo/src/ragdemo/adapters/secrets.py`, `packages/ragdemo/src/ragdemo/ingest/snapshot.py`, `tests/adapters/test_secrets.py`, `tests/ingest/test_snapshot.py`
 
 **Interfaces:**
 - Consumes: Task 1 的 `RawResponse`
@@ -911,7 +918,7 @@ import psycopg
 import pytest
 
 from ragdemo.adapters.base import RawResponse
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.ingest.snapshot import MAX_INLINE_PAYLOAD_BYTES, save_snapshot
 
 MIGRATIONS = Path("db/migrations")
@@ -962,7 +969,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.secre
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/secrets.py`：
+`packages/ragdemo/src/ragdemo/adapters/secrets.py`：
 
 ```python
 """参数中的认证字段剥离。
@@ -1004,7 +1011,7 @@ def strip_secrets(params: Mapping[str, Any]) -> dict[str, Any]:
     return out
 ```
 
-`src/ragdemo/ingest/snapshot.py`：
+`packages/ragdemo/src/ragdemo/ingest/snapshot.py`：
 
 ```python
 """原始响应留存。
@@ -1062,7 +1069,7 @@ Expected: 6 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/secrets.py src/ragdemo/ingest/snapshot.py tests/adapters/test_secrets.py tests/ingest/test_snapshot.py
+git add packages/ragdemo/src/ragdemo/adapters/secrets.py packages/ragdemo/src/ragdemo/ingest/snapshot.py tests/adapters/test_secrets.py tests/ingest/test_snapshot.py
 git commit -m "feat(ingest): 原始响应留存与参数密钥剥离"
 ```
 
@@ -1071,8 +1078,8 @@ git commit -m "feat(ingest): 原始响应留存与参数密钥剥离"
 ## Task 5: 限流、重试与配额的 HTTP 客户端
 
 **Files:**
-- Create: `src/ragdemo/adapters/http.py`, `config/providers.yaml`, `tests/adapters/test_http.py`
-- Modify: `pyproject.toml`（加 `httpx`、`pyyaml`）
+- Create: `packages/ragdemo/src/ragdemo/adapters/http.py`, `config/providers.yaml`, `tests/adapters/test_http.py`
+- Modify: `packages/ragdemo/pyproject.toml`（加 `httpx`、`pyyaml`）
 
 **Interfaces:**
 - Consumes: Task 1 的 `RawResponse` 与错误类型
@@ -1168,16 +1175,19 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.http'
 
 - [ ] **Step 3: 写最小实现**
 
-`pyproject.toml` 的 `dependencies` 改为（新增最后两项）：
+`packages/ragdemo/pyproject.toml` 的 `dependencies` 改为（新增最后两项）：
 
 ```toml
 dependencies = [
-    "psycopg[binary]>=3.2",
+    "ragdemo-core",
     "click>=8.1",
     "httpx>=0.27",
     "pyyaml>=6.0",
 ]
 ```
+
+装依赖用 `uv sync`（workspace 根），不要 `pip install -e .`——
+双包结构下后者装不上 `ragdemo-core` 的 workspace 源。
 
 `config/providers.yaml`：
 
@@ -1204,7 +1214,7 @@ edgar:
   cost_per_call_cents: 0
 ```
 
-`src/ragdemo/adapters/http.py`：
+`packages/ragdemo/src/ragdemo/adapters/http.py`：
 
 ```python
 """带限流、重试与配额的 HTTP 客户端。
@@ -1372,13 +1382,13 @@ def _backoff_seconds(error: Exception | None, attempt: int, policy: RetryPolicy)
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `pip install -e ".[dev]" && pytest tests/adapters/test_http.py -v`
+Run: `uv sync && pytest tests/adapters/test_http.py -v`
 Expected: 6 passed
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/http.py config/providers.yaml tests/adapters/test_http.py pyproject.toml
+git add packages/ragdemo/src/ragdemo/adapters/http.py config/providers.yaml tests/adapters/test_http.py pyproject.toml
 git commit -m "feat(adapters): 限流重试配额的 HTTP 客户端"
 ```
 
@@ -1387,7 +1397,7 @@ git commit -m "feat(adapters): 限流重试配额的 HTTP 客户端"
 ## Task 6: Tushare 适配器
 
 **Files:**
-- Create: `src/ragdemo/adapters/tushare.py`, `tests/fixtures/tushare/income_2024q3.json`, `tests/fixtures/tushare/daily_20241028.json`, `tests/adapters/test_tushare.py`
+- Create: `packages/ragdemo/src/ragdemo/adapters/tushare.py`, `tests/fixtures/tushare/income_2024q3.json`, `tests/fixtures/tushare/daily_20241028.json`, `tests/adapters/test_tushare.py`
 
 **Interfaces:**
 - Consumes: Task 1 协议、Task 5 的 `HttpClient`
@@ -1506,7 +1516,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.tusha
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/tushare.py`：
+`packages/ragdemo/src/ragdemo/adapters/tushare.py`：
 
 ```python
 """Tushare Pro 适配器。
@@ -1664,7 +1674,7 @@ Expected: 10 passed（5 条契约 + 5 条专属）
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/tushare.py tests/adapters/test_tushare.py tests/fixtures/tushare
+git add packages/ragdemo/src/ragdemo/adapters/tushare.py tests/adapters/test_tushare.py tests/fixtures/tushare
 git commit -m "feat(adapters): Tushare 适配器，known_at 取公告日而非期末日"
 ```
 
@@ -1673,7 +1683,7 @@ git commit -m "feat(adapters): Tushare 适配器，known_at 取公告日而非�
 ## Task 7: EDGAR 适配器
 
 **Files:**
-- Create: `src/ragdemo/adapters/edgar.py`, `tests/fixtures/edgar/submissions_0001045810.json`, `tests/adapters/test_edgar.py`
+- Create: `packages/ragdemo/src/ragdemo/adapters/edgar.py`, `tests/fixtures/edgar/submissions_0001045810.json`, `tests/adapters/test_edgar.py`
 
 **Interfaces:**
 - Consumes: Task 1 协议、Task 5 的 `HttpClient`
@@ -1768,7 +1778,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.edgar
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/edgar.py`：
+`packages/ragdemo/src/ragdemo/adapters/edgar.py`：
 
 ```python
 """SEC EDGAR 适配器。
@@ -1881,7 +1891,7 @@ Expected: 9 passed（5 条契约 + 4 条专属）
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/edgar.py tests/adapters/test_edgar.py tests/fixtures/edgar
+git add packages/ragdemo/src/ragdemo/adapters/edgar.py tests/adapters/test_edgar.py tests/fixtures/edgar
 git commit -m "feat(adapters): EDGAR 适配器，known_at 取 acceptanceDateTime"
 ```
 
@@ -1893,7 +1903,7 @@ git commit -m "feat(adapters): EDGAR 适配器，known_at 取 acceptanceDateTime
 不由任何供应商定义。
 
 **Files:**
-- Create: `src/ragdemo/adapters/announcements.py`, `src/ragdemo/adapters/mock/announcements.py`, `tests/contracts/announcement_contract.py`, `tests/contracts/test_mock_announcements.py`, `docs/vendor-evaluation.md`
+- Create: `packages/ragdemo/src/ragdemo/adapters/announcements.py`, `packages/ragdemo/src/ragdemo/adapters/mock/announcements.py`, `tests/contracts/announcement_contract.py`, `tests/contracts/test_mock_announcements.py`, `docs/vendor-evaluation.md`
 
 **Interfaces:**
 - Consumes: Task 1 协议
@@ -2045,7 +2055,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.annou
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/adapters/announcements.py`：
+`packages/ragdemo/src/ragdemo/adapters/announcements.py`：
 
 ```python
 """公告供应商的归一化模型与协议。
@@ -2140,7 +2150,7 @@ class AnnouncementProvider(Protocol):
     def known_at(self, record: Any) -> datetime: ...
 ```
 
-`src/ragdemo/adapters/mock/announcements.py`：
+`packages/ragdemo/src/ragdemo/adapters/mock/announcements.py`：
 
 ```python
 """Mock 公告供应商。
@@ -2326,7 +2336,7 @@ Expected: 17 passed（Mock 事实 7 + 公告契约 6 + 公告专属 4）
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/adapters/announcements.py src/ragdemo/adapters/mock/announcements.py tests/contracts docs/vendor-evaluation.md
+git add packages/ragdemo/src/ragdemo/adapters/announcements.py packages/ragdemo/src/ragdemo/adapters/mock/announcements.py tests/contracts docs/vendor-evaluation.md
 git commit -m "feat(adapters): 公告归一化模型、AnnouncementProvider 契约与 Mock"
 ```
 
@@ -2335,7 +2345,7 @@ git commit -m "feat(adapters): 公告归一化模型、AnnouncementProvider 契�
 ## Task 9: 实体解析三层降级
 
 **Files:**
-- Create: `src/ragdemo/entities/__init__.py`, `src/ragdemo/entities/resolver.py`, `tests/entities/__init__.py`, `tests/entities/test_resolver.py`
+- Create: `packages/ragdemo/src/ragdemo/entities/__init__.py`, `packages/ragdemo/src/ragdemo/entities/resolver.py`, `tests/entities/__init__.py`, `tests/entities/test_resolver.py`
 
 **Interfaces:**
 - Consumes: P0 的 `core.entity` / `core.entity_alias` / `core.entity_resolution_queue`
@@ -2362,7 +2372,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.entities.resolver import EntityResolver
 
 MIGRATIONS = Path("db/migrations")
@@ -2459,13 +2469,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.entities'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/entities/__init__.py`：
+`packages/ragdemo/src/ragdemo/entities/__init__.py`：
 
 ```python
 """实体解析与消歧。"""
 ```
 
-`src/ragdemo/entities/resolver.py`：
+`packages/ragdemo/src/ragdemo/entities/resolver.py`：
 
 ```python
 """实体解析三层降级（docs/04-ingestion.md §4）。
@@ -2597,7 +2607,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/entities tests/entities
+git add packages/ragdemo/src/ragdemo/entities tests/entities
 git commit -m "feat(entities): 实体解析三层降级，模糊匹配不自动采纳"
 ```
 
@@ -2606,8 +2616,8 @@ git commit -m "feat(entities): 实体解析三层降级，模糊匹配不自动�
 ## Task 10: Dagster 资产、分区与传感器
 
 **Files:**
-- Create: `src/ragdemo/ingest/assets.py`, `src/ragdemo/ingest/definitions.py`, `tests/ingest/test_assets.py`
-- Modify: `pyproject.toml`（加 `dagster`、`dagster-webserver`）, `Makefile`
+- Create: `packages/ragdemo/src/ragdemo/ingest/assets.py`, `packages/ragdemo/src/ragdemo/ingest/definitions.py`, `tests/ingest/test_assets.py`
+- Modify: `packages/ragdemo/pyproject.toml`（加 `dagster`）、根 `pyproject.toml`（dev 组加 `dagster-webserver`）、`Makefile`
 
 **Interfaces:**
 - Consumes: Task 2/3/4/6/7 的适配器与中间件
@@ -2633,7 +2643,7 @@ import pytest
 from dagster import build_asset_context
 
 from ragdemo.adapters.mock.facts import MockFactAdapter
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.ingest.assets import DAILY, fact_normalized, fin_fact_loaded
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
 
@@ -2721,18 +2731,23 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.assets'
 
 - [ ] **Step 3: 写最小实现**
 
-`pyproject.toml` 改为（`dependencies` 新增 `dagster`，`dev` 新增 `dagster-webserver`）：
+`packages/ragdemo/pyproject.toml` 的 `dependencies` 新增 `dagster`：
 
 ```toml
 dependencies = [
-    "psycopg[binary]>=3.2",
+    "ragdemo-core",
     "click>=8.1",
     "httpx>=0.27",
     "pyyaml>=6.0",
     "dagster>=1.8",
 ]
+```
 
-[project.optional-dependencies]
+**根** `pyproject.toml` 的 `[dependency-groups] dev` 新增 `dagster-webserver`
+（uv workspace 的开发依赖在根，不在成员包）：
+
+```toml
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -2743,7 +2758,7 @@ dev = [
 ]
 ```
 
-`src/ragdemo/ingest/assets.py`：
+`packages/ragdemo/src/ragdemo/ingest/assets.py`：
 
 ```python
 """Dagster 资产与日分区。
@@ -2805,7 +2820,7 @@ def fin_fact_loaded(
     return counts
 ```
 
-`src/ragdemo/ingest/definitions.py`：
+`packages/ragdemo/src/ragdemo/ingest/definitions.py`：
 
 ```python
 """Dagster Definitions 与传感器。
@@ -2876,13 +2891,13 @@ dagster:
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `pip install -e ".[dev]" && pytest tests/ingest/test_assets.py -v`
+Run: `uv sync && pytest tests/ingest/test_assets.py -v`
 Expected: 4 passed
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/ingest/assets.py src/ragdemo/ingest/definitions.py tests/ingest/test_assets.py pyproject.toml Makefile
+git add packages/ragdemo/src/ragdemo/ingest/assets.py packages/ragdemo/src/ragdemo/ingest/definitions.py tests/ingest/test_assets.py pyproject.toml Makefile
 git commit -m "feat(ingest): Dagster 日分区资产，幂等且回填保持历史 known_at"
 ```
 

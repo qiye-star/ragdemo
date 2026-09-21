@@ -1,0 +1,28 @@
+services:
+  paradedb:
+    # 版本固定，不用 latest。升级时必须重跑 P0 全部测试，见 docs/02-data-model.md §5.5
+    # 与 adr/0001 的后果 2。
+    image: paradedb/paradedb:0.25.9-pg18
+    container_name: ragdemo-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragdemo}
+      POSTGRES_DB: ragdemo
+    ports:
+      # 只绑回环地址，不暴露公网（docs/01-architecture.md §4：端口不对公网开放）。
+      # 宿主端口默认 5433 而非 5432：开发机上 5432 常被既有 postgres 占用，
+      # 撞端口会让 `make up` 直接起不来。容器内仍是标准 5432。
+      - "127.0.0.1:${RAGDEMO_DB_PORT:-5433}:5432"
+    volumes:
+      # PostgreSQL 18+ 的官方镜像把数据放在 /var/lib/postgresql/<major>/docker，
+      # 挂载点必须是 /var/lib/postgresql 而不是它下面的 data/。
+      # 挂到 .../data 会让容器以 exit 1 启动失败（实测，见 docs/02-data-model.md §5.5）。
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ragdemo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

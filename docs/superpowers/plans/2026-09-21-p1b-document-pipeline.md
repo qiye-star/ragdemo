@@ -48,6 +48,13 @@
 | `temp_db` fixture、`migrate()` | P0 Task 2/3 |
 | `core.document` / `core.doc_block` / `core.embedding_cache` | P0 Task 7 |
 
+> **仓库布局**：本仓库是 **uv workspace 双包**结构——底层 `packages/ragdemo-core/src/ragdemo_core/`
+> （迁移、时点会话、Schema 不变量）与业务层 `packages/ragdemo/src/ragdemo/`（接入、解析、检索、Agent）。
+> 依赖方向由包边界物理强制（[`01-architecture.md`](../../01-architecture.md) §5）：
+> `ragdemo` 依赖 `ragdemo-core`，反向 import 会因包边界而失败。
+> 装依赖用 `uv sync`，跑命令用 `uv run`，**不要 `pip install -e .`**。
+> 测试在仓库根的 `tests/`，不在包内。
+
 ## Global Constraints
 
 - Python **3.11+**；完整类型注解；`ruff` 与 `mypy --strict` 通过。
@@ -67,28 +74,28 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/ragdemo/parse/__init__.py` | 包声明 |
-| `src/ragdemo/parse/config.py` | `ChunkConfig`（长度、重叠、过滤开关） |
-| `src/ragdemo/parse/chunker.py` | 纯函数切块：结构切分、重叠、表格保护 |
-| `src/ragdemo/parse/tree.py` | 父子块构造与 `is_leaf` 计算 |
-| `src/ragdemo/parse/filters.py` | 页眉页脚、目录、会计政策模板的过滤规则 |
-| `src/ragdemo/parse/describe.py` | `TableDescriber` 协议 + Mock + prompt 版本 |
-| `src/ragdemo/parse/validate.py` | 元数据完整性校验 8 项 |
-| `src/ragdemo/parse/mineru.py` | MinerU 封装（独立容器、超时、warnings） |
-| `src/ragdemo/ingest/documents.py` | `DocumentWriter`：文档与块入库、版本化重解析 |
-| `src/ragdemo/embed/__init__.py` | 包声明 |
-| `src/ragdemo/embed/base.py` | `Embedder` 协议、`l2_normalize`、`embedding_input` |
-| `src/ragdemo/embed/mock.py` | `MockEmbedder`（确定性向量，供测试与离线开发） |
-| `src/ragdemo/embed/cache.py` | 内容哈希缓存读写 |
-| `src/ragdemo/embed/batch.py` | 批处理 + 断点续传 |
-| `src/ragdemo/ingest/assets_docs.py` | 文档与嵌入的 Dagster 资产 |
+| `packages/ragdemo/src/ragdemo/parse/__init__.py` | 包声明 |
+| `packages/ragdemo/src/ragdemo/parse/config.py` | `ChunkConfig`（长度、重叠、过滤开关） |
+| `packages/ragdemo/src/ragdemo/parse/chunker.py` | 纯函数切块：结构切分、重叠、表格保护 |
+| `packages/ragdemo/src/ragdemo/parse/tree.py` | 父子块构造与 `is_leaf` 计算 |
+| `packages/ragdemo/src/ragdemo/parse/filters.py` | 页眉页脚、目录、会计政策模板的过滤规则 |
+| `packages/ragdemo/src/ragdemo/parse/describe.py` | `TableDescriber` 协议 + Mock + prompt 版本 |
+| `packages/ragdemo/src/ragdemo/parse/validate.py` | 元数据完整性校验 8 项 |
+| `packages/ragdemo/src/ragdemo/parse/mineru.py` | MinerU 封装（独立容器、超时、warnings） |
+| `packages/ragdemo/src/ragdemo/ingest/documents.py` | `DocumentWriter`：文档与块入库、版本化重解析 |
+| `packages/ragdemo/src/ragdemo/embed/__init__.py` | 包声明 |
+| `packages/ragdemo/src/ragdemo/embed/base.py` | `Embedder` 协议、`l2_normalize`、`embedding_input` |
+| `packages/ragdemo/src/ragdemo/embed/mock.py` | `MockEmbedder`（确定性向量，供测试与离线开发） |
+| `packages/ragdemo/src/ragdemo/embed/cache.py` | 内容哈希缓存读写 |
+| `packages/ragdemo/src/ragdemo/embed/batch.py` | 批处理 + 断点续传 |
+| `packages/ragdemo/src/ragdemo/ingest/assets_docs.py` | 文档与嵌入的 Dagster 资产 |
 
 ---
 
 ## Task 1: 切块配置与规范修正
 
 **Files:**
-- Create: `src/ragdemo/parse/__init__.py`, `src/ragdemo/parse/config.py`, `tests/parse/__init__.py`, `tests/parse/test_config.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/__init__.py`, `packages/ragdemo/src/ragdemo/parse/config.py`, `tests/parse/__init__.py`, `tests/parse/test_config.py`
 - Modify: `docs/05-document-pipeline.md`（§3.1 表格与 §4.2 第 2 步）
 
 **Interfaces:**
@@ -147,13 +154,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse'`
 
 - [ ] **Step 3: 写最小实现 + 修正规范文档**
 
-`src/ragdemo/parse/__init__.py`：
+`packages/ragdemo/src/ragdemo/parse/__init__.py`：
 
 ```python
 """文档解析与切块。切块器是纯函数，不碰数据库。"""
 ```
 
-`src/ragdemo/parse/config.py`：
+`packages/ragdemo/src/ragdemo/parse/config.py`：
 
 ```python
 """切块参数。
@@ -221,7 +228,7 @@ Expected: 5 passed；文档中能查到修正后的长度
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse tests/parse docs/05-document-pipeline.md
+git add packages/ragdemo/src/ragdemo/parse tests/parse docs/05-document-pipeline.md
 git commit -m "feat(parse): 切块配置；修正规范中叶子块长度的自相矛盾"
 ```
 
@@ -230,7 +237,7 @@ git commit -m "feat(parse): 切块配置；修正规范中叶子块长度的自�
 ## Task 2: 切块器
 
 **Files:**
-- Create: `src/ragdemo/parse/filters.py`, `src/ragdemo/parse/chunker.py`, `tests/parse/test_chunker.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/filters.py`, `packages/ragdemo/src/ragdemo/parse/chunker.py`, `tests/parse/test_chunker.py`
 
 **Interfaces:**
 - Consumes: Task 1 的 `ChunkConfig`；P1a Task 8 的 `NormalizedDocument` / `NormalizedBlock`
@@ -378,7 +385,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.chunker'
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/parse/filters.py`：
+`packages/ragdemo/src/ragdemo/parse/filters.py`：
 
 ```python
 """不进入检索索引的内容。
@@ -406,7 +413,7 @@ def is_boilerplate(text: str) -> bool:
     return any(p.search(stripped) for p in _PATTERNS)
 ```
 
-`src/ragdemo/parse/chunker.py`：
+`packages/ragdemo/src/ragdemo/parse/chunker.py`：
 
 ```python
 """切块器。纯函数：NormalizedDocument -> list[Chunk]，不碰数据库、不调网络。
@@ -521,7 +528,7 @@ Expected: 11 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse/chunker.py src/ragdemo/parse/filters.py tests/parse/test_chunker.py
+git add packages/ragdemo/src/ragdemo/parse/chunker.py packages/ragdemo/src/ragdemo/parse/filters.py tests/parse/test_chunker.py
 git commit -m "feat(parse): 切块器，表格不切分且块不跨小节"
 ```
 
@@ -530,7 +537,7 @@ git commit -m "feat(parse): 切块器，表格不切分且块不跨小节"
 ## Task 3: 父子块构造与 `is_leaf`
 
 **Files:**
-- Create: `src/ragdemo/parse/tree.py`, `tests/parse/test_tree.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/tree.py`, `tests/parse/test_tree.py`
 
 **Interfaces:**
 - Consumes: Task 2 的 `Chunk`
@@ -613,7 +620,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.tree'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/parse/tree.py`：
+`packages/ragdemo/src/ragdemo/parse/tree.py`：
 
 ```python
 """父子块构造。
@@ -693,7 +700,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse/tree.py tests/parse/test_tree.py
+git add packages/ragdemo/src/ragdemo/parse/tree.py tests/parse/test_tree.py
 git commit -m "feat(parse): 父子块构造，表格既是父块也是叶子块"
 ```
 
@@ -702,7 +709,7 @@ git commit -m "feat(parse): 父子块构造，表格既是父块也是叶子块"
 ## Task 4: 表格描述生成
 
 **Files:**
-- Create: `src/ragdemo/parse/describe.py`, `src/ragdemo/agents/prompts/table_describe/v1.md`, `tests/parse/test_describe.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/describe.py`, `packages/ragdemo/src/ragdemo/agents/prompts/table_describe/v1.md`, `tests/parse/test_describe.py`
 
 **Interfaces:**
 - Consumes: Task 2 的 `Chunk`
@@ -784,7 +791,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.describe
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/agents/prompts/table_describe/v1.md`：
+`packages/ragdemo/src/ragdemo/agents/prompts/table_describe/v1.md`：
 
 ```markdown
 ---
@@ -809,7 +816,7 @@ expected_output_schema: plain_text_one_sentence
 只输出那一句描述，不要解释。
 ```
 
-`src/ragdemo/parse/describe.py`：
+`packages/ragdemo/src/ragdemo/parse/describe.py`：
 
 ```python
 """表格描述生成。
@@ -888,7 +895,7 @@ Expected: 10 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse/describe.py src/ragdemo/agents/prompts/table_describe tests/parse/test_describe.py
+git add packages/ragdemo/src/ragdemo/parse/describe.py packages/ragdemo/src/ragdemo/agents/prompts/table_describe tests/parse/test_describe.py
 git commit -m "feat(parse): 表格描述生成，拦截解读性表述"
 ```
 
@@ -897,7 +904,7 @@ git commit -m "feat(parse): 表格描述生成，拦截解读性表述"
 ## Task 5: 元数据完整性校验
 
 **Files:**
-- Create: `src/ragdemo/parse/validate.py`, `tests/parse/test_validate.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/validate.py`, `tests/parse/test_validate.py`
 
 **Interfaces:**
 - Consumes: Task 2/3 的 `Chunk`；P1a Task 8 的 `NormalizedDocument`
@@ -1005,7 +1012,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.validate
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/parse/validate.py`：
+`packages/ragdemo/src/ragdemo/parse/validate.py`：
 
 ```python
 """元数据完整性校验（docs/05-document-pipeline.md §6）。
@@ -1080,7 +1087,7 @@ Expected: 10 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse/validate.py tests/parse/test_validate.py
+git add packages/ragdemo/src/ragdemo/parse/validate.py tests/parse/test_validate.py
 git commit -m "feat(parse): 元数据完整性校验 8 项，一次报全部违规"
 ```
 
@@ -1089,7 +1096,7 @@ git commit -m "feat(parse): 元数据完整性校验 8 项，一次报全部违�
 ## Task 6: 文档与块入库
 
 **Files:**
-- Create: `src/ragdemo/ingest/documents.py`, `tests/ingest/test_documents.py`
+- Create: `packages/ragdemo/src/ragdemo/ingest/documents.py`, `tests/ingest/test_documents.py`
 
 **Interfaces:**
 - Consumes: Task 2/3/4/5；P1a Task 8 的 `NormalizedDocument` 与 `known_at_for`
@@ -1116,7 +1123,7 @@ import pytest
 
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.adapters.base import FetchContext
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid
 from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.config import ChunkConfig
@@ -1284,7 +1291,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.documen
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/ingest/documents.py`：
+`packages/ragdemo/src/ragdemo/ingest/documents.py`：
 
 ```python
 """文档与块入库。
@@ -1500,7 +1507,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/ingest/documents.py tests/ingest/test_documents.py
+git add packages/ragdemo/src/ragdemo/ingest/documents.py tests/ingest/test_documents.py
 git commit -m "feat(ingest): 文档与块入库，重解析沿用原 known_at"
 ```
 
@@ -1509,7 +1516,7 @@ git commit -m "feat(ingest): 文档与块入库，重解析沿用原 known_at"
 ## Task 7: 嵌入器与内容哈希缓存
 
 **Files:**
-- Create: `src/ragdemo/embed/__init__.py`, `src/ragdemo/embed/base.py`, `src/ragdemo/embed/mock.py`, `src/ragdemo/embed/cache.py`, `tests/embed/__init__.py`, `tests/embed/test_base.py`, `tests/embed/test_cache.py`
+- Create: `packages/ragdemo/src/ragdemo/embed/__init__.py`, `packages/ragdemo/src/ragdemo/embed/base.py`, `packages/ragdemo/src/ragdemo/embed/mock.py`, `packages/ragdemo/src/ragdemo/embed/cache.py`, `tests/embed/__init__.py`, `tests/embed/test_base.py`, `tests/embed/test_cache.py`
 
 **Interfaces:**
 - Consumes: P0 的 `core.embedding_cache`
@@ -1610,7 +1617,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.embed.base import content_key
 from ragdemo.embed.cache import EmbeddingCache
 from ragdemo.embed.mock import MockEmbedder
@@ -1680,13 +1687,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.embed'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/embed/__init__.py`：
+`packages/ragdemo/src/ragdemo/embed/__init__.py`：
 
 ```python
 """嵌入。维度固定 1024，写入前 L2 归一化。"""
 ```
 
-`src/ragdemo/embed/base.py`：
+`packages/ragdemo/src/ragdemo/embed/base.py`：
 
 ```python
 """嵌入协议与工具。
@@ -1740,7 +1747,7 @@ class Embedder(Protocol):
         """返回与输入等长的向量列表，每个向量 EMBEDDING_DIM 维且已 L2 归一化。"""
 ```
 
-`src/ragdemo/embed/mock.py`：
+`packages/ragdemo/src/ragdemo/embed/mock.py`：
 
 ```python
 """确定性 Mock 嵌入器。
@@ -1778,7 +1785,7 @@ class MockEmbedder:
         return l2_normalize(cleaned)
 ```
 
-`src/ragdemo/embed/cache.py`：
+`packages/ragdemo/src/ragdemo/embed/cache.py`：
 
 ```python
 """内容哈希缓存。
@@ -1851,7 +1858,7 @@ Expected: 15 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/embed tests/embed
+git add packages/ragdemo/src/ragdemo/embed tests/embed
 git commit -m "feat(embed): 嵌入协议、L2 归一化与三列主键的内容哈希缓存"
 ```
 
@@ -1860,7 +1867,7 @@ git commit -m "feat(embed): 嵌入协议、L2 归一化与三列主键的内容�
 ## Task 8: 批量嵌入与断点续传
 
 **Files:**
-- Create: `src/ragdemo/embed/batch.py`, `tests/embed/test_batch.py`
+- Create: `packages/ragdemo/src/ragdemo/embed/batch.py`, `tests/embed/test_batch.py`
 
 **Interfaces:**
 - Consumes: Task 7 的 `Embedder` / `EmbeddingCache`；P0 的 `core.doc_block`
@@ -1881,7 +1888,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
 
@@ -1999,7 +2006,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.embed.batch'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/embed/batch.py`：
+`packages/ragdemo/src/ragdemo/embed/batch.py`：
 
 ```python
 """批量嵌入与断点续传。
@@ -2101,7 +2108,7 @@ Expected: 6 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/embed/batch.py tests/embed/test_batch.py
+git add packages/ragdemo/src/ragdemo/embed/batch.py tests/embed/test_batch.py
 git commit -m "feat(embed): 批量嵌入与断点续传，相同内容只算一次"
 ```
 
@@ -2110,7 +2117,7 @@ git commit -m "feat(embed): 批量嵌入与断点续传，相同内容只算一�
 ## Task 9: MinerU 封装与文档管线资产
 
 **Files:**
-- Create: `src/ragdemo/parse/mineru.py`, `src/ragdemo/ingest/assets_docs.py`, `tests/parse/test_mineru.py`, `tests/ingest/test_assets_docs.py`
+- Create: `packages/ragdemo/src/ragdemo/parse/mineru.py`, `packages/ragdemo/src/ragdemo/ingest/assets_docs.py`, `tests/parse/test_mineru.py`, `tests/ingest/test_assets_docs.py`
 - Modify: `infra/docker-compose.yml`（加 mineru 服务）
 
 **Interfaces:**
@@ -2180,7 +2187,7 @@ import pytest
 from dagster import build_asset_context
 
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.embed.mock import MockEmbedder
 from ragdemo.ingest.assets_docs import block_embeddings, doc_blocks_loaded, doc_normalized
 from ragdemo.ingest.documents import DocumentWriter
@@ -2243,7 +2250,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.mineru'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/parse/mineru.py`：
+`packages/ragdemo/src/ragdemo/parse/mineru.py`：
 
 ```python
 """MinerU 封装。
@@ -2369,7 +2376,7 @@ class MineruParser:
         )
 ```
 
-`src/ragdemo/ingest/assets_docs.py`：
+`packages/ragdemo/src/ragdemo/ingest/assets_docs.py`：
 
 ```python
 """文档管线的 Dagster 资产。"""
@@ -2476,7 +2483,7 @@ Expected: 全部通过（含端到端的 BM25 命中）
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/parse/mineru.py src/ragdemo/ingest/assets_docs.py tests/parse/test_mineru.py tests/ingest/test_assets_docs.py infra/docker-compose.yml
+git add packages/ragdemo/src/ragdemo/parse/mineru.py packages/ragdemo/src/ragdemo/ingest/assets_docs.py tests/parse/test_mineru.py tests/ingest/test_assets_docs.py infra/docker-compose.yml
 git commit -m "feat(parse): MinerU 封装与文档管线 Dagster 资产"
 ```
 

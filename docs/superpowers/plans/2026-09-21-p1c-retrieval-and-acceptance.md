@@ -24,6 +24,13 @@
 | `MockAnnouncementProvider` | P1a Task 8 |
 | `HttpClient` | P1a Task 5 |
 
+> **仓库布局**：本仓库是 **uv workspace 双包**结构——底层 `packages/ragdemo-core/src/ragdemo_core/`
+> （迁移、时点会话、Schema 不变量）与业务层 `packages/ragdemo/src/ragdemo/`（接入、解析、检索、Agent）。
+> 依赖方向由包边界物理强制（[`01-architecture.md`](../../01-architecture.md) §5）：
+> `ragdemo` 依赖 `ragdemo-core`，反向 import 会因包边界而失败。
+> 装依赖用 `uv sync`，跑命令用 `uv run`，**不要 `pip install -e .`**。
+> 测试在仓库根的 `tests/`，不在包内。
+
 ## Global Constraints
 
 - Python **3.11+**；完整类型注解；`ruff` 与 `mypy --strict` 通过。
@@ -43,20 +50,20 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/ragdemo/retrieval/__init__.py` | 包声明 |
-| `src/ragdemo/retrieval/types.py` | `RetrievalConfig` / `RetrievalRequest` / `EvidenceBlock` / `RetrievalStats` / `RetrievalResult` |
-| `src/ragdemo/retrieval/filters.py` | 过滤条件 → SQL 片段与参数 |
-| `src/ragdemo/retrieval/lexical.py` | BM25 一路 |
-| `src/ragdemo/retrieval/vector.py` | 向量一路 + 迭代扫描参数 |
-| `src/ragdemo/retrieval/fusion.py` | 加权 RRF |
-| `src/ragdemo/retrieval/rerank.py` | `Reranker` 协议 + Mock + 降级 |
-| `src/ragdemo/retrieval/expand.py` | 父子块展开与去重 |
-| `src/ragdemo/retrieval/rewrite.py` | 查询改写（默认关闭） |
-| `src/ragdemo/retrieval/service.py` | `RetrievalService` 编排 |
-| `src/ragdemo/evals/__init__.py` | 包声明 |
-| `src/ragdemo/evals/runner.py` | 评测框架 + `eval_run` 记录 |
-| `src/ragdemo/evals/retrieval_metrics.py` | `recall@k` / `MRR` / 索引召回率 |
-| `src/ragdemo/evals/cli.py` | `ragdemo eval add-retrieval` / `run` |
+| `packages/ragdemo/src/ragdemo/retrieval/__init__.py` | 包声明 |
+| `packages/ragdemo/src/ragdemo/retrieval/types.py` | `RetrievalConfig` / `RetrievalRequest` / `EvidenceBlock` / `RetrievalStats` / `RetrievalResult` |
+| `packages/ragdemo/src/ragdemo/retrieval/filters.py` | 过滤条件 → SQL 片段与参数 |
+| `packages/ragdemo/src/ragdemo/retrieval/lexical.py` | BM25 一路 |
+| `packages/ragdemo/src/ragdemo/retrieval/vector.py` | 向量一路 + 迭代扫描参数 |
+| `packages/ragdemo/src/ragdemo/retrieval/fusion.py` | 加权 RRF |
+| `packages/ragdemo/src/ragdemo/retrieval/rerank.py` | `Reranker` 协议 + Mock + 降级 |
+| `packages/ragdemo/src/ragdemo/retrieval/expand.py` | 父子块展开与去重 |
+| `packages/ragdemo/src/ragdemo/retrieval/rewrite.py` | 查询改写（默认关闭） |
+| `packages/ragdemo/src/ragdemo/retrieval/service.py` | `RetrievalService` 编排 |
+| `packages/ragdemo/src/ragdemo/evals/__init__.py` | 包声明 |
+| `packages/ragdemo/src/ragdemo/evals/runner.py` | 评测框架 + `eval_run` 记录 |
+| `packages/ragdemo/src/ragdemo/evals/retrieval_metrics.py` | `recall@k` / `MRR` / 索引召回率 |
+| `packages/ragdemo/src/ragdemo/evals/cli.py` | `ragdemo eval add-retrieval` / `run` |
 | `infra/egress-proxy/policy.yaml` | 出网域名白名单与凭据注入 |
 | `infra/runbook-backup.md` | 备份与恢复手册 |
 | `scripts/backup.sh` / `scripts/restore.sh` | 备份与恢复脚本 |
@@ -66,7 +73,7 @@
 ## Task 1: 检索数据结构与过滤
 
 **Files:**
-- Create: `src/ragdemo/retrieval/__init__.py`, `src/ragdemo/retrieval/types.py`, `src/ragdemo/retrieval/filters.py`, `tests/retrieval/__init__.py`, `tests/retrieval/test_types.py`, `tests/retrieval/test_filters.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/__init__.py`, `packages/ragdemo/src/ragdemo/retrieval/types.py`, `packages/ragdemo/src/ragdemo/retrieval/filters.py`, `tests/retrieval/__init__.py`, `tests/retrieval/test_types.py`, `tests/retrieval/test_filters.py`
 
 **Interfaces:**
 - Consumes: 无
@@ -197,13 +204,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/__init__.py`：
+`packages/ragdemo/src/ragdemo/retrieval/__init__.py`：
 
 ```python
 """检索管线：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开。"""
 ```
 
-`src/ragdemo/retrieval/types.py`：
+`packages/ragdemo/src/ragdemo/retrieval/types.py`：
 
 ```python
 """检索的请求、配置与结果。"""
@@ -290,7 +297,7 @@ class RetrievalResult:
     stats: RetrievalStats
 ```
 
-`src/ragdemo/retrieval/filters.py`：
+`packages/ragdemo/src/ragdemo/retrieval/filters.py`：
 
 ```python
 """过滤条件 → SQL 片段。
@@ -342,7 +349,7 @@ Expected: 12 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval tests/retrieval
+git add packages/ragdemo/src/ragdemo/retrieval tests/retrieval
 git commit -m "feat(retrieval): 检索数据结构与冗余时点谓词的过滤构造"
 ```
 
@@ -351,7 +358,7 @@ git commit -m "feat(retrieval): 检索数据结构与冗余时点谓词的过滤
 ## Task 2: BM25 一路与下推验证
 
 **Files:**
-- Create: `src/ragdemo/retrieval/lexical.py`, `tests/retrieval/conftest.py`, `tests/retrieval/test_lexical.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/lexical.py`, `tests/retrieval/conftest.py`, `tests/retrieval/test_lexical.py`
 
 **Interfaces:**
 - Consumes: Task 1；P1b 的入库管线
@@ -374,7 +381,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from ragdemo.db.migrate import migrate
+from ragdemo_core.db.migrate import migrate
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
 
@@ -563,7 +570,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.lexi
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/lexical.py`：
+`packages/ragdemo/src/ragdemo/retrieval/lexical.py`：
 
 ```python
 """BM25 一路（ParadeDB pg_search）。
@@ -628,7 +635,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/lexical.py tests/retrieval/conftest.py tests/retrieval/test_lexical.py
+git add packages/ragdemo/src/ragdemo/retrieval/lexical.py tests/retrieval/conftest.py tests/retrieval/test_lexical.py
 git commit -m "feat(retrieval): BM25 一路与 EXPLAIN 下推检查"
 ```
 
@@ -637,7 +644,7 @@ git commit -m "feat(retrieval): BM25 一路与 EXPLAIN 下推检查"
 ## Task 3: 向量一路与迭代扫描
 
 **Files:**
-- Create: `src/ragdemo/retrieval/vector.py`, `tests/retrieval/test_vector.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/vector.py`, `tests/retrieval/test_vector.py`
 
 **Interfaces:**
 - Consumes: Task 1/2；P1b 的 `Embedder`
@@ -734,7 +741,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.vect
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/vector.py`：
+`packages/ragdemo/src/ragdemo/retrieval/vector.py`：
 
 ```python
 """向量一路（pgvector HNSW）。
@@ -801,7 +808,7 @@ Expected: 5 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/vector.py tests/retrieval/test_vector.py
+git add packages/ragdemo/src/ragdemo/retrieval/vector.py tests/retrieval/test_vector.py
 git commit -m "feat(retrieval): 向量一路与 pgvector 迭代扫描参数"
 ```
 
@@ -810,7 +817,7 @@ git commit -m "feat(retrieval): 向量一路与 pgvector 迭代扫描参数"
 ## Task 4: 加权 RRF 融合
 
 **Files:**
-- Create: `src/ragdemo/retrieval/fusion.py`, `tests/retrieval/test_fusion.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/fusion.py`, `tests/retrieval/test_fusion.py`
 
 **Interfaces:**
 - Consumes: Task 2 的 `RankedHit`
@@ -891,7 +898,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.fusi
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/fusion.py`：
+`packages/ragdemo/src/ragdemo/retrieval/fusion.py`：
 
 ```python
 """加权 Reciprocal Rank Fusion。
@@ -954,7 +961,7 @@ Expected: 8 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/fusion.py tests/retrieval/test_fusion.py
+git add packages/ragdemo/src/ragdemo/retrieval/fusion.py tests/retrieval/test_fusion.py
 git commit -m "feat(retrieval): 加权 RRF 融合，统一简报中互斥的两种融合表述"
 ```
 
@@ -963,7 +970,7 @@ git commit -m "feat(retrieval): 加权 RRF 融合，统一简报中互斥的两�
 ## Task 5: 重排与降级
 
 **Files:**
-- Create: `src/ragdemo/retrieval/rerank.py`, `tests/retrieval/test_rerank.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/rerank.py`, `tests/retrieval/test_rerank.py`
 
 **Interfaces:**
 - Consumes: Task 4 的 `FusedHit`
@@ -1044,7 +1051,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.rera
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/rerank.py`：
+`packages/ragdemo/src/ragdemo/retrieval/rerank.py`：
 
 ```python
 """重排与降级。
@@ -1145,7 +1152,7 @@ Expected: 6 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/rerank.py tests/retrieval/test_rerank.py
+git add packages/ragdemo/src/ragdemo/retrieval/rerank.py tests/retrieval/test_rerank.py
 git commit -m "feat(retrieval): 重排与失败降级"
 ```
 
@@ -1154,7 +1161,7 @@ git commit -m "feat(retrieval): 重排与失败降级"
 ## Task 6: 父子块展开与去重
 
 **Files:**
-- Create: `src/ragdemo/retrieval/expand.py`, `tests/retrieval/test_expand.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/expand.py`, `tests/retrieval/test_expand.py`
 
 **Interfaces:**
 - Consumes: Task 5 的 `RerankOutcome`
@@ -1268,7 +1275,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.expa
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/retrieval/expand.py`：
+`packages/ragdemo/src/ragdemo/retrieval/expand.py`：
 
 ```python
 """父子块展开与去重（docs/06-retrieval.md §6）。
@@ -1362,7 +1369,7 @@ Expected: 7 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/expand.py tests/retrieval/test_expand.py
+git add packages/ragdemo/src/ragdemo/retrieval/expand.py tests/retrieval/test_expand.py
 git commit -m "feat(retrieval): 父子块展开与同父块去重"
 ```
 
@@ -1371,7 +1378,7 @@ git commit -m "feat(retrieval): 父子块展开与同父块去重"
 ## Task 7: `RetrievalService` 编排与查询改写
 
 **Files:**
-- Create: `src/ragdemo/retrieval/rewrite.py`, `src/ragdemo/retrieval/service.py`, `config/synonyms.yaml`, `tests/retrieval/test_service.py`
+- Create: `packages/ragdemo/src/ragdemo/retrieval/rewrite.py`, `packages/ragdemo/src/ragdemo/retrieval/service.py`, `config/synonyms.yaml`, `tests/retrieval/test_service.py`
 
 **Interfaces:**
 - Consumes: Task 1–6
@@ -1514,7 +1521,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.rewr
 训练芯片: [训练加速卡, training chip]
 ```
 
-`src/ragdemo/retrieval/rewrite.py`：
+`packages/ragdemo/src/ragdemo/retrieval/rewrite.py`：
 
 ```python
 """查询改写。默认关闭。
@@ -1550,7 +1557,7 @@ def expand_synonyms(query: str, table: Mapping[str, list[str]]) -> list[str]:
     return [v for v in variants if not (v in seen or seen.add(v))]
 ```
 
-`src/ragdemo/retrieval/service.py`：
+`packages/ragdemo/src/ragdemo/retrieval/service.py`：
 
 ```python
 """检索编排：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开。
@@ -1565,7 +1572,7 @@ from collections.abc import Mapping
 
 import psycopg
 
-from ragdemo.db.session import as_of_session
+from ragdemo_core.db.session import as_of_session
 from ragdemo.embed.base import Embedder
 from ragdemo.retrieval.expand import expand_to_evidence
 from ragdemo.retrieval.fusion import weighted_rrf
@@ -1731,7 +1738,7 @@ Expected: 全部通过
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/retrieval/service.py src/ragdemo/retrieval/rewrite.py config/synonyms.yaml tests/retrieval/test_service.py
+git add packages/ragdemo/src/ragdemo/retrieval/service.py packages/ragdemo/src/ragdemo/retrieval/rewrite.py config/synonyms.yaml tests/retrieval/test_service.py
 git commit -m "feat(retrieval): RetrievalService 编排与默认关闭的查询改写"
 ```
 
@@ -1740,7 +1747,7 @@ git commit -m "feat(retrieval): RetrievalService 编排与默认关闭的查询�
 ## Task 8: 评测框架与 `eval_run`
 
 **Files:**
-- Create: `src/ragdemo/evals/__init__.py`, `src/ragdemo/evals/runner.py`, `src/ragdemo/evals/retrieval_metrics.py`, `tests/evals/__init__.py`, `tests/evals/test_metrics.py`, `tests/evals/test_runner.py`
+- Create: `packages/ragdemo/src/ragdemo/evals/__init__.py`, `packages/ragdemo/src/ragdemo/evals/runner.py`, `packages/ragdemo/src/ragdemo/evals/retrieval_metrics.py`, `tests/evals/__init__.py`, `tests/evals/test_metrics.py`, `tests/evals/test_runner.py`
 
 **Interfaces:**
 - Consumes: Task 7 的 `RetrievalService`；P0 的 `evals.eval_retrieval` / `evals.eval_run`
@@ -1883,13 +1890,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/evals/__init__.py`：
+`packages/ragdemo/src/ragdemo/evals/__init__.py`：
 
 ```python
 """评测。三套评测集的指标计算与运行记录。"""
 ```
 
-`src/ragdemo/evals/retrieval_metrics.py`：
+`packages/ragdemo/src/ragdemo/evals/retrieval_metrics.py`：
 
 ```python
 """检索指标（docs/06-retrieval.md §9.1）。
@@ -1920,7 +1927,7 @@ def mrr_at_k(retrieved: Sequence[int], gold: set[int], k: int) -> float:
     return 0.0
 ```
 
-`src/ragdemo/evals/runner.py`：
+`packages/ragdemo/src/ragdemo/evals/runner.py`：
 
 ```python
 """评测运行器。
@@ -2060,7 +2067,7 @@ Expected: 10 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/evals tests/evals
+git add packages/ragdemo/src/ragdemo/evals tests/evals
 git commit -m "feat(evals): 检索评测框架与 eval_run 记录"
 ```
 
@@ -2069,8 +2076,8 @@ git commit -m "feat(evals): 检索评测框架与 eval_run 记录"
 ## Task 9: 评测集录入 CLI 与 CI 门禁
 
 **Files:**
-- Create: `src/ragdemo/evals/cli.py`, `.github/workflows/eval.yml`, `tests/evals/test_cli.py`
-- Modify: `src/ragdemo/cli.py`, `Makefile`
+- Create: `packages/ragdemo/src/ragdemo/evals/cli.py`, `.github/workflows/eval.yml`, `tests/evals/test_cli.py`
+- Modify: `packages/ragdemo/src/ragdemo/cli.py`, `Makefile`
 
 **Interfaces:**
 - Consumes: Task 8
@@ -2161,7 +2168,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals.cli'`
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/evals/cli.py`：
+`packages/ragdemo/src/ragdemo/evals/cli.py`：
 
 ```python
 """评测命令与 CI 门禁比对。
@@ -2294,7 +2301,7 @@ def run(suite: str, gate: bool) -> None:
                 sys.exit(1)
 ```
 
-`src/ragdemo/cli.py` 中注册子命令组（在 `main` 定义之后）：
+`packages/ragdemo/src/ragdemo/cli.py` 中注册子命令组（在 `main` 定义之后）：
 
 ```python
 from ragdemo.evals.cli import eval_group
@@ -2325,13 +2332,11 @@ jobs:
       RAGDEMO_ADMIN_DSN: postgresql://postgres:ragdemo@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: ragdemo db migrate
-      - run: pytest -v -m db
-      - run: ragdemo eval run --suite retrieval --gate | tee eval.md
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run ragdemo db migrate
+      - run: uv run pytest -v -m db
+      - run: uv run ragdemo eval run --suite retrieval --gate | tee eval.md
       - run: cat eval.md >> "$GITHUB_STEP_SUMMARY"
 ```
 
@@ -2352,7 +2357,7 @@ Expected: 6 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/evals/cli.py src/ragdemo/cli.py .github/workflows/eval.yml Makefile tests/evals/test_cli.py
+git add packages/ragdemo/src/ragdemo/evals/cli.py packages/ragdemo/src/ragdemo/cli.py .github/workflows/eval.yml Makefile tests/evals/test_cli.py
 git commit -m "feat(evals): 评测录入 CLI、基线比对与 CI 门禁"
 ```
 
@@ -2363,7 +2368,7 @@ git commit -m "feat(evals): 评测录入 CLI、基线比对与 CI 门禁"
 这两条是 P1 验收里最容易被跳过、也最能暴露真问题的检查。
 
 **Files:**
-- Create: `src/ragdemo/evals/index_recall.py`, `tests/evals/test_index_recall.py`, `tests/test_p1_acceptance.py`
+- Create: `packages/ragdemo/src/ragdemo/evals/index_recall.py`, `tests/evals/test_index_recall.py`, `tests/test_p1_acceptance.py`
 - Modify: `Makefile`, `.github/workflows/eval.yml`（nightly job）
 
 **Interfaces:**
@@ -2445,7 +2450,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from ragdemo.db.invariants import check_point_in_time_leaks
+from ragdemo_core.db.invariants import check_point_in_time_leaks
 from ragdemo.embed.mock import MockEmbedder
 from ragdemo.evals.runner import run_retrieval_eval
 from ragdemo.retrieval.rerank import MockReranker
@@ -2541,7 +2546,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals.index_re
 
 - [ ] **Step 3: 写最小实现**
 
-`src/ragdemo/evals/index_recall.py`：
+`packages/ragdemo/src/ragdemo/evals/index_recall.py`：
 
 ```python
 """索引召回率验证（docs/06-retrieval.md §3.6）。
@@ -2583,7 +2588,7 @@ def exact_vector_search(
     params["qvec"] = "[" + ",".join(repr(float(x)) for x in query_vector) + "]"
     params["limit"] = limit
 
-    from ragdemo.db.session import as_of_session
+    from ragdemo_core.db.session import as_of_session
 
     with as_of_session(conn, req.as_of, tenant=req.tenant, user=req.user) as c:
         c.execute("SELECT set_config('enable_indexscan', 'off', true)")
@@ -2630,12 +2635,10 @@ accept-p1:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: pytest tests/evals/test_index_recall.py -v -m db
-      - run: pytest tests/test_p1_acceptance.py -v -m db
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run pytest tests/evals/test_index_recall.py -v -m db
+      - run: uv run pytest tests/test_p1_acceptance.py -v -m db
 ```
 
 并在文件顶部的 `on:` 增加 `schedule: [{cron: "0 18 * * *"}]`。
@@ -2648,7 +2651,7 @@ Expected: 3 passed
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ragdemo/evals/index_recall.py tests/evals/test_index_recall.py tests/test_p1_acceptance.py Makefile .github/workflows/eval.yml
+git add packages/ragdemo/src/ragdemo/evals/index_recall.py tests/evals/test_index_recall.py tests/test_p1_acceptance.py Makefile .github/workflows/eval.yml
 git commit -m "test: 索引召回率验证与 P1 验收测试套件"
 ```
 
