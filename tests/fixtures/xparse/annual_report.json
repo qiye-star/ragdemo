@@ -1,0 +1,37 @@
+{
+  "code": 200,
+  "message": "success",
+  "version": "4.2.1",
+  "duration": 8123,
+  "result": {
+    "markdown": "# 第三节 主营业务\n\n公司主营云端训练芯片。\n\n<table>...</table>",
+    "total_page_number": 2,
+    "success_count": 2,
+    "detail": [
+      {"page_id": 1, "paragraph_id": 0, "outline_level": -1, "content": 1,
+       "type": "paragraph", "text": "寒武纪 2024 年半年度报告", "position": [0, 0, 600, 0, 600, 40, 0, 40]},
+      {"page_id": 1, "paragraph_id": 1, "outline_level": 0, "content": 0,
+       "type": "paragraph", "text": "第三节 主营业务", "position": [0, 60, 600, 60, 600, 100, 0, 100]},
+      {"page_id": 1, "paragraph_id": 2, "outline_level": 1, "content": 0,
+       "type": "paragraph", "text": "3.2 分部收入", "position": [0, 120, 600, 120, 600, 160, 0, 160]},
+      {"page_id": 1, "paragraph_id": 3, "outline_level": -1, "content": 0,
+       "type": "paragraph", "text": "公司主营云端训练芯片与智能计算集群系统。",
+       "position": [0, 180, 600, 180, 600, 220, 0, 220]},
+      {"page_id": 2, "paragraph_id": 4, "outline_level": -1, "content": 0,
+       "type": "table", "text": "分部收入表",
+       "position": [0, 100, 600, 100, 600, 400, 0, 400],
+       "cells": [
+         {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+         {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+         {"row": 1, "col": 0, "row_span": 1, "col_span": 1, "text": "智能计算"},
+         {"row": 1, "col": 1, "row_span": 1, "col_span": 1, "text": "12,340"},
+         {"row": 1, "col": 2, "row_span": 1, "col_span": 1, "text": "+58.2%"}
+       ]}
+    ],
+    "catalog": {"toc": [[{"hierarchy": 1, "title": "第三节 主营业务", "page_id": 1}]]}
+  },
+  "metrics": [
+    {"page_id": 1, "page_image_width": 600, "page_image_height": 850, "dpi": 144},
+    {"page_id": 2, "page_image_width": 600, "page_image_height": 850, "dpi": 144}
+  ]
+}
