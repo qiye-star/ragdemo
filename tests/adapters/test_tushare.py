@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ragdemo.adapters.base import Adapter, RawResponse
+from ragdemo.adapters.base import Adapter, FactRecord, FetchContext, RawResponse
 from ragdemo.adapters.tushare import TushareAdapter
 from tests.contracts.adapter_contract import AdapterContract
 
@@ -71,6 +71,29 @@ def test_error_response_raises() -> None:
     )
     with pytest.raises(ValueError, match="40203"):
         list(adapter.parse(bad))
+
+
+def test_replay_fetch_only_yields_fact_shaped_rows_and_parse_never_crashes() -> None:
+    """回放目录里 income_*.json（事实）与 daily_*.json（价格）两种夹具混在一起。
+
+    fetch() 是 FactAdapter 契约方法，Dagster 的 fact_normalized 资产对它的
+    每个产出无条件调用 parse()（`for raw in adapter.fetch(ctx): parse(raw)`）。
+    价格行没有 end_date，parse() 会 KeyError——所以 fetch() 必须只吐出
+    事实形状的夹具，价格夹具（daily_20241028.json）应该被跳过。
+    """
+    adapter = TushareAdapter.for_replay(FIXTURES)
+    ctx = FetchContext(ingest_run_id="test-run", partition_date=date(2024, 10, 28))
+
+    responses = list(adapter.fetch(ctx))
+    # 只有 income_2024q3.json 是事实形状；daily_20241028.json 必须被过滤掉。
+    assert [r.endpoint for r in responses] == ["/income_2024q3"]
+
+    records: list[FactRecord] = []
+    for raw in responses:
+        records.extend(adapter.parse(raw))  # 不应抛 KeyError
+
+    assert {r.entity_ref for r in records} == {"688256.SH", "002049.SZ"}
+    assert all(isinstance(r, FactRecord) for r in records)
 
 
 def test_valid_from_is_quarter_start_approximation() -> None:

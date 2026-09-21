@@ -94,11 +94,21 @@ class TushareAdapter:
         if self._replay_dir is not None:
             for path in sorted(self._replay_dir.glob("*.json")):
                 envelope = json.loads(path.read_text(encoding="utf-8"))
+                rows = _rows(envelope)
+                if not _looks_fact_shaped(rows):
+                    # fetch()/parse() 是 FactAdapter 契约的方法，只服务事实数据；
+                    # 价格是另一套形状（trade_date 而非 end_date），走 parse_prices()，
+                    # 由直接构造的 RawResponse 喂入——按本计划的既定范围，价格的
+                    # *写入* 推迟到 P1c。replay 目录里事实与价格两种夹具的
+                    # *.json 混在一起（income_*.json / daily_*.json），这里跳过
+                    # 价格文件，否则下游 fact_normalized 里无条件的
+                    # `adapter.parse(raw)` 会在价格行上因缺 end_date 而 KeyError。
+                    continue
                 yield RawResponse(
                     provider=self.provider,
                     endpoint=f"/{path.stem}",
                     params={"partition": ctx.partition_date.isoformat()},
-                    payload=_rows(envelope),
+                    payload=rows,
                     http_status=200,
                     fetched_at=datetime.now(UTC),
                 )
@@ -157,6 +167,12 @@ class TushareAdapter:
 
 def _maybe_float(value: Any) -> float | None:  # noqa: ANN401
     return None if value is None else float(value)
+
+
+def _looks_fact_shaped(rows: list[dict[str, Any]]) -> bool:
+    """事实行必有 end_date（期末日，parse() 靠它算 period_end）；价格行没有，
+    只有 trade_date。用这一个必需字段区分 replay 目录里混杂的两种夹具。"""
+    return bool(rows) and all("end_date" in row for row in rows)
 
 
 def _period_label(period_end: date) -> str:
