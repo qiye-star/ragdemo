@@ -26,9 +26,9 @@ def temp_db() -> Iterator[str]:
     """创建一个随机命名的空库，测试结束后强制删除。"""
     name = f"t_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')  # noqa: S608
+        conn.execute(f'CREATE DATABASE "{name}"')
     try:
         yield _dsn_for(name)
     finally:
         with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')  # noqa: S608
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')

@@ -10,12 +10,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 import psycopg
-
-if TYPE_CHECKING:
-    from typing import LiteralString
 
 _MIGRATIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS public.schema_migrations (
@@ -71,9 +67,8 @@ def migrate(conn: psycopg.Connection[tuple[object, ...]], directory: Path) -> li
                 )
             continue
         with conn.transaction():
-            # 迁移文件是仓库内由开发者编写并经评审的 DDL，不是外部输入；
-            # cast 只是告诉类型检查器这一点，不放宽任何运行时校验。
-            conn.execute(cast("LiteralString", m.sql))
+            # 整个文件作为一条语句交给服务端：多条 DDL 之间的原子性由这层事务保证。
+            conn.execute(m.sql)
             conn.execute(
                 "INSERT INTO public.schema_migrations (version, checksum) VALUES (%s, %s)",
                 (m.version, m.checksum),
