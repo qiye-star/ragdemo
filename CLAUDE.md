@@ -80,11 +80,13 @@ Agent 与应用层**只允许查询 `asof` schema 下的安全视图**，不得�
 
 - **TDD**：先写失败测试再实现。**数值计算与时点逻辑必须有单测**，没有例外。
 - 每个外部适配器都要有 Mock 实现与契约测试（`tests/contracts/`）。
-- Prompt 版本化存 `src/agents/prompts/<agent>/<version>.md`；改 prompt 必须跑评测。
+- Prompt 版本化存 `packages/ragdemo/src/ragdemo/agents/prompts/<agent>/<version>.md`；改 prompt 必须跑评测。
 - 日志结构化（JSON），必须含 `run_id`、`as_of`、`entity_id`。
 - **密钥只出现在环境变量或网络代理层**。代码、日志、测试夹具、提交记录中一律不得出现。
 - 数据库变更走迁移脚本（`db/migrations/`），不手工改表。
-- Python 3.11+，类型注解完整，`ruff` + `mypy` 在 pre-commit 与 CI 中强制。
+- Python 3.11+，类型注解完整，`ruff` + `mypy --strict` 在 pre-commit 与 CI 中强制。
+- 代码分两个包：`packages/ragdemo-core/`（底层）与 `packages/ragdemo/`（业务层）。
+  **底层不得 import 业务层**（`docs/01-architecture.md` §5），有测试守着。
 
 ## 4. 明确不做的事
 

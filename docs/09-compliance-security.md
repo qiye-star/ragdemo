@@ -98,10 +98,16 @@ def check_unsourced_numbers(output: RenderedOutput) -> list[Violation]:
 隔离**不靠应用层拼 WHERE 条件**，靠 PostgreSQL RLS：
 
 ```sql
+-- FORCE 不能少。asof.* 是普通视图，按**视图属主**的身份与 RLS 上下文执行；
+-- 只 ENABLE 的话属主自己不受策略约束，经视图读取时隔离等于没开。
 ALTER TABLE core.document  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core.document  FORCE  ROW LEVEL SECURITY;
 ALTER TABLE core.doc_block ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core.doc_block FORCE  ROW LEVEL SECURITY;
 
-CREATE POLICY doc_visibility ON core.document FOR SELECT TO app_read
+-- 策略给 PUBLIC 而不是 app_read：读取经由 asof.* 视图发生时，
+-- 求值身份是视图属主而不是 app_read，只授给 app_read 的策略根本不会被执行。
+CREATE POLICY doc_visibility ON core.document FOR SELECT TO PUBLIC
 USING (
       (owner_tenant IS NULL AND owner_user IS NULL)                  -- 公共
    OR (owner_tenant = current_setting('app.tenant', true)
@@ -111,13 +117,29 @@ USING (
 
 -- doc_block 同样的策略（反规范化的 owner_* 列使其可独立判定，
 -- 无需 JOIN document —— 这也是 02-data-model.md §5.3 反规范化的理由之一）
-CREATE POLICY block_visibility ON core.doc_block FOR SELECT TO app_read
+CREATE POLICY block_visibility ON core.doc_block FOR SELECT TO PUBLIC
 USING (
       (owner_tenant IS NULL AND owner_user IS NULL)
    OR (owner_tenant = current_setting('app.tenant', true) AND owner_user IS NULL)
    OR (owner_user = current_setting('app.user', true))
 );
+
+-- RLS 一旦开启，没有写入策略就等于禁止一切写入——包括写入中间件自己。
+-- 归属校验在中间件里做（只有它知道当前请求属于谁），这里不重复限制。
+-- DELETE 刻意不给策略：文档只做版本化，不做物理删除。
+CREATE POLICY doc_insert   ON core.document  FOR INSERT TO PUBLIC WITH CHECK (true);
+CREATE POLICY doc_update   ON core.document  FOR UPDATE TO PUBLIC USING (true) WITH CHECK (true);
+CREATE POLICY block_insert ON core.doc_block FOR INSERT TO PUBLIC WITH CHECK (true);
+CREATE POLICY block_update ON core.doc_block FOR UPDATE TO PUBLIC USING (true) WITH CHECK (true);
 ```
+
+> **超级用户会无条件绕过 RLS，`FORCE` 也拦不住。** 因此 `core` / `asof` 下的表与视图
+> 必须由**非超级用户** `app_owner` 持有——迁移默认以超级用户身份运行，不转移属主的话
+> 上面这一整套策略仍然是一纸空文。属主转移见 `db/migrations/006_asof_views_and_roles.sql`，
+> 由 `02-data-model.md` §9 的不变量 6 守着。
+>
+> 这一条是 P0 实测出来的：属主是超级用户时，`test_private_document_invisible_through_asof_view`
+> 直接失败（u2 读到了 u1 的私有块）。
 
 `app.tenant` / `app.user` 与 `app.as_of` 一样用 `SET LOCAL` 在事务内设置
 （`03-point-in-time.md` §4.3），事务结束自动清除。

@@ -216,7 +216,9 @@ CREATE TABLE core.entity_node_membership (
   source        text NOT NULL,          -- 通常是 'manual:<author>'
   source_ref    text,
   ingest_run_id text NOT NULL,
-  ingested_at   timestamptz NOT NULL DEFAULT now()
+  ingested_at   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT entity_node_membership_time_order
+    CHECK (superseded_at IS NULL OR superseded_at > known_at)
 );
 
 CREATE UNIQUE INDEX entity_node_membership_live_uk
@@ -356,7 +358,8 @@ CREATE TABLE core.price_daily (
   source_ref    text,
   ingest_run_id text NOT NULL,
   ingested_at   timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (entity_id, trade_date, known_at)
+  PRIMARY KEY (entity_id, trade_date, known_at),
+  CONSTRAINT price_daily_time_order CHECK (superseded_at IS NULL OR superseded_at > known_at)
 );
 
 CREATE UNIQUE INDEX price_daily_live_uk
@@ -565,9 +568,14 @@ WITH (
 这是实测发现的陷阱（见下方验证记录）。`keyword` 分词器做精确的大小写敏感匹配，
 是标识符字段的正确选择。
 
-> **已验证**：本段 DDL 在 **ParadeDB `paradedb/paradedb:latest`（PostgreSQL 18.6,
-> `pg_search` 0.25.9, `pgvector` 0.8.4）** 上实际执行通过，
-> `chinese_lindera` 分词器、`boolean_fields` 选项、`keyword` 分词器均可用。
+> **已验证**：本段 DDL 在 **ParadeDB `paradedb/paradedb:0.25.9-pg18`（PostgreSQL 18.6）**
+> 上实际执行通过，`chinese_lindera` 分词器、`boolean_fields` 选项、`keyword` 分词器均可用，
+> 无需退到 `chinese_compatible`。P0 的 `tests/db/test_migration_004.py` 每次 CI 都复验一遍，
+> 含「大写命中、小写不命中」那条大小写敏感性断言。
+>
+> 另有一条与本段无关、但同属该镜像的实测坑：PostgreSQL 18+ 的官方镜像把数据放在
+> `/var/lib/postgresql/<major>/docker`，compose 的数据卷必须挂 `/var/lib/postgresql`
+> 而不是其下的 `data/`，挂错容器会直接以 exit 1 起不来。
 >
 > 尽管如此，`infra/docker-compose.yml` 仍必须**固定镜像的具体版本号**——
 > `pg_search` 的索引选项语法在版本间变动过。升级镜像时重跑 P0 的建库脚本，
@@ -597,7 +605,8 @@ CREATE TABLE core.event (
   source            text NOT NULL,
   source_ref        text,
   ingest_run_id     text NOT NULL,
-  ingested_at       timestamptz NOT NULL DEFAULT now()
+  ingested_at       timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT event_time_order CHECK (superseded_at IS NULL OR superseded_at > known_at)
 );
 
 CREATE INDEX event_type_time  ON core.event (event_type, publish_at DESC);
@@ -774,7 +783,15 @@ CREATE INDEX tool_call_log_cost ON audit.tool_call_log (started_at) INCLUDE (cos
 ```
 
 哈希链构造与校验见 `09-compliance-security.md` §4。本表**只允许 INSERT**，
-由 `REVOKE UPDATE, DELETE` 强制。
+由下面这段强制（实现在 `db/migrations/006_asof_views_and_roles.sql`）：
+
+```sql
+GRANT USAGE ON SCHEMA audit TO app_read, app_write;
+GRANT INSERT, SELECT ON audit.tool_call_log TO app_write;
+GRANT SELECT ON audit.tool_call_log TO app_read;
+REVOKE UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA audit
+  FROM app_read, app_write, PUBLIC;
+```
 
 ---
 
@@ -791,15 +808,26 @@ INSERT INTO core.bitemporal_registry (table_name) VALUES
   ('core.entity_relation'), ('core.entity_node_membership'), ('core.event');
 ```
 
-CI 中的测试 `tests/test_schema_invariants.py` 断言：
+CI 中的测试 `tests/db/test_schema_invariants.py` 断言：
 
 1. 登记表中的每张表都具备 §1.3 的全部七个公共字段，类型正确；
 2. 每张表都有 `superseded_at > known_at` 的 CHECK 约束；
 3. 每张表在 `asof` schema 下有同名视图（`03-point-in-time.md` §4）；
 4. `doc_block` 的反规范化列与 `document` 一致（抽样 1000 行）；
-5. 应用角色对 `core` schema **没有** `SELECT` 权限。
+5. 应用角色 `app_read` 对**登记在册的七张时点表**没有 `SELECT` 权限；
+6. `core` / `asof` 下的表与视图**不由超级用户持有**。
 
-这五条任何一条失败即 CI 红灯。它们比文档更能防止时点语义被悄悄破坏。
+第 5 条原先写的是「对 `core` schema 没有 SELECT」，与 `03-point-in-time.md` §4.4
+「给 `entity` / `node_metric` / `propagation_rule` 直接授予 SELECT」互相矛盾。
+按 `10-roadmap.md` P0 验收的字面要求（以 `app_read` 查 `core.fin_fact` 被拒）收窄到
+登记在册的七张表，两边即可同时成立。
+
+第 6 条是 P0 实测补的：超级用户无条件绕过 RLS，`FORCE ROW LEVEL SECURITY` 也拦不住。
+而 `asof.*` 是普通视图、按属主身份执行——属主一退回超级用户，
+`09-compliance-security.md` §3.2 的行级隔离就静默失效，
+而隔离测试**仍然会通过**（策略压根不被求值）。所以属主本身需要一条不变量盯着。
+
+这六条任何一条失败即 CI 红灯。它们比文档更能防止时点语义被悄悄破坏。
 
 ---
 
@@ -809,6 +837,7 @@ P0 需要导入的手工数据（`db/seed/*.csv`）：
 
 | 文件 | 目标表 | 数量 |
 |---|---|---|
+| `taxonomy.csv` | 无（导入时交叉校验用） | 全部在册的 L1/L2/L3 环节 |
 | `entity.csv` | `core.entity` + `core.entity_node_membership` | 100 |
 | `entity_alias.csv` | `core.entity_alias` | 约 400（每家 3–5 个别名） |
 | `entity_relation.csv` | `core.entity_relation` | 200 |
@@ -816,4 +845,15 @@ P0 需要导入的手工数据（`db/seed/*.csv`）：
 | `propagation_rule.csv` | `core.propagation_rule` | 15 |
 
 导入工具须做的事：校验 `primary_node ∈ l3_node`、别名不与其他实体全称冲突、
-关系两端实体存在、为每行时点表记录填 `known_at`（手工数据取 `valid_from` 当日 00:00）。
+关系两端实体存在、为每行时点表记录填 `known_at`（手工数据取 `valid_from` 当日 00:00），
+以及——
+
+**校验每一个环节名都在 `taxonomy.csv` 里在册。** `l1_layer` / `l2_segment` / `l3_node`
+在数据库里都是无约束的自由文本（本文档 §2.1、§2.4、§3 的 DDL 都没有外键或枚举），
+却是 `entity`、`entity_node_membership`、`node_metric`、`propagation_rule`、`opinion`
+五张表之间的事实联结键：`08-evaluation.md` §3 的基准构造与 `07-agents.md` 的规则匹配
+都是精确字符串相等。一个错字不会报任何错，只会让该环节的评分基准悄悄变成空集、
+让传导规则悄悄匹配不到任何实体。`taxonomy.csv` 就是为了把这类「静默错」变成「导入失败」。
+
+空单元格要写 `NULL` 而不是空串：`entity.tushare_code` 带 `UNIQUE`，
+多家海外实体都填空串会在第二行就撞唯一键。

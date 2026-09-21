@@ -114,10 +114,10 @@
 |---|---|---|---|
 | W0.1 | 仓库与工具链（`pyproject`、`ruff`、`mypy`、pre-commit、CI 骨架） | `CLAUDE.md` §3 | `make lint` 与 `make typecheck` 在空项目上通过 |
 | W0.2 | `docker-compose` + ParadeDB（**固定版本**）+ Makefile | [01](01-architecture.md) §4 | `make up` 后 `pg_isready` 通过；`\dx` 含 `pg_search`、`vector` |
-| W0.3 | 迁移框架 + 全量 DDL | [02](02-data-model.md) | `make db-init` 0 error 0 warning；建成 19 表 / 7 视图 / 72 索引 |
+| W0.3 | 迁移框架 + 全量 DDL | [02](02-data-model.md) | `make db-init` 0 error 0 warning；建成 **25 表 / 7 视图 / 73 索引 / 10 枚举**（P0 实测值，含 04 §4 与 05 §5.3 定义的两张表） |
 | W0.4 | 时点安全层：`asof` 视图、`current_as_of()`、角色权限、`as_of_session` | [03](03-point-in-time.md) §4 | `app_read` 查 `core.fin_fact` 被拒；未设 `app.as_of` 查 `asof.*` **报错** |
 | W0.5 | Schema 不变量测试 + 时点泄漏自检 | [02](02-data-model.md) §9、[03](03-point-in-time.md) §5 | 5 条不变量 + 5 条泄漏自检全部纳入 CI |
-| W0.6 | 种子 CSV 导入工具 | [02](02-data-model.md) §10 | `make seed` 后四张表计数达标（见 [10](10-roadmap.md) P0） |
+| W0.6 | 种子 CSV 导入工具 | [02](02-data-model.md) §10 | `make seed` 后四张表计数达标（见 [10](10-roadmap.md) P0）；环节名交叉校验生效 |
 
 **W0 是全项目的硬前置**，没有任何一条可以跳过或并行绕开。
 

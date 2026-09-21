@@ -191,9 +191,26 @@ score(d) = w_bm25 / (k + rank_bm25(d)) + w_vec / (k + rank_vec(d))
 
 ### 4.2 完整 SQL
 
+> **P0 实测（`paradedb/paradedb:0.25.9-pg18`）：下面这段按原文跑不起来，三处要注意。**
+> 逐条钉在 `tests/db/test_retrieval_sql.py` 里，改动本节必须同步那份测试。
+>
+> 1. **`owner_tenant IS NOT DISTINCT FROM :tenant` 与 `paradedb.score()` 不能共存。**
+>    同时出现时 ParadeDB 直接报 `Unsupported query shape`。单独用
+>    `IS NOT DISTINCT FROM`（不取 score）是可以的，所以只读文档发现不了。
+>    可用的等价写法：
+>    `(owner_tenant = :tenant OR (owner_tenant IS NULL AND :tenant::text IS NULL))`。
+>    下面已按这个写法修正。
+> 2. **`SET LOCAL app.as_of = :as_of` 不能参数化。** `SET` 不接受占位符，
+>    参数化执行必然语法错。用 `SELECT set_config('app.as_of', :as_of, true)`，
+>    `ragdemo_core.db.session.as_of_session` 就是这么做的。下面已改。
+> 3. **公共读取时 `:tenant` / `:user` 必须绑 SQL `NULL`，不能绑空串。**
+>    而 `as_of_session` 把 `app.tenant` / `app.user` 设成空串（GUC 不能存 NULL）。
+>    两边约定不一致时检索会**一条公共文档都召不回，且不报任何错**。
+>    `RetrievalService` 必须在一个地方统一这两处，并有针对性的单测。
+
 ```sql
--- 会话参数
-SET LOCAL app.as_of            = :as_of;
+-- 会话参数。注意 as_of 走 set_config 而不是 SET LOCAL —— SET 不接受占位符。
+SELECT set_config('app.as_of', :as_of, true);
 SET LOCAL hnsw.ef_search       = 200;
 SET LOCAL hnsw.iterative_scan  = 'relaxed_order';
 SET LOCAL hnsw.max_scan_tuples = 200000;
@@ -208,8 +225,9 @@ WITH bm25 AS (
      AND is_leaf
      AND (:entity_ids::text[] IS NULL OR entity_id = ANY (:entity_ids))
      AND (:doc_types::text[]  IS NULL OR doc_type  = ANY (:doc_types))
-     AND owner_tenant IS NOT DISTINCT FROM :tenant
-     AND owner_user   IS NOT DISTINCT FROM :user
+     -- 展开成 OR 形式：IS NOT DISTINCT FROM 与 paradedb.score() 共存会被拒，见本节开头
+     AND (owner_tenant = :tenant OR (owner_tenant IS NULL AND :tenant::text IS NULL))
+     AND (owner_user   = :user   OR (owner_user   IS NULL AND :user::text   IS NULL))
    ORDER BY paradedb.score(block_id) DESC
    LIMIT :candidate_k                       -- 默认 50
 ),
@@ -223,8 +241,8 @@ vec AS (
      AND is_leaf
      AND (:entity_ids::text[] IS NULL OR entity_id = ANY (:entity_ids))
      AND (:doc_types::text[]  IS NULL OR doc_type  = ANY (:doc_types))
-     AND owner_tenant IS NOT DISTINCT FROM :tenant
-     AND owner_user   IS NOT DISTINCT FROM :user
+     AND (owner_tenant = :tenant OR (owner_tenant IS NULL AND :tenant::text IS NULL))
+     AND (owner_user   = :user   OR (owner_user   IS NULL AND :user::text   IS NULL))
    ORDER BY embedding <=> :qvec
    LIMIT :candidate_k
 )

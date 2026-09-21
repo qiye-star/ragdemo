@@ -153,33 +153,50 @@
 
 ## 5. 仓库结构
 
+uv workspace，两个包：`ragdemo-core` 是底层，`ragdemo` 是业务层。
+
 ```
 ragdemo/
   CLAUDE.md                 # 原则、决策、工程约定（对 Claude Code 的强约束）
-  pyproject.toml
+  pyproject.toml            # workspace 虚拟根：成员声明 + ruff/mypy/pytest 统一配置
+  Makefile  uv.lock  .python-version
   infra/                    # docker-compose、egress-proxy 配置、备份脚本
   db/
     migrations/             # 版本化迁移脚本
-    seed/                   # 实体 / 关系 / 规则 / 指标的 CSV 种子数据
-  src/
-    adapters/               # tushare / announcements / edgar / rss / mcp_shell
-    ingest/                 # dagster 资产、分区、时点写入中间件
-    parse/                  # xparse 封装、切块、元数据
-    retrieval/              # 过滤、混合、重排、父子块、同义词
-    entities/               # 解析、别名、消歧
-    metrics/                # 指标字典、口径转换、计算
-    agents/
-      prompts/<agent>/<version>.md
-    tools/                  # Agent 工具外壳层
-    templates/              # 简报 / 周报 / 对标模板与渲染
-    audit/                  # tool_call_log、哈希链
-    api/                    # Web 后端（P4 起）
+    seed/                   # 环节表 + 实体 / 关系 / 规则 / 指标的 CSV 种子数据
+  packages/
+    ragdemo-core/           # 底层：无业务逻辑，谁都可以依赖它
+      src/ragdemo_core/
+        db/                 # 迁移执行器、as_of 会话、schema 不变量与泄漏自检
+    ragdemo/                # 业务层，依赖 ragdemo-core
+      src/ragdemo/
+        cli.py              # ragdemo db migrate / seed / check
+        seed/               # 种子 CSV 导入与环节表校验
+        adapters/           # tushare / announcements / edgar / rss / mcp_shell
+        ingest/             # dagster 资产、分区、时点写入中间件
+        parse/              # xparse 封装、切块、元数据
+        retrieval/          # 过滤、混合、重排、父子块、同义词
+        entities/           # 解析、别名、消歧
+        metrics/            # 指标字典、口径转换、计算
+        agents/
+          prompts/<agent>/<version>.md
+        tools/              # Agent 工具外壳层
+        templates/          # 简报 / 周报 / 对标模板与渲染
+        audit/              # tool_call_log、哈希链
+        api/                # Web 后端（P4 起）
   web/                      # 前端（P4 起）
   evals/                    # 三套评测集与脚本
   docs/                     # 本文档集
   tests/
+    db/                     # 迁移、时点安全层、不变量、检索 SQL
+    seed/                   # 种子导入
     contracts/              # 适配器契约测试
 ```
+
+**分成两个包不是为了好看，是为了让下面那条依赖规则物理生效。**
+`ragdemo-core` 的 `pyproject.toml` 不依赖 `ragdemo`，所以底层 import 业务层
+在包解析层面就走不通，不再依赖代码评审去发现。
+`tests/test_toolchain.py` 另有一条断言直接扫源码守着这条线。
 
 ### 模块依赖方向
 

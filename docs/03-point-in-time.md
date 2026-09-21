@@ -216,21 +216,43 @@ SELECT * FROM core.event
 ### 4.2 权限
 
 ```sql
+-- app_owner 是第三个角色，NOLOGIN，只用来持有 core / asof / evals / audit 的对象。
+-- 它必须是**非超级用户**：超级用户无条件绕过 RLS，属主是超级用户时
+-- 09-compliance-security.md §3.2 的行级隔离对经由 asof.* 视图的读取完全不生效。
+CREATE ROLE app_owner NOLOGIN;
 CREATE ROLE app_read;
 CREATE ROLE app_write;
 
--- 应用角色看不见基表
+-- 应用角色看不见时点基表
 REVOKE ALL ON ALL TABLES IN SCHEMA core FROM app_read;
 GRANT USAGE ON SCHEMA core, asof TO app_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA asof TO app_read;
 
--- 写入中间件用独立角色，且只能 INSERT + 受控 UPDATE
+-- §4.4 的三张非时点表 + 三张纯配置表，直接授予 SELECT
+GRANT SELECT ON core.entity, core.entity_alias, core.node_metric,
+                core.metric_source_map, core.ai_revenue_rule, core.propagation_rule
+             TO app_read;
+
+-- 写入中间件用独立角色，且只能 INSERT + 受控 UPDATE。
+-- USAGE 不能漏：没有它，下面的 GRANT INSERT 形同虚设。
+GRANT USAGE ON SCHEMA core TO app_write;
 GRANT INSERT ON ALL TABLES IN SCHEMA core TO app_write;
 GRANT UPDATE (superseded_at) ON core.fin_fact, core.price_daily,
                                 core.document, core.doc_block,
                                 core.entity_relation, core.entity_node_membership,
                                 core.event TO app_write;
+
+-- 审计层只能追加
+GRANT USAGE ON SCHEMA audit TO app_read, app_write;
+GRANT INSERT, SELECT ON audit.tool_call_log TO app_write;
+GRANT SELECT ON audit.tool_call_log TO app_read;
+REVOKE UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA audit
+  FROM app_read, app_write, PUBLIC;
 ```
+
+创建角色要写成幂等的（`DO $$ ... IF NOT EXISTS ... $$`）：角色是集群级对象，
+迁移完全可能在一个已经有这些角色的集群上执行。完整实现见
+`db/migrations/006_asof_views_and_roles.sql`。
 
 `GRANT UPDATE (superseded_at)` 是列级权限：写入中间件能打失效标记，
 但**改不了任何一个值字段**。这从根本上杜绝了「就地修数据」。
@@ -255,8 +277,13 @@ def as_of_session(conn, as_of: datetime) -> Iterator[Connection]:
 ### 4.4 边界：`entity` 与 `node_metric`
 
 `core.entity`、`core.node_metric`、`core.propagation_rule` 不是时点表，
-对 `app_read` 直接授予 `SELECT`。这是刻意的取舍：它们是描述性/配置性数据，
-每条都做双时间轴会让种子数据维护成本翻倍。
+对 `app_read` 直接授予 `SELECT`（具体语句在 §4.2）。这是刻意的取舍：
+它们是描述性/配置性数据，每条都做双时间轴会让种子数据维护成本翻倍。
+
+> 这条授权与 `02-data-model.md` §9 不变量 5 原先的措辞「应用角色对 `core` schema
+> **没有** `SELECT` 权限」直接冲突。按 `10-roadmap.md` P0 验收的字面要求
+> （以 `app_read` 查 `core.fin_fact` 被拒）化解：不变量 5 已收窄为
+> 「对 `core.bitemporal_registry` 登记的**七张时点表**没有 `SELECT`」。
 
 代价是：**回溯修改这些表会影响历史结果**。缓解措施有三条：
 
@@ -330,7 +357,7 @@ SELECT o.opinion_id, b.block_id, o.as_of, b.known_at
 
 业绩预告 → 业绩快报 → 正式财报，同一期间的同一指标会有三个来源、三个精度。
 它们是**三条独立的 `fin_fact` 行，不是互相更正**——`metric_id` 不同
-（`revenue_forecast` / `revenue_flash` / `revenue`）。只有「正式财报被更正公告修改」
+（`revenue_forecast` / `revenue_flash` / `revenue_total`）。只有「正式财报被更正公告修改」
 才走 §3 的更正流程。
 
 ### 6.2 时区

@@ -14,13 +14,15 @@
 
 创始人手工数据录入 + Claude Code 搭骨架。
 
-- [ ] 仓库初始化、`CLAUDE.md`、`pyproject.toml`、`ruff` + `mypy` + pre-commit、CI 骨架
-- [ ] `infra/docker-compose.yml`：ParadeDB（**固定镜像版本号**）+ 基础服务
-- [ ] `db/migrations/`：`02-data-model.md` 全部 DDL 的迁移脚本与迁移工具
-- [ ] `asof` schema 视图、角色与权限（`03-point-in-time.md` §4）
-- [ ] 种子数据 CSV 导入工具（`02-data-model.md` §10）
+- [x] 仓库初始化、`CLAUDE.md`、`pyproject.toml`、`ruff` + `mypy` + pre-commit、CI 骨架
+- [x] `infra/docker-compose.yml`：ParadeDB（**固定镜像版本号** `0.25.9-pg18`）+ 基础服务
+- [x] `db/migrations/`：`02-data-model.md` 全部 DDL 的迁移脚本与迁移工具
+- [x] `asof` schema 视图、角色与权限（`03-point-in-time.md` §4）
+- [x] 种子数据 CSV 导入工具（`02-data-model.md` §10）
 - [ ] 创始人录入：实体 100 家、别名约 400、关系 200 条、传导规则 15 条、指标 30 个
-- [ ] Schema 不变量测试（`02-data-model.md` §9）
+      —— **部分完成**：指标 30 / 规则 15 已满；实体 18、别名 73、关系 30
+      （以海光信息 `CN.688041` 为核心的样例切片，见 `db/seed/README.md`）
+- [x] Schema 不变量测试（`02-data-model.md` §9，已扩到六条）
 
 **验收**：
 
@@ -42,6 +44,12 @@ make db-init && make seed && make test-schema
 
 最后两条是 P0 最重要的验收项：它们证明时点防泄漏机制真的生效，
 而不只是写在文档里。
+
+**P0 实跑结果**（`make db-init && make seed && make test-schema && make accept-p0`）：
+七项中五项通过，含最重要的最后两条；`core.entity` 与 `core.entity_relation`
+两条计数未达标，因为创始人录入只做到样例切片。这两条断言的期望值
+（100 / 200）**一个未改**，在 `tests/test_p0_acceptance.py` 里带 `seed_full` 标记，
+数据补齐后自动转绿。日常 CI 与 `make test-schema` 不跑它们，因此不会长期挂红。
 
 > **本阶段同时验证本文档集的 SQL**：`02-data-model.md` 的 DDL、
 > `03-point-in-time.md` §4 的视图、`06-retrieval.md` §4.2 的检索 SQL

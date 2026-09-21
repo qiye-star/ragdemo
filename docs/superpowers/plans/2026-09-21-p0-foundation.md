@@ -2416,3 +2416,52 @@ git commit -m "test: P0 验收标准做成可执行测试"
    （`pg_search` 行为、分词器可用性、镜像版本）——文档是契约。
 3. 按 [`docs/11-sdlc.md`](../../11-sdlc.md) §8 编写 P1 的实施计划，
    放在 `docs/superpowers/plans/<日期>-p1-foundation.md`。
+
+---
+
+## 实施偏差记录（2026-09-21 执行后补）
+
+本计划整体照原样执行，以下是与原文不同的地方，以及执行中实测出来的、
+必须回写文档的缺陷。每一条都有对应的测试钉着。
+
+### 结构性偏差（用户决策）
+
+| # | 偏差 | 原因 |
+|---|---|---|
+| S1 | 代码落在 `packages/ragdemo-core/` + `packages/ragdemo/` 两个 uv workspace 包，而非 `src/ragdemo/` | 让 `docs/01-architecture.md` §5 的「依赖只能自上而下」由包边界物理强制。import 路径相应变为 `ragdemo_core.db.*` |
+| S2 | `db/seed/*.csv` 从 `.gitignore` 移除，提交进仓库 | 干净 clone 上 `make seed` 必须能复现表计数，否则 P0 验收不可复现 |
+| S3 | 种子数据只做海光信息（`CN.688041`）+ 17 家必要对手方 | 用户决定，其余由创始人后续补充。`node_metric` 30 与 `propagation_rule` 15 是环节级的，已按验收标准做满 |
+| S4 | `tests/test_p0_acceptance.py` 的四条计数断言加 `seed_full` 标记 | 期望值 100/200/15/30 一个未改；CI 与 `make test-schema` 默认不跑它们，避免长期挂红 |
+
+### 实测出来的文档缺陷（已回写）
+
+| # | 缺陷 | 回写位置 |
+|---|---|---|
+| D1 | `CREATE POLICY ... TO app_read` 对经由 `asof.*` 视图的读取完全不生效——普通视图按属主身份执行。改为 `ENABLE + FORCE` + 策略授 `PUBLIC` | `docs/09` §3.2 |
+| D2 | **且属主必须是非超级用户**——超级用户无条件绕过 RLS，`FORCE` 也拦不住。新增 `app_owner` 角色并转移 `core`/`asof`/`evals`/`audit` 的属主 | `docs/03` §4.2、`docs/09` §3.2 |
+| D3 | RLS 开启后只有 SELECT 策略，`app_write` 的 INSERT 会被自己的隔离策略锁死 | `docs/09` §3.2 |
+| D4 | `app_write` 缺 `GRANT USAGE ON SCHEMA core`，`GRANT INSERT` 形同虚设 | `docs/03` §4.2 |
+| D5 | `docs/03` §4.4 要求给 `app_read` 授予 `core.entity` 等的 SELECT，与 `docs/02` §9 不变量 5 直接冲突。不变量 5 收窄为「登记在册的七张时点表」 | `docs/02` §9、`docs/03` §4.4 |
+| D6 | `audit` 的 `REVOKE UPDATE, DELETE` 两份文档都声称存在，但都没给 DDL | `docs/02` §8 |
+| D7 | `core.price_daily`、`core.entity_node_membership`、`core.event` 缺 `superseded_at > known_at` 的 CHECK，而 §9 不变量 2 要求七张表都有。由不变量检查器首跑抓到，按「只加不改」用迁移 007 补 | `docs/02` §2.4、§4.2、§6 |
+| D8 | `docs/03` §6.1 写 `revenue`，其余文档全用 `revenue_total` | `docs/03` §6.1 |
+| D9 | `docs/11` W0.3 的「19 表 / 7 视图 / 72 索引」与实测不符，实测 25 / 7 / 73 | `docs/11` §3 |
+| D10 | 环节名是五张表的事实联结键却无任何约束。新增 `db/seed/taxonomy.csv` 与导入期交叉校验 | `docs/02` §10 |
+| D11 | `docs/06` §4.2 的检索 SQL **按原文跑不起来**：`IS NOT DISTINCT FROM` 与 `paradedb.score()` 共存被 ParadeDB 拒绝；`SET LOCAL` 不接受占位符；`:tenant` 绑空串会静默召回空集 | `docs/06` §4.2 |
+
+### 实施中自己写坏又修掉的
+
+- `migrate()` 少了显式 `commit()`。psycopg 的 `conn.transaction()` 开的是 SAVEPOINT
+  而非顶层事务，整批迁移挤在一个外层事务里，中途失败会把前面成功的一并回滚，
+  且 `schema_migrations` 什么都不留。由 `applied_at` 全部相同这个现象发现。
+- 种子导入把空单元格写成空串，撞上 `entity.tushare_code` 的 `UNIQUE`。
+- PG18+ 镜像的数据卷要挂 `/var/lib/postgresql` 而不是其下的 `data/`；
+  宿主端口改 5433 避开既有 postgres；DSN 用 `127.0.0.1` 而非 `localhost`
+  （后者先解析 `::1`，会卡满整个 connect 超时）。
+
+### 遗留
+
+- `docs/06` §4.2 的三个坑只做了验证与记录，修正属 P1 的 `RetrievalService`。
+- `db/migrations/` 下出现了两个 007（本计划的 `007_missing_time_order_checks`
+  与另一条工作流的 `007_parse_artifacts`）。执行顺序按文件名字典序是确定的，
+  功能无碍，但序号重复违反 `docs/11-sdlc.md` §4.2 的合并约定，需要协调。
