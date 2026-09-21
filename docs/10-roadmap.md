@@ -58,17 +58,25 @@ make db-init && make seed && make test-schema
 
 ## P1 底座（第 3–7 周）
 
-- [ ] `Adapter` 抽象与 Mock 实现（`04-ingestion.md` §2）
+- [x] `Adapter` 抽象与 Mock 实现（`04-ingestion.md` §2）
 - [ ] Tushare 适配器 + Dagster 日分区资产（财务、行情）
-- [ ] `AnnouncementProvider` 抽象接口 + Mock + 契约测试集
+      —— **部分完成**：财务已接（`/income`，日分区资产 `fact_normalized` /
+      `fin_fact_loaded`）；**行情未接**——`core.price_daily` 至今只出现在 P0 的
+      schema 测试里，接入侧一行代码都没有
+- [x] `AnnouncementProvider` 抽象接口 + Mock + 契约测试集
 - [ ] EDGAR 适配器（10-K / 10-Q / 8-K 列表与全文）
-- [ ] 时点写入中间件：`known_at` 计算、更正处理、幂等写入
-- [ ] 实体解析三层降级 + `entity_resolution_queue`
-- [ ] TextIn xParse 封装（含解析产物落盘）、切块器、父子块构造、元数据校验
-- [ ] 嵌入器 + 批处理 + 缓存 + 断点续传
-- [ ] `RetrievalService`：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块
-- [ ] `eval_retrieval` 录入工具 + 评测脚本 + CI 集成
-- [ ] 备份与恢复 runbook（`01-architecture.md` §4）
+      —— **部分完成**：列表已接（`parse_filings` 按 `TRACKED_FORMS` 过滤）；
+      **全文未抓**——只有 `FilingRef.document_url` 这个 URL 构造属性，
+      全仓库没有任何代码去取它指向的正文
+- [x] 时点写入中间件：`known_at` 计算、更正处理、幂等写入
+- [x] 实体解析三层降级 + `entity_resolution_queue`
+- [x] TextIn xParse 封装（含解析产物落盘）、切块器、父子块构造、元数据校验
+- [x] 嵌入器 + 批处理 + 缓存 + 断点续传
+- [x] `RetrievalService`：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块
+- [x] `eval_retrieval` 录入工具 + 评测脚本 + CI 集成
+      —— 工具链齐了，但 `evals/` 下**一条用例都没有**（`eval_retrieval` 是空表），
+      门禁因此是空转的。录入属于 W9 创始人手工工作流，不是工程缺口
+- [x] 备份与恢复 runbook（`01-architecture.md` §4）
 
 **验收**：
 
@@ -86,9 +94,32 @@ make db-init && make seed && make test-schema
 
 双跑一致性测试需要间隔一周，因此**P1 验收要预留这一周**，不能压缩。
 
+**P1 实跑结果**（`make lint && make typecheck && make test && make accept-p1`）：
+三道门全绿，全量 **488 passed / 1 skipped**。但**九项验收里只有四项拿到了真实结论**，
+其余五项跑绿不等于通过，逐条如下——把它们无限定地记成「通过」等于给没验过的东西发合格证：
+
+| # | 检查 | 实际状态 |
+|---|---|---|
+| 1 | Dagster 连续 5 天无人工干预 | ⚠️ 结构性替代：只验了重跑幂等，没有真实的连续 5 天无人值守 |
+| 2 | `recall@10 > 0.80` | ⚠️ 跑在夹具语料的 **5 条**自造用例上；`06-retrieval.md` §9.2 要的是 **100 条生产用例** |
+| 3 | `recall@50 > 0.92` | ⚠️ 同上 |
+| 4 | 索引召回率 ≥ 0.95 | ✅ 真验（对精确扫描逐条比对） |
+| 5 | p95 延迟 < 3s | ⚠️ 数字真实，但 6 个块的语料不代表生产规模 |
+| 6 | 双跑一致性 | ⏸️ 已写基线快照，**需满 7 天后重跑**才算完成；快照目前落在 gitignored 的 `.superpowers/`，`git clean -fdx` 会把七天计时清零且无提示 |
+| 7 | 时点泄漏自检 5 条 | ✅ 真验 |
+| 8 | 备份恢复演练 | ⚠️ 只验了脚本不变量，没有驱动真实恢复（真跑会覆盖现有库） |
+| 9 | `EXPLAIN` BM25 下推 | ✅ 真验 |
+| 附 | PG↔Chroma 偏移收敛到 0 | ✅ 真验（[adr/0009](adr/0009-chroma-as-vector-candidate-generator.md) 后果 2） |
+
+**结论：代码层面 P1 的 11 项做完 9 项，验收层面不能宣布 P1 通过。**
+第 2、3 项缺真实评测集（W9 手工工作流），第 1、6、8 项缺真实运行时间与演练窗口。
+
 ## P2 单公司 Agent（第 8–11 周）
 
 - [ ] 工具外壳层（校验、权限、预算、缓存、审计）
+      —— **刚起步**：MCP 网关客户端已接（`adapters/mcp_gateway.py`，聚合 Tushare /
+      万得 / 同花顺 / AkShare / 财经新闻共 271 个工具，含 Mock 与契约测试），
+      限流与配额由 `HttpClient` 兜住；**权限、预算、审计三项未做**
 - [ ] `compute` 受限表达式求值 + 溯源
 - [ ] 路由 Agent + 基本面 Agent
 - [ ] 引用验证器 6 项检查 + 数值归一化
