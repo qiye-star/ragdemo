@@ -1,8 +1,10 @@
 """Dagster Definitions 与传感器。
 
-衔接点是 core.event 表：Dagster 入库新文档后写 event 候选行，
-LangGraph 侧的监听器按 event_id 取任务。**Dagster 资产不直接调用 Agent**——
-避免数据管线被模型调用的延迟与失败拖垮（docs/01-architecture.md §3）。
+`new_document_sensor` 读 core.document，把未处理的新文档行（按 doc_id 游标）
+封装成 RunRequest / SkipReason 返回，本身不写库。真正的衔接点（写 core.event
+候选行，供 LangGraph 侧监听器按 event_id 取任务）留给 Agent 层接入时实现——
+**Dagster 资产不直接调用 Agent**，避免数据管线被模型调用的延迟与失败拖垮
+（docs/01-architecture.md §3）。
 """
 
 from __future__ import annotations

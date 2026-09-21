@@ -11,7 +11,7 @@
 注解），PEP 563 开着会导致该校验失败并抛出误导性的 DagsterInvalidDefinitionError。
 Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注解写法。
 
-`adapter` / `writer` 用 `ResourceParam[...]` 包一层：`Adapter`（Protocol）与
+`adapter` / `writer` 用 `ResourceParam[...]` 包一层：`FactAdapter`（Protocol）与
 `PointInTimeWriter`（普通类）都不是 Dagster 的 ResourceDefinition/ConfigurableResource
 子类，不加这层标记 Dagster 会把它们当成需要上游资产产出的「输入」而不是
 `Definitions(resources=...)` 注入的资源，`definitions.py` 里的装配会校验失败。
@@ -21,7 +21,7 @@ from datetime import date
 
 from dagster import AssetExecutionContext, DailyPartitionsDefinition, ResourceParam, asset
 
-from ragdemo.adapters.base import Adapter, FactRecord, FetchContext
+from ragdemo.adapters.base import FactAdapter, FactRecord, FetchContext
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
 
 DAILY = DailyPartitionsDefinition(start_date="2022-01-01", timezone="Asia/Shanghai")
@@ -43,13 +43,13 @@ def _context_for(context: AssetExecutionContext) -> FetchContext:
 
 @asset(partitions_def=DAILY, group_name="ingest")
 def fact_normalized(
-    context: AssetExecutionContext, adapter: ResourceParam[Adapter]
+    context: AssetExecutionContext, adapter: ResourceParam[FactAdapter]
 ) -> list[FactRecord]:
     """拉取并归一化。不写库——入库是下一个资产的事。"""
     fetch_ctx = _context_for(context)
     records: list[FactRecord] = []
     for raw in adapter.fetch(fetch_ctx):
-        records.extend(adapter.parse(raw))  # type: ignore[attr-defined]
+        records.extend(adapter.parse(raw))
     context.log.info("normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)})
     return records
 
