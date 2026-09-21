@@ -1,0 +1,20 @@
+# 每个供应商的限流、重试与配额。密钥不在这里——它只在出网代理层。
+tushare:
+  base_url: https://api.tushare.pro
+  rate_limit_qpm: 200
+  daily_quota: 50000
+  timeout_s: 30
+  retry:
+    max_attempts: 4
+    backoff_base_s: 1.0
+  cost_per_call_cents: 0
+
+edgar:
+  base_url: https://data.sec.gov
+  rate_limit_qpm: 540        # SEC 要求 ≤ 10 req/s
+  daily_quota: 200000
+  timeout_s: 30
+  retry:
+    max_attempts: 4
+    backoff_base_s: 1.0
+  cost_per_call_cents: 0
