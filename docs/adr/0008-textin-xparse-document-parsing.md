@@ -118,7 +118,7 @@ Markdown 是人读的档案，两者都不是运行时的检索输入。
    - 每次 Dagster run 有页数预算上限，超预算停止并告警，不静默烧钱；
    - 这套缓存同时是契约测试的录制-回放夹具来源（`04-ingestion.md` §6）。
 3. **`parse_engine` 必须同时记录供应商版本与参数指纹**，
-   格式 `textin:<result.version>+<参数指纹前 8 位>`。
+   格式 `textin:<result.version>+<参数指纹前 16 位>`。
    只记版本不够：参数一改，同一版本 API 的切块结果也会变，
    而评测集的 `gold_block_ids` 绑定在切块结果上。
 4. **密钥不进业务容器。** 按 `09-compliance-security.md` §4.1，

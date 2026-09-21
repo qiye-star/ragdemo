@@ -7,9 +7,11 @@ parse_engine 带参数指纹（否则评测基线静默失效）、私有文档�
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 
 from ragdemo.parse.textin import (
@@ -18,6 +20,7 @@ from ragdemo.parse.textin import (
     ParseConfigError,
     ParsePermanent,
     ParseRetryable,
+    ParseTimeout,
     PrivateDocumentEgressBlocked,
     TextInParser,
     artifact_keys,
@@ -51,6 +54,15 @@ def test_fingerprint_changes_when_a_parameter_changes() -> None:
     assert param_fingerprint(XPARSE_PARAMS) != param_fingerprint(other)
 
 
+def test_fingerprint_is_16_hex_chars() -> None:
+    """8 位=32 位太窄：一次哈希碰撞就会让评测集悄悄拿错参数下的解析产物当
+    缓存命中，而不是报错（05 §2.2）。零文档解析过的现在改零成本，
+    上线之后再改要全量重解析一遍语料库。"""
+    fp = param_fingerprint(XPARSE_PARAMS)
+    assert len(fp) == 16
+    assert all(c in "0123456789abcdef" for c in fp)
+
+
 def test_artifact_keys_carry_both_hash_and_fingerprint() -> None:
     j, m = artifact_keys("abc123", "deadbeef")
     assert j == "parse/textin/abc123/deadbeef.json"
@@ -71,6 +83,27 @@ def test_outline_level_drives_block_type() -> None:
     by_text = {b.content: b.block_type for b in blocks}
     assert by_text["第三节 主营业务"] == "title"
     assert by_text["公司主营云端训练芯片与智能计算集群系统。"] == "paragraph"
+
+
+def test_explicit_null_outline_level_does_not_raise() -> None:
+    """`.get(..., -1)` 的默认值只在键缺失时生效——键存在但值是 JSON null
+    时一样返回 None，`int(None)` 会抛 TypeError。一条格式不规整的供应商
+    记录不该拖垮整份文档的解析。"""
+    detail = [{"type": "paragraph", "content": 0, "outline_level": None, "text": "正文"}]
+    blocks = blocks_from_detail(detail, page_dims={})
+    assert len(blocks) == 1
+    assert blocks[0].level is None
+    assert blocks[0].block_type == "paragraph"
+
+
+def test_outline_level_zero_is_not_treated_as_missing() -> None:
+    """不能写成 `item.get(..., -1) or -1`——那会把合法的 0（顶层标题）
+    也当成缺失值吞掉，与 `level >= 0` 的判断矛盾。"""
+    detail = [{"type": "paragraph", "content": 0, "outline_level": 0, "text": "顶层标题"}]
+    blocks = blocks_from_detail(detail, page_dims={})
+    assert len(blocks) == 1
+    assert blocks[0].block_type == "title"
+    assert blocks[0].level == 0
 
 
 def test_section_path_is_built_from_the_heading_stack() -> None:
@@ -232,6 +265,89 @@ def test_unknown_code_is_treated_as_retryable() -> None:
     """退避三次后失败，比永久丢掉一份文档安全。"""
     with pytest.raises(ParseRetryable):
         TextInParser.raise_for_code(49999)
+
+
+def _mock_parser(
+    tmp_path: Path, handler: Callable[[httpx.Request], httpx.Response]
+) -> TextInParser:
+    return TextInParser(
+        "http://proxy.invalid",
+        LocalBlobStore(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_http_401_is_classified_as_config_error(tmp_path: Path) -> None:
+    """代理配置错误最可能先炸出来的形态：HTTP 层 401，body 里没有供应商自己
+    的错误码。`response.raise_for_status()` 以前在读 body 之前就抛出，这种
+    情况完全逃过 raise_for_code（docs/05-document-pipeline.md §2.6）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "unauthorized"})
+
+    with pytest.raises(ParseConfigError):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_http_429_is_retryable(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="rate limited")
+
+    with pytest.raises(ParseRetryable):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_http_5xx_is_retryable(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="service unavailable")
+
+    with pytest.raises(ParseRetryable):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_unclassified_http_status_falls_back_to_retryable(tmp_path: Path) -> None:
+    """未识别的 4xx 没有 body code 时按可重试处理——和 raise_for_code 对
+    未知错误码的策略一致：比永久丢掉一份文档安全。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(418, text="teapot")
+
+    with pytest.raises(ParseRetryable):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_connect_error_is_classified_as_retryable(tmp_path: Path) -> None:
+    """出网代理挂掉、DNS 解析不出来：httpx.ConnectError 不是
+    TimeoutException 的子类，以前完全没有分类，直接以原始 httpx 异常炸穿
+    prepare_documents，杀掉整个分区。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    with pytest.raises(ParseRetryable):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_timeout_through_mock_transport_still_maps_to_parse_timeout(tmp_path: Path) -> None:
+    """确认从 httpx.post 换成 httpx.Client(transport=...) 之后，超时分类
+    这条已有行为没有跟着改坏。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    with pytest.raises(ParseTimeout):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
+
+
+def test_http_error_with_a_body_code_defers_to_the_existing_taxonomy(tmp_path: Path) -> None:
+    """HTTP 状态码不是 200，但响应体里带了供应商自己的错误码时，body code
+    优先于状态码兜底——分类结果要和直接调 raise_for_code(40003) 一样。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"code": 40003, "message": "余额不足"})
+
+    with pytest.raises(ParseConfigError, match="余额"):
+        _mock_parser(tmp_path, handler).parse(b"%PDF-1.4")
 
 
 def test_partial_page_failure_is_a_warning_not_an_error(tmp_path: Path) -> None:

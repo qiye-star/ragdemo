@@ -51,8 +51,10 @@ Content-Type:     application/octet-stream      # 请求体是文件二进制流
 
 **参数集合是版本化的一部分。** 改任何一个都会改变切块结果，
 而评测集的 `gold_block_ids` 绑定在具体切块结果上。因此参数表的 canonical JSON
-取 `sha256` 前 8 位作为**参数指纹**，与供应商返回的 `result.version` 一起
-写进 `document.parse_engine`：`textin:4.2.1+a3f19c02`。
+取 `sha256` 前 16 位作为**参数指纹**，与供应商返回的 `result.version` 一起
+写进 `document.parse_engine`：`textin:4.2.1+a3f19c02d4e17b5f`。
+（曾经取前 8 位=32 位，碰撞会让评测集在不知不觉中拿错参数下的解析产物
+当缓存命中；发现时零文档已解析，改起来零成本，于是直接改掉而不是留着。）
 
 只记供应商版本是不够的——同一版本 API 换套参数，切出来的块就不是同一批东西了。
 
