@@ -42,6 +42,30 @@ def _last_sentence_boundary(text: str, lo: int, hi: int) -> int | None:
     return best + 1 if best != -1 else None
 
 
+def _absorb_short_tail(spans: list[tuple[int, int]], cfg: ChunkConfig) -> list[tuple[int, int]]:
+    """尾片段吸收进前一片段，前提是合并后不超过 leaf_max_chars。
+
+    定长滑窗硬切在没有句边界可切时，最后一步前进距离不保证凑满一个完整
+    片段——尾片段可能短于 leaf_min_chars，而且几乎整段是与前一片段重叠的
+    内容（overlap_chars 是重叠下限，尾片段一旦短于 leaf_min_chars，它自己
+    的新内容往往只比 overlap_chars 多一点点），单独存一份等于给了它自己
+    的 embedding 与 BM25 行——一条近乎重复的记录。
+
+    合并后（[前一片段起点, 尾片段终点)）如果会超过 leaf_max_chars，保留
+    原状——宁可留一个偏短的尾片段，也不能为了消灭它而破坏 leaf_max_chars
+    这个已经写进函数 docstring、被其余测试依赖的上限承诺。
+    """
+    if len(spans) < 2:
+        return spans
+    prev_start, _prev_end = spans[-2]
+    last_start, last_end = spans[-1]
+    if last_end - last_start >= cfg.leaf_min_chars:
+        return spans  # 尾片段本来就够长，不用管
+    if last_end - prev_start > cfg.leaf_max_chars:
+        return spans  # 合并会超预算，留着比破坏上限承诺安全
+    return [*spans[:-2], (prev_start, last_end)]
+
+
 def split_text(text: str, cfg: ChunkConfig) -> list[str]:
     """按句边界切，尽量落在 [leaf_min, leaf_max] 区间，相邻块重叠 overlap_chars。
 
@@ -58,7 +82,7 @@ def split_text(text: str, cfg: ChunkConfig) -> list[str]:
         return [stripped]
 
     n = len(stripped)
-    parts: list[str] = []
+    spans: list[tuple[int, int]] = []
     start = 0
     while start < n:
         end = min(start + cfg.leaf_max_chars, n)
@@ -66,11 +90,13 @@ def split_text(text: str, cfg: ChunkConfig) -> list[str]:
             boundary = _last_sentence_boundary(stripped, start + cfg.leaf_min_chars, end)
             if boundary is not None:
                 end = boundary
-        parts.append(stripped[start:end])
+        spans.append((start, end))
         if end >= n:
             break
         start = end - cfg.overlap_chars
-    return parts
+
+    spans = _absorb_short_tail(spans, cfg)
+    return [stripped[s:e] for s, e in spans]
 
 
 def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
