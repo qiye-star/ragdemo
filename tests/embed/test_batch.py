@@ -1,6 +1,7 @@
 """批量嵌入：只处理 embedding IS NULL，命中缓存不重算，可中断可续跑。"""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import psycopg
@@ -20,7 +21,7 @@ class CountingEmbedder(MockEmbedder):
         self.batches = 0
         self.texts = 0
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.batches += 1
         self.texts += len(texts)
         return super().embed(texts)
