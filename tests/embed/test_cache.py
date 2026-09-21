@@ -1,6 +1,8 @@
 """嵌入缓存：主键三列，跨模型与跨用户不串。"""
+
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import psycopg
@@ -67,3 +69,18 @@ def test_put_many_is_idempotent(conn: psycopg.Connection) -> None:
     cache.put_many({key: vector})
     (n,) = conn.execute("SELECT count(*) FROM core.embedding_cache").fetchone()  # type: ignore[misc]
     assert n == 1
+
+
+@pytest.mark.db
+def test_put_many_normalizes_unnormalized_vectors(conn: psycopg.Connection) -> None:
+    """写库边界强制归一化，不依赖调用方自觉——HNSW 索引用 vector_cosine_ops，
+    一个没归一化的向量混进去不报错，只会静默把排序算错（docs/adr/0004）。"""
+    cache = EmbeddingCache(conn, model="bge-m3")
+    key = content_key("没有归一化的向量")
+    unnormalized = [x * 4.0 for x in MockEmbedder().embed(["x"])[0]]
+    assert math.sqrt(sum(x * x for x in unnormalized)) == pytest.approx(4.0)
+
+    cache.put_many({key: unnormalized})
+
+    got = cache.get_many([key])[key]
+    assert math.sqrt(sum(x * x for x in got)) == pytest.approx(1.0, abs=1e-6)

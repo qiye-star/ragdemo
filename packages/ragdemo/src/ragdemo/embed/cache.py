@@ -3,13 +3,14 @@
 各家公告中大量重复的模板段落只需算一次，对 5000 元/月的预算是实质节省。
 主键三列缺一不可，理由见 docs/05-document-pipeline.md §5.3。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
 import psycopg
 
-from ragdemo.embed.base import EMBEDDING_DIM
+from ragdemo.embed.base import EMBEDDING_DIM, l2_normalize
 
 PUBLIC_OWNER = ""
 
@@ -38,11 +39,16 @@ class EmbeddingCache:
             for key, vector in items.items():
                 if len(vector) != EMBEDDING_DIM:
                     raise ValueError(f"向量维度应为 {EMBEDDING_DIM}，收到 {len(vector)}")
+                # 写库前强制归一化，不信任调用方已经做过（base.Embedder 协议
+                # 只在 docstring 里要求，没有运行时保证）。HNSW 索引用
+                # vector_cosine_ops，一个没归一化的向量混进去不会报错，只会
+                # 静默把排序算错（docs/adr/0004）。l2_normalize 幂等，对已经
+                # 归一化的向量再算一次不改变结果。
                 self.conn.execute(
                     "INSERT INTO core.embedding_cache (content_hash, model, owner_user,"
                     " embedding) VALUES (%s,%s,%s,%s) "
                     "ON CONFLICT (content_hash, model, owner_user) DO NOTHING",
-                    (key, self.model, self.owner_user, _to_literal(vector)),
+                    (key, self.model, self.owner_user, _to_literal(l2_normalize(vector))),
                 )
                 written += 1
         return written
