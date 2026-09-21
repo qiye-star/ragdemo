@@ -50,9 +50,7 @@ def fact_normalized(
     records: list[FactRecord] = []
     for raw in adapter.fetch(fetch_ctx):
         records.extend(adapter.parse(raw))  # type: ignore[attr-defined]
-    context.log.info(
-        "normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)}
-    )
+    context.log.info("normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)})
     return records
 
 

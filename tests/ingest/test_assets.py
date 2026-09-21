@@ -1,13 +1,16 @@
 """Dagster 资产：幂等、分区起点、回填时 known_at 落在历史区间。"""
+
 from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import psycopg
 import pytest
 from dagster import build_asset_context
 
+from ragdemo.adapters.base import FactRecord
 from ragdemo.adapters.mock.facts import MockFactAdapter
 from ragdemo.ingest.assets import DAILY, fact_normalized, fin_fact_loaded
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
@@ -51,7 +54,7 @@ def test_partition_starts_2022_for_three_years_of_backtest() -> None:
 @pytest.mark.db
 def test_fact_normalized_produces_records(conn: psycopg.Connection) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = fact_normalized(ctx, MockFactAdapter())
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
     assert records
     assert all(r.known_at.tzinfo is not None for r in records)
 
@@ -60,14 +63,14 @@ def test_fact_normalized_produces_records(conn: psycopg.Connection) -> None:
 def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection) -> None:
     """同一分区重跑两次，第二次全部 SKIPPED，表里仍只有一份数据。"""
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = fact_normalized(ctx, MockFactAdapter())
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
 
     writer = PointInTimeWriter(conn, ingest_run_id="run-1", source="mock")
-    first = fin_fact_loaded(ctx, records, writer)
+    first = cast(dict[WriteOutcome, int], fin_fact_loaded(ctx, records, writer))
     (after_first,) = conn.execute("SELECT count(*) FROM core.fin_fact").fetchone()  # type: ignore[misc]
 
     writer2 = PointInTimeWriter(conn, ingest_run_id="run-2", source="mock")
-    second = fin_fact_loaded(ctx, records, writer2)
+    second = cast(dict[WriteOutcome, int], fin_fact_loaded(ctx, records, writer2))
     (after_second,) = conn.execute("SELECT count(*) FROM core.fin_fact").fetchone()  # type: ignore[misc]
 
     assert first[WriteOutcome.INSERTED] == 3
@@ -82,7 +85,7 @@ def test_backfilling_an_old_partition_keeps_known_at_historical(
 ) -> None:
     """回填 2022 年的分区，known_at 必须是 2022 年，不是今天。"""
     ctx = build_asset_context(partition_key="2022-03-15")
-    records = fact_normalized(ctx, MockFactAdapter())
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
     writer = PointInTimeWriter(conn, ingest_run_id="backfill", source="mock")
     fin_fact_loaded(ctx, records, writer)
 

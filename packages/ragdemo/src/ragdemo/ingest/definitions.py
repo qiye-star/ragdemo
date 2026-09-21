@@ -4,6 +4,7 @@
 LangGraph 侧的监听器按 event_id 取任务。**Dagster 资产不直接调用 Agent**——
 避免数据管线被模型调用的延迟与失败拖垮（docs/01-architecture.md §3）。
 """
+
 from __future__ import annotations
 
 import os
