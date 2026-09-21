@@ -43,7 +43,7 @@
 | 财务数据更正 | 更正公告的公告日 | 同时给被更正的旧行打 `superseded_at` |
 | 日行情 | `trade_date` 当地收盘后固定时刻（A 股 15:30 CST，美股 16:30 ET） | 不取拉取时间。盘中不得使用当日行情 |
 | 复权因子回溯调整 | 除权除息公告日 | 见 `02-data-model.md` §4.2 |
-| SEC EDGAR | filing 的 `acceptanceDateTime` | EDGAR 提供精确到秒的受理时间，直接用 |
+| SEC EDGAR | filing 的 `acceptanceDateTime` | EDGAR 提供精确到秒的受理时间，直接用；但该字段虽带 `Z` 后缀，实际是**美国东部时间**（EST/EDT），不是 UTC——必须按 `America/New_York` 解析再转存 UTC，否则会读早 4~5 小时 |
 | 公司 IR 页（台积电月营收等） | 页面标注的发布时间；无标注则取首次抓取日 `23:59:59` | 首次抓取日只在无法确定真实发布时间时使用，必须在 `source_ref` 中标注 `known_at_estimated=true` |
 | 新闻 RSS | 条目的 `pubDate` | 若缺失取抓取时刻 |
 | 政策文件 | 官网发文日期当日 `23:59:59` | |

@@ -30,12 +30,14 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ragdemo.adapters.base import FetchContext, RawResponse, require_aware
 from ragdemo.adapters.http import HttpClient
 
 TRACKED_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data"
+_EASTERN = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
@@ -139,5 +141,22 @@ def _rows(payload: Any) -> list[dict[str, Any]]:  # noqa: ANN401
 
 
 def _parse_acceptance(value: Any) -> datetime:  # noqa: ANN401
-    """EDGAR 用 '2024-11-20T16:31:24.000Z'；Python 3.11 的 fromisoformat 不吃 Z。"""
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    """EDGAR 的 acceptanceDateTime 形如 '2024-11-20T16:31:24.000Z'。
+
+    这个末尾的 'Z' 具有误导性——它通常表示 UTC，但 SEC 自己的文档与
+    EDGAR API 的实际行为里，acceptanceDateTime 报的是**美国东部时间**
+    （EST/EDT，随夏令时切换），不是 UTC。直接把 'Z' 替换成 '+00:00'
+    会把东部时间当 UTC 读，读出来的 known_at 系统性地早了 4~5 小时。
+
+    验证：夹具里 NVIDIA 10-Q 的 acceptanceDateTime 是
+    '2024-11-20T16:31:24.000Z'。如果当 UTC 读，换算成东部时间是
+    11:31 —— 一份财报在美股开盘前、盘中就"受理"，与 NVDA 实际的
+    盘后发布节奏对不上；当东部时间读，16:31 ET 正是盘后受理的
+    合理时刻。按 docs/03-point-in-time.md §1.3 的通则——不确定时
+    取更晚的时刻——也应该选后者。
+
+    所以：把去掉 'Z' 后的裸时间戳当**东部时间**（America/New_York）
+    解析，再转成 UTC 存储；ZoneInfo 会按日期自动处理 EST/EDT。
+    """
+    naive = datetime.fromisoformat(str(value).removesuffix("Z"))
+    return naive.replace(tzinfo=_EASTERN).astimezone(UTC)

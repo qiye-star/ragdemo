@@ -37,10 +37,16 @@ def test_only_tracked_forms_are_returned() -> None:
 
 
 def test_known_at_is_acceptance_datetime_to_the_second() -> None:
-    """EDGAR 给出精确到秒的受理时间，直接用，不要退化成日期。"""
+    """EDGAR 给出精确到秒的受理时间，直接用，不要退化成日期。
+
+    acceptanceDateTime 的 'Z' 后缀具有误导性：字段实际报的是美国东部
+    时间，不是 UTC。夹具值 '2024-11-20T16:31:24.000Z' 应按东部时间
+    解析——11 月 20 日已过夏令时切换（2024 年 11 月 3 日转回 EST，
+    UTC-5），所以 16:31:24 ET == 21:31:24 UTC。
+    """
     filings = list(EdgarAdapter.for_replay(FIXTURES).parse_filings(_raw()))
     tenq = next(f for f in filings if f.form_type == "10-Q")
-    assert tenq.acceptance_datetime == datetime(2024, 11, 20, 16, 31, 24, tzinfo=UTC)
+    assert tenq.acceptance_datetime == datetime(2024, 11, 20, 21, 31, 24, tzinfo=UTC)
 
 
 def test_document_url_is_constructed_correctly() -> None:
