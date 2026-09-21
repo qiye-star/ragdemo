@@ -57,6 +57,26 @@ def test_fact_record_rejects_naive_known_at() -> None:
         )
 
 
+def test_fact_record_rejects_known_at_before_period_end() -> None:
+    """一份报告不可能在它描述的期间结束前就被知晓——这是
+    ragdemo_core.db.invariants.known_at_before_period_end 在 DB 层查的同一条泄漏，
+    这里在构造时就拦住，不必等写库再靠 SQL 自检发现。
+    """
+    with pytest.raises(ValueError, match="known_at"):
+        FactRecord(
+            entity_ref="688256.SH",
+            metric_field="revenue",
+            period="2024Q3",
+            period_end=date(2024, 9, 30),
+            value=1.0,
+            unit="CNY",
+            currency="CNY",
+            valid_from=date(2024, 7, 1),
+            known_at=datetime(2024, 9, 1, tzinfo=UTC),
+            source_ref=None,
+        )
+
+
 def test_rate_limited_carries_retry_after() -> None:
     err = RateLimited("too many requests", retry_after_s=2.5)
     assert isinstance(err, AdapterError)

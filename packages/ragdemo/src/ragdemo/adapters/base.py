@@ -76,6 +76,11 @@ class FactRecord:
         reject_future(self.known_at, "known_at")
         if self.period_end < self.valid_from:
             raise ValueError(f"period_end {self.period_end} 早于 valid_from {self.valid_from}")
+        if self.known_at.date() < self.period_end:
+            raise ValueError(
+                f"known_at {self.known_at} 早于 period_end {self.period_end}"
+                "——一份报告不可能在它描述的期间结束前就被知晓"
+            )
 
 
 @runtime_checkable

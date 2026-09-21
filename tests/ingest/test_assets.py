@@ -83,7 +83,15 @@ def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection) -> None:
 def test_backfilling_an_old_partition_keeps_known_at_historical(
     conn: psycopg.Connection,
 ) -> None:
-    """回填 2022 年的分区，known_at 必须是 2022 年，不是今天。"""
+    """回填 2022 年的分区，known_at 必须是 2022 年，不是今天。
+
+    MockFactAdapter 的 period_end 同样由 partition_date 推导（见
+    adapters/mock/facts.py 的 _period_end_for），所以回填老分区不会产生
+    known_at 早于 period_end 的记录——fact_normalized() 在构造 FactRecord
+    时就会用 ValueError 拦下这种记录，这里额外用 SQL 直接验证写进库的
+    period_end 确实落在 known_at 之前，证明这条不变量在整条链路上成立，
+    不只是没被异常打断。
+    """
     ctx = build_asset_context(partition_key="2022-03-15")
     records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
     writer = PointInTimeWriter(conn, ingest_run_id="backfill", source="mock")
@@ -91,3 +99,8 @@ def test_backfilling_an_old_partition_keeps_known_at_historical(
 
     (known_at,) = conn.execute("SELECT min(known_at) FROM core.fin_fact").fetchone()  # type: ignore[misc]
     assert known_at.year == 2022
+
+    (leak_count,) = conn.execute(
+        "SELECT count(*) FROM core.fin_fact WHERE known_at::date < period_end"
+    ).fetchone()  # type: ignore[misc]
+    assert leak_count == 0
