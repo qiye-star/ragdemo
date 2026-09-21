@@ -4,6 +4,7 @@ P1 用本地文件系统，P4 接 MinIO（docs/01-architecture.md §4）。
 放在 core 包里是因为它与 db 同层：接入侧存原始 PDF、解析侧存解析产物、
 备份侧存 pg_dump，三处都要用，而它不含任何业务语义。
 """
+
 from __future__ import annotations
 
 from pathlib import Path

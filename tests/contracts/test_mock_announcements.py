@@ -1,4 +1,5 @@
 """MockAnnouncementProvider 通过全部公告契约，并正确应用披露延迟。"""
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta

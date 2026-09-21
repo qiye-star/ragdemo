@@ -1,4 +1,5 @@
 """Tushare 适配器：known_at 必须取公告日，不是期末日。"""
+
 from __future__ import annotations
 
 import json
@@ -17,9 +18,12 @@ FIXTURES = Path("tests/fixtures/tushare")
 
 def _raw(name: str, endpoint: str) -> RawResponse:
     return RawResponse(
-        provider="tushare", endpoint=endpoint, params={},
+        provider="tushare",
+        endpoint=endpoint,
+        params={},
         payload=json.loads((FIXTURES / name).read_text(encoding="utf-8")),
-        http_status=200, fetched_at=datetime.now(UTC),
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -65,9 +69,12 @@ def test_price_known_at_is_market_close_not_fetch_time() -> None:
 def test_error_response_raises() -> None:
     adapter = TushareAdapter.for_replay(FIXTURES)
     bad = RawResponse(
-        provider="tushare", endpoint="/income", params={},
+        provider="tushare",
+        endpoint="/income",
+        params={},
         payload={"code": 40203, "msg": "积分不足", "data": None},
-        http_status=200, fetched_at=datetime.now(UTC),
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
     with pytest.raises(ValueError, match="40203"):
         list(adapter.parse(bad))

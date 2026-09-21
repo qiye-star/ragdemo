@@ -10,6 +10,7 @@ FactRecord 的不变量 known_at.date() >= period_end，而不是靠这个 Mock
 去违反 core.fin_fact 的 known_at_before_period_end 泄漏自检
 （ragdemo_core/db/invariants.py）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence

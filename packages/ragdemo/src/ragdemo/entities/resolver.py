@@ -8,6 +8,7 @@
 模糊匹配（pg_trgm）只用于给人工提供候选，绝不自动采纳——把「中兴新材」
 匹配成「中兴通讯」这类错误一旦入库，污染会扩散到关系图和观点。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

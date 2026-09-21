@@ -3,6 +3,7 @@
 recall@k 是**逐题二值**的：top-k 中包含至少一个 gold 即算命中。
 不是 gold 的覆盖比例——同一事实常出现在多处，要求全覆盖会低估系统。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

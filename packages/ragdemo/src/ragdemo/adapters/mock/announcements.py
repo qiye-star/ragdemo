@@ -3,6 +3,7 @@
 数据取自真实公告的脱敏节选——Mock 太理想会让 P1 的评测数字虚高，
 选型时才发现落差（adr/0005 的风险一节）。必须包含：正文段落、表格、更正公告。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -32,14 +33,29 @@ _DOCS: tuple[dict[str, Any], ...] = (
         "page_count": 24,
         "blocks": [
             ("title", "第三节 主营业务", 1, 11, 1),
-            ("paragraph",
-             "报告期内公司智能计算集群系统业务实现营业收入 12,340 万元，同比增长 58.2%，"
-             "主要系云端训练芯片出货量提升所致。", 1, 12, None),
-            ("table",
-             "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |\n"
-             "| 其他 | 1,020 | -3.1% |", 1, 13, None),
-            ("paragraph",
-             "研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。", 1, 14, None),
+            (
+                "paragraph",
+                "报告期内公司智能计算集群系统业务实现营业收入 12,340 万元，同比增长 58.2%，"
+                "主要系云端训练芯片出货量提升所致。",
+                1,
+                12,
+                None,
+            ),
+            (
+                "table",
+                "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |\n"
+                "| 其他 | 1,020 | -3.1% |",
+                1,
+                13,
+                None,
+            ),
+            (
+                "paragraph",
+                "研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。",
+                1,
+                14,
+                None,
+            ),
         ],
     },
     {
@@ -53,9 +69,14 @@ _DOCS: tuple[dict[str, Any], ...] = (
         "supersedes": "SSE-688256-2024Q3",
         "page_count": 2,
         "blocks": [
-            ("paragraph",
-             "经复核，公司 2024 年第三季度智能计算集群系统业务营业收入应为 12,500 万元，"
-             "原披露 12,340 万元有误，特此更正。", 1, 1, None),
+            (
+                "paragraph",
+                "经复核，公司 2024 年第三季度智能计算集群系统业务营业收入应为 12,500 万元，"
+                "原披露 12,340 万元有误，特此更正。",
+                1,
+                1,
+                None,
+            ),
         ],
     },
 )
@@ -105,8 +126,12 @@ class MockAnnouncementProvider:
     def fetch_document(self, ctx: FetchContext, provider_doc_id: str) -> RawResponse:
         doc = next(d for d in self._docs if d["id"] == provider_doc_id)
         return RawResponse(
-            provider=self.provider, endpoint=f"/documents/{provider_doc_id}",
-            params={}, payload=doc, http_status=200, fetched_at=datetime.now(CST),
+            provider=self.provider,
+            endpoint=f"/documents/{provider_doc_id}",
+            params={},
+            payload=doc,
+            http_status=200,
+            fetched_at=datetime.now(CST),
         )
 
     def known_at(self, record: Any) -> datetime:  # noqa: ANN401

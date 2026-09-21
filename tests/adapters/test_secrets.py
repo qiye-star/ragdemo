@@ -1,4 +1,5 @@
 """密钥剥离：provider_snapshot 会原样记录调用参数，token 混在里面就进了数据库。"""
+
 from __future__ import annotations
 
 from ragdemo.adapters.secrets import strip_secrets

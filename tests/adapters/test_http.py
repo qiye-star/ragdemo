@@ -1,4 +1,5 @@
 """HTTP 客户端：退避、Retry-After、重试耗尽后失败而非返回部分数据。"""
+
 from __future__ import annotations
 
 import logging
@@ -12,10 +13,12 @@ from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 
 def _client(handler: httpx.MockTransport, **kw: object) -> HttpClient:
     return HttpClient(
-        provider="test", base_url="https://example.test",
+        provider="test",
+        base_url="https://example.test",
         policy=RetryPolicy(max_attempts=3, backoff_base_s=0.0),
         bucket=TokenBucket(rate_per_minute=10_000),
-        transport=handler, **kw,  # type: ignore[arg-type]
+        transport=handler,
+        **kw,  # type: ignore[arg-type]
     )
 
 
@@ -47,9 +50,7 @@ def test_exhausted_retries_raise_instead_of_returning_partial() -> None:
 
 
 def test_429_surfaces_retry_after() -> None:
-    transport = httpx.MockTransport(
-        lambda r: httpx.Response(429, headers={"Retry-After": "7"})
-    )
+    transport = httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "7"}))
     with pytest.raises(UpstreamUnavailable) as exc:
         _client(transport).get_json("/x", {})
     assert isinstance(exc.value.__cause__, RateLimited)

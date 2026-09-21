@@ -3,6 +3,7 @@
 整份文档回滚而非跳过坏块：部分入库的文档会让检索返回残缺证据，
 比没有这份文档更危险。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

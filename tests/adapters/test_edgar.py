@@ -1,4 +1,5 @@
 """EDGAR 适配器：known_at 用 acceptanceDateTime（精确到秒），不用 filingDate。"""
+
 from __future__ import annotations
 
 import json
@@ -17,11 +18,12 @@ FIXTURES = Path("tests/fixtures/edgar")
 
 def _raw() -> RawResponse:
     return RawResponse(
-        provider="edgar", endpoint="/submissions/CIK0001045810.json", params={},
-        payload=json.loads(
-            (FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")
-        ),
-        http_status=200, fetched_at=datetime.now(UTC),
+        provider="edgar",
+        endpoint="/submissions/CIK0001045810.json",
+        params={},
+        payload=json.loads((FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")),
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -53,8 +55,7 @@ def test_document_url_is_constructed_correctly() -> None:
     filings = list(EdgarAdapter.for_replay(FIXTURES).parse_filings(_raw()))
     tenq = next(f for f in filings if f.form_type == "10-Q")
     assert tenq.document_url == (
-        "https://www.sec.gov/Archives/edgar/data/1045810/"
-        "000104581024000316/nvda-20241027.htm"
+        "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000316/nvda-20241027.htm"
     )
 
 
@@ -72,9 +73,7 @@ def test_http_client_payload_flattens_submissions_envelope() -> None:
     """真实 HttpClient 分支也要展开 submissions envelope，
     防止 known_at() 因 acceptanceDateTime 嵌套而 KeyError。"""
     # 模拟未展开的 EDGAR 原始响应
-    envelope = json.loads(
-        (FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")
-    )
+    envelope = json.loads((FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8"))
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=envelope)

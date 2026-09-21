@@ -1,4 +1,5 @@
 """原始响应留存：永不修改、永不删除，且不含密钥。"""
+
 from __future__ import annotations
 
 import json
@@ -27,8 +28,12 @@ def conn(temp_db: str) -> psycopg.Connection:
 
 def _raw(payload: object, params: dict[str, object] | None = None) -> RawResponse:
     return RawResponse(
-        provider="tushare", endpoint="/income", params=params or {"token": "sk-secret"},
-        payload=payload, http_status=200, fetched_at=datetime.now(UTC),
+        provider="tushare",
+        endpoint="/income",
+        params=params or {"token": "sk-secret"},
+        payload=payload,
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -62,8 +67,12 @@ def test_fetched_at_is_the_provider_fetch_moment_not_insert_time(
     """fetched_at 必须来自 RawResponse，不能悄悄退化成入库时刻（schema DEFAULT now()）。"""
     moment = datetime(2020, 1, 1, tzinfo=UTC)
     raw = RawResponse(
-        provider="tushare", endpoint="/income", params={"token": "sk-secret"},
-        payload=[{"a": 1}], http_status=200, fetched_at=moment,
+        provider="tushare",
+        endpoint="/income",
+        params={"token": "sk-secret"},
+        payload=[{"a": 1}],
+        http_status=200,
+        fetched_at=moment,
     )
     sid = save_snapshot(conn, raw, ingest_run_id="r1")
     (fetched_at,) = conn.execute(

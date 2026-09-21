@@ -1,4 +1,5 @@
 """对象存储抽象。写入必须原子——半个 JSON 会让缓存命中一份坏数据。"""
+
 from __future__ import annotations
 
 from pathlib import Path

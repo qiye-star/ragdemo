@@ -22,6 +22,7 @@ acceptanceDateTime 而抛 KeyError——这正是 tushare.py 文档记录过、
 parse_filings() 复用同一个 _rows()，因此既能吃 fetch() 展开后的行列表，
 也能直接吃测试里 _raw() 构造的原始未展开响应。
 """
+
 from __future__ import annotations
 
 import json
@@ -55,17 +56,14 @@ class FilingRef:
     @property
     def document_url(self) -> str:
         return (
-            f"{ARCHIVES}/{int(self.cik)}/"
-            f"{self.accession.replace('-', '')}/{self.primary_document}"
+            f"{ARCHIVES}/{int(self.cik)}/{self.accession.replace('-', '')}/{self.primary_document}"
         )
 
 
 class EdgarAdapter:
     provider = "edgar"
 
-    def __init__(
-        self, client: HttpClient | None = None, *, replay_dir: Path | None = None
-    ) -> None:
+    def __init__(self, client: HttpClient | None = None, *, replay_dir: Path | None = None) -> None:
         if (client is None) == (replay_dir is None):
             raise ValueError("client 与 replay_dir 必须且只能提供一个")
         self._client = client

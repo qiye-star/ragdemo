@@ -3,6 +3,7 @@
 从内容哈希派生向量，因此同样的文本永远得到同样的向量——
 检索评测在 Mock 上可复现，是 P1 能在没有嵌入 API 配额时推进的前提。
 """
+
 from __future__ import annotations
 
 import hashlib

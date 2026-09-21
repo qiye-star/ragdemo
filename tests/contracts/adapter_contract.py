@@ -3,6 +3,7 @@
 用法：子类化 AdapterContract，实现 make_adapter()，即自动获得这 5 条测试。
 真实适配器与 Mock 走同一套契约——这是 Mock 能替代真实数据推进 P1 的前提。
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta

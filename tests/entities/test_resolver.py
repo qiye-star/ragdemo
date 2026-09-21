@@ -1,4 +1,5 @@
 """实体解析三层降级：代码 → 别名 → 上下文。三层都不确定则进人工队列，不猜。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,8 +87,7 @@ def test_unresolved_goes_to_the_queue(resolver: EntityResolver) -> None:
         r, raw_ref="中兴", context={"doc_id": 1}, source="mock", ingest_run_id="r1"
     )
     row = resolver.conn.execute(
-        "SELECT raw_ref, candidates, resolved_at FROM core.entity_resolution_queue"
-        " WHERE id = %s",
+        "SELECT raw_ref, candidates, resolved_at FROM core.entity_resolution_queue WHERE id = %s",
         (qid,),
     ).fetchone()
     assert row is not None

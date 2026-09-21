@@ -4,6 +4,7 @@
 选定供应商后只需写一个实现 AnnouncementProvider 的 adapter，
 并原样通过 tests/contracts/announcement_contract.py 的 6 条契约。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence

@@ -3,6 +3,7 @@
 每次运行写一行 evals.eval_run，含 git_sha 与完整 config。
 没有这张表，三个月后看到指标下降无法定位是哪个参数改的（docs/08-evaluation.md §4.3）。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -52,8 +53,7 @@ def record_eval_run(
     conn.execute(
         "INSERT INTO evals.eval_run (run_id, suite, git_sha, config, metrics,"
         " started_at, ended_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-        (run_id, suite, git_sha, Jsonb(dict(config)), Jsonb(dict(metrics)),
-         started_at, ended_at),
+        (run_id, suite, git_sha, Jsonb(dict(config)), Jsonb(dict(metrics)), started_at, ended_at),
     )
     conn.commit()
 
@@ -84,7 +84,8 @@ def run_retrieval_eval(
 
         top = service.search(
             RetrievalRequest(
-                query=str(question), as_of=as_of,
+                query=str(question),
+                as_of=as_of,
                 entity_ids=list(entity_filter) if entity_filter else None,
                 doc_types=list(doc_type_filter) if doc_type_filter else None,
                 config=config,
@@ -96,7 +97,8 @@ def run_retrieval_eval(
 
         broad = service.search(
             RetrievalRequest(
-                query=str(question), as_of=as_of,
+                query=str(question),
+                as_of=as_of,
                 entity_ids=list(entity_filter) if entity_filter else None,
                 doc_types=list(doc_type_filter) if doc_type_filter else None,
                 config=wide,

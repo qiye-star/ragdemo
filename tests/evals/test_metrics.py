@@ -1,4 +1,5 @@
 """检索指标：recall@k 与 MRR 的定义必须和 06 §9.1 一致。"""
+
 from __future__ import annotations
 
 import pytest

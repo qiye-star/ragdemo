@@ -3,6 +3,7 @@
 维度固定 1024（adr/0004）：bge-m3 原生 1024，Qwen3-Embedding 经 MRL 降到 1024，
 两者可互换而不改表结构。换模型只是数据回填，不是架构变更。
 """
+
 from __future__ import annotations
 
 import hashlib

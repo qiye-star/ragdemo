@@ -2,6 +2,7 @@
 
 任何「数据对不对」的争议都回到 provider_snapshot 重放。因此它永不修改、永不删除。
 """
+
 from __future__ import annotations
 
 import json

@@ -3,6 +3,7 @@
 provider_snapshot.params 会原样记录调用参数。某些供应商把 token 放在
 query string 里，不剥离就等于把密钥写进数据库（docs/09-compliance-security.md §4.2）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -12,9 +13,21 @@ REDACTED = "[REDACTED]"
 
 SECRET_PARAM_NAMES = frozenset(
     {
-        "token", "api_key", "apikey", "access_token", "refresh_token",
-        "secret", "client_secret", "password", "passwd", "pwd",
-        "authorization", "auth", "sig", "signature", "credential",
+        "token",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "pwd",
+        "authorization",
+        "auth",
+        "sig",
+        "signature",
+        "credential",
     }
 )
 

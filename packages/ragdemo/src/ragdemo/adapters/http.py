@@ -3,6 +3,7 @@
 只重试幂等的读操作。429 优先读 Retry-After，没有才用指数退避。
 重试耗尽抛 UpstreamUnavailable —— 让 Dagster 分区失败，而不是返回部分数据。
 """
+
 from __future__ import annotations
 
 import json
@@ -111,9 +112,7 @@ class HttpClient:
         self.daily_quota = daily_quota
         self.cost_per_call_cents = cost_per_call_cents
         self.calls_today = 0
-        self._client = httpx.Client(
-            base_url=base_url, timeout=timeout_s, transport=transport
-        )
+        self._client = httpx.Client(base_url=base_url, timeout=timeout_s, transport=transport)
 
     def get_json(self, endpoint: str, params: Mapping[str, Any]) -> RawResponse:
         if self.daily_quota is not None and self.calls_today >= self.daily_quota:
@@ -164,9 +163,7 @@ class HttpClient:
 def _error_for(response: httpx.Response) -> Exception:
     if response.status_code == 429:
         header = response.headers.get("Retry-After")
-        return RateLimited(
-            "上游限速", retry_after_s=float(header) if header else None
-        )
+        return RateLimited("上游限速", retry_after_s=float(header) if header else None)
     return UpstreamUnavailable(f"HTTP {response.status_code}")
 
 

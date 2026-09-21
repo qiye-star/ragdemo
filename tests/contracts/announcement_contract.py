@@ -3,6 +3,7 @@
 选定供应商后，新写的 adapter 必须原样通过这些测试——这是「定接口不定供应商」
 能兑现的前提（adr/0005）。
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta

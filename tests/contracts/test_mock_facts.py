@@ -1,4 +1,5 @@
 """MockFactAdapter 必须通过全部适配器契约，并支持注入自定义记录。"""
+
 from __future__ import annotations
 
 from datetime import date

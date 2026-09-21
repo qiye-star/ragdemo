@@ -15,6 +15,7 @@ known_at() 找不到 ann_date/trade_date 字段而抛 KeyError。parse()/parse_p
 则单独接受未展开的原始响应（供 _raw() 直接构造的测试使用）——_rows() 对两种
 形状都做了兼容，行列表原样返回，未展开的字典才做列式转行式解析。
 """
+
 from __future__ import annotations
 
 import json

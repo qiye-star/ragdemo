@@ -159,9 +159,7 @@ def test_scale_factor_converts_provider_unit_before_write_and_compare(
 
     # 供应商原始值是元；scale_factor=0.0001 换算成本系统的万元单位。
     raw_yuan_value = 1234050000.0
-    outcome = writer.write_fact(
-        _record(raw_yuan_value, datetime(2024, 10, 28, 18, 32, tzinfo=UTC))
-    )
+    outcome = writer.write_fact(_record(raw_yuan_value, datetime(2024, 10, 28, 18, 32, tzinfo=UTC)))
     assert outcome is WriteOutcome.INSERTED
 
     (stored_value,) = conn.execute("SELECT value FROM core.fin_fact").fetchone()  # type: ignore[misc]
@@ -169,7 +167,5 @@ def test_scale_factor_converts_provider_unit_before_write_and_compare(
 
     # 用同一原始值（元）再写一次：换算后与已存的万元值相同，应判定为幂等跳过，
     # 而不是因为「1234050000.0 != 123405.0」误判成一次更正。
-    repeat = writer.write_fact(
-        _record(raw_yuan_value, datetime(2024, 10, 29, 18, 32, tzinfo=UTC))
-    )
+    repeat = writer.write_fact(_record(raw_yuan_value, datetime(2024, 10, 29, 18, 32, tzinfo=UTC)))
     assert repeat is WriteOutcome.SKIPPED_IDENTICAL

@@ -1,4 +1,5 @@
 """嵌入基础：维度、L2 归一化、输入拼接。"""
+
 from __future__ import annotations
 
 import math
@@ -42,8 +43,10 @@ def test_l2_normalize_handles_zero_vector() -> None:
 def test_embedding_input_includes_title_and_section() -> None:
     """标题与章节路径提供块本身缺失的上下文（「本期」「上述」无法孤立解析）。"""
     text = embedding_input(
-        doc_title="三季报", section_path="第三节 > 分部收入",
-        content_desc="分部收入表", content="智能计算 12,340 万元",
+        doc_title="三季报",
+        section_path="第三节 > 分部收入",
+        content_desc="分部收入表",
+        content="智能计算 12,340 万元",
     )
     assert "三季报" in text and "第三节" in text and "分部收入表" in text
 
@@ -51,8 +54,11 @@ def test_embedding_input_includes_title_and_section() -> None:
 def test_embedding_input_truncates_content_not_context() -> None:
     """超长时截断正文，保留前面的标题与章节——上下文比尾部正文更值钱。"""
     text = embedding_input(
-        doc_title="三季报", section_path="第三节", content_desc="",
-        content="甲" * 5000, max_chars=100,
+        doc_title="三季报",
+        section_path="第三节",
+        content_desc="",
+        content="甲" * 5000,
+        max_chars=100,
     )
     assert text.startswith("三季报")
     assert len(text) == 100
