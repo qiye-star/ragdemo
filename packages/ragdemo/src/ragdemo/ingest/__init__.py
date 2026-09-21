@@ -1,1 +1,2 @@
-"""Dagster 资产、分区与时点写入中间件（P1）。"""
+"""摄入流程编排与状态管理。"""
+from __future__ import annotations
