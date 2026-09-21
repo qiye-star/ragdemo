@@ -3,6 +3,7 @@
 最要紧的三条：从 detail[] 切块（markdown 没有页码）、
 parse_engine 带参数指纹（否则评测基线静默失效）、私有文档不外送。
 """
+
 from __future__ import annotations
 
 import json
@@ -39,6 +40,7 @@ def _detail() -> list[dict[str, Any]]:
 
 # --- 参数指纹 ---------------------------------------------------------------
 
+
 def test_fingerprint_is_stable_across_key_order() -> None:
     assert param_fingerprint({"a": 1, "b": 2}) == param_fingerprint({"b": 2, "a": 1})
 
@@ -56,6 +58,7 @@ def test_artifact_keys_carry_both_hash_and_fingerprint() -> None:
 
 
 # --- detail[] → NormalizedBlock ---------------------------------------------
+
 
 def test_headers_and_footers_are_dropped() -> None:
     """content == 1 是供应商标注的非正文（05 §3.3）。"""
@@ -120,12 +123,15 @@ def test_bbox_is_none_when_page_size_is_unknown() -> None:
 
 # --- 表格 -------------------------------------------------------------------
 
+
 def test_merged_cells_are_expanded_not_left_blank() -> None:
     """留空会让跨列表头匹配不到——BM25 与嵌入都按块的整体文本工作。"""
-    md = table_markdown([
-        {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
-        {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
-    ])
+    md = table_markdown(
+        [
+            {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+            {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+        ]
+    )
     assert md.splitlines()[0] == "| 业务分部 | 2024H1 | 2024H1 |"
 
 
@@ -139,6 +145,7 @@ def test_empty_cells_produce_empty_string() -> None:
 
 
 # --- 私有材料闸门 -----------------------------------------------------------
+
 
 def test_private_document_is_not_sent_upstream(tmp_path: Path) -> None:
     """换到托管 API 后新增的风险，MinerU 时代不存在（adr/0008 后果 1）。"""
@@ -157,6 +164,7 @@ def test_private_document_passes_when_the_gate_is_open(tmp_path: Path) -> None:
 
 # --- 缓存 -------------------------------------------------------------------
 
+
 def test_cache_hit_skips_the_billed_api_call(tmp_path: Path) -> None:
     """xParse 按页计费。同一份文档在同一套参数下永远只解析一次（05 §2.4）。"""
     blob = LocalBlobStore(tmp_path)
@@ -164,7 +172,7 @@ def test_cache_hit_skips_the_billed_api_call(tmp_path: Path) -> None:
     json_key, _ = artifact_keys(parser.content_hash(b"%PDF-1.4"), parser.param_fp)
     blob.put(json_key, json.dumps(_payload(), ensure_ascii=False).encode("utf-8"))
 
-    result = parser.parse(b"%PDF-1.4")          # base_url 不可达，命中缓存才不会炸
+    result = parser.parse(b"%PDF-1.4")  # base_url 不可达，命中缓存才不会炸
 
     assert result.from_cache is True
     assert result.json_ref == json_key
@@ -182,10 +190,18 @@ def test_engine_version_carries_vendor_version_and_fingerprint(tmp_path: Path) -
 
 # --- 错误码分类 -------------------------------------------------------------
 
-@pytest.mark.parametrize(("code", "marker"), [
-    (40303, "unsupported"), (40301, "unsupported"), (40425, "unsupported"),
-    (40302, "too_large"), (40422, "corrupt"), (40423, "encrypted"),
-])
+
+@pytest.mark.parametrize(
+    ("code", "marker"),
+    [
+        (40303, "unsupported"),
+        (40301, "unsupported"),
+        (40425, "unsupported"),
+        (40302, "too_large"),
+        (40422, "corrupt"),
+        (40423, "encrypted"),
+    ],
+)
 def test_permanent_failures_carry_a_marker(code: int, marker: str) -> None:
     """永久失败要留记号，否则下次分区重跑会再拉一遍、再失败一遍。"""
     with pytest.raises(ParsePermanent) as excinfo:
@@ -234,6 +250,7 @@ def test_partial_page_failure_is_a_warning_not_an_error(tmp_path: Path) -> None:
 
 
 # --- 页数预算 ---------------------------------------------------------------
+
 
 def test_budget_reports_exhaustion() -> None:
     budget = PageBudget(remaining=10)

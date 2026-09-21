@@ -1,4 +1,5 @@
 """文档入库：反规范化列一致、整份回滚、重解析不改 known_at。"""
+
 from __future__ import annotations
 
 import logging
@@ -96,15 +97,11 @@ def test_known_at_applies_disclosure_lag(temp_db: str) -> None:
         " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
     )
     conn.commit()
-    w = DocumentWriter(
-        conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1)
-    )
+    w = DocumentWriter(conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1))
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
     w.write_document(doc, chunks, desc)  # type: ignore[arg-type]
-    publish_at, known_at = conn.execute(
-        "SELECT publish_at, known_at FROM core.document"
-    ).fetchone()  # type: ignore[misc]
+    publish_at, known_at = conn.execute("SELECT publish_at, known_at FROM core.document").fetchone()  # type: ignore[misc]
     assert known_at - publish_at == timedelta(days=1)
 
 
@@ -148,11 +145,13 @@ def test_reparse_keeps_original_known_at(writer: DocumentWriter) -> None:
     ).fetchone()  # type: ignore[misc]
 
     second = writer.reparse_document(
-        doc, chunks, desc, supersedes_doc_id=first.doc_id  # type: ignore[arg-type]
+        doc,  # type: ignore[arg-type]
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,
     )
     new_known_at, version_group, supersedes = writer.conn.execute(
-        "SELECT known_at, version_group_id, supersedes_doc_id FROM core.document"
-        " WHERE doc_id = %s",
+        "SELECT known_at, version_group_id, supersedes_doc_id FROM core.document WHERE doc_id = %s",
         (second.doc_id,),
     ).fetchone()  # type: ignore[misc]
 
@@ -194,7 +193,10 @@ def test_reingest_after_reparse_returns_the_live_doc_id(writer: DocumentWriter) 
     chunks, desc = _prepare(doc)
     first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
     reparsed = writer.reparse_document(
-        doc, chunks, desc, supersedes_doc_id=first.doc_id  # type: ignore[arg-type]
+        doc,  # type: ignore[arg-type]
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,
     )
 
     again = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]

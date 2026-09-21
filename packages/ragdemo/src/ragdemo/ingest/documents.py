@@ -6,6 +6,7 @@
 2. 重解析沿用原文档的 known_at。取重解析时刻会让这份文档在历史回测中凭空消失
    （05 §7.2 第 2 步）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -212,12 +213,28 @@ class DocumentWriter:
             "%s,%s,%s) "
             "RETURNING doc_id",
             (
-                entity_id, doc.doc_type, doc.title, doc.period, doc.publish_at,
-                doc.language, self.source, doc.source_url, doc.raw_bytes_ref,
-                doc.content_hash, version_group_id, doc.is_correction, supersedes_doc_id,
-                parse_engine, doc.page_count, doc.publish_at.date(),
-                known_at, doc.provider_doc_id, self.ingest_run_id,
-                json_ref, md_ref, warnings,
+                entity_id,
+                doc.doc_type,
+                doc.title,
+                doc.period,
+                doc.publish_at,
+                doc.language,
+                self.source,
+                doc.source_url,
+                doc.raw_bytes_ref,
+                doc.content_hash,
+                version_group_id,
+                doc.is_correction,
+                supersedes_doc_id,
+                parse_engine,
+                doc.page_count,
+                doc.publish_at.date(),
+                known_at,
+                doc.provider_doc_id,
+                self.ingest_run_id,
+                json_ref,
+                md_ref,
+                warnings,
             ),
         ).fetchone()
         assert row is not None
@@ -251,13 +268,25 @@ class DocumentWriter:
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "RETURNING block_id",
                 (
-                    doc_id, parent_block_id, chunk.block_type, chunk.section_path,
-                    chunk.ordinal, chunk.page,
+                    doc_id,
+                    parent_block_id,
+                    chunk.block_type,
+                    chunk.section_path,
+                    chunk.ordinal,
+                    chunk.page,
                     list(chunk.bbox) if chunk.bbox else None,
-                    chunk.content, descriptions.get(chunk.ordinal),
-                    len(chunk.content), chunk.is_leaf, entity_id, doc.doc_type,
-                    publish_at, doc.publish_at.date(), known_at, self.source,
-                    doc.provider_doc_id, self.ingest_run_id,
+                    chunk.content,
+                    descriptions.get(chunk.ordinal),
+                    len(chunk.content),
+                    chunk.is_leaf,
+                    entity_id,
+                    doc.doc_type,
+                    publish_at,
+                    doc.publish_at.date(),
+                    known_at,
+                    self.source,
+                    doc.provider_doc_id,
+                    self.ingest_run_id,
                 ),
             ).fetchone()
             assert row is not None

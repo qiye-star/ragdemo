@@ -1,4 +1,5 @@
 """文档管线端到端：Mock 公告 → 解析 → 切块 → 入库 → 嵌入，全部块可检索。"""
+
 from __future__ import annotations
 
 import json
@@ -172,6 +173,7 @@ def test_parse_artifact_refs_land_in_the_document_row(
 
 def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
     """供应商已经给了结构化块，再送去解析既花钱又不如原件准（05 §1）。"""
+
     class Exploding(MockDocumentParser):
         def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
             raise AssertionError("路径 A 的文档不应该被解析")
@@ -185,6 +187,7 @@ def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
 
 def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
     """页数预算耗尽就停，不静默烧钱（05 §2.7）。"""
+
     class Counting(MockDocumentParser):
         calls = 0
 
@@ -202,6 +205,7 @@ def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
 
 def test_permanent_failure_still_records_the_document(tmp_path: Path) -> None:
     """不留记号的话，下次分区重跑会再拉一遍、再失败一遍（05 §2.6）。"""
+
     class Unsupported(MockDocumentParser):
         def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
             raise ParsePermanent("unsupported", 40303)
