@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -21,6 +22,14 @@ from ragdemo.adapters.base import RawResponse
 from ragdemo.adapters.errors import QuotaExceeded, RateLimited, UpstreamUnavailable
 
 DEFAULT_CONFIG_PATH = Path("config/providers.yaml")
+
+# httpx 默认在 INFO 级别打印完整请求行（含查询字符串），例如
+# "HTTP Request: GET .../income?token=sk-xxx&... "HTTP/1.1 200 OK""。
+# CLAUDE.md §3：密钥不得出现在日志中。今天没有适配器往 params 里塞 token
+# （鉴权推迟到 P1c 的出网代理），但一旦有人加了一个 token 参数，
+# httpx 的默认日志会把它原样写进日志——这里提前把 httpx 自己的 logger
+# 降到 WARNING，永久堵死这条口子，不依赖调用方记得脱敏。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @dataclass(frozen=True)

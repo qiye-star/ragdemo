@@ -1,6 +1,8 @@
 """HTTP 客户端：退避、Retry-After、重试耗尽后失败而非返回部分数据。"""
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -70,6 +72,25 @@ def test_token_bucket_limits_rate() -> None:
     bucket = TokenBucket(rate_per_minute=60)
     assert bucket.acquire() == 0.0
     assert bucket.acquire() > 0.0
+
+
+def test_secret_query_param_never_reaches_logs(caplog: pytest.LogCaptureFixture) -> None:
+    """httpx 默认在 INFO 级别打印完整请求行（含查询串）。CLAUDE.md §3 要求密钥
+    不得出现在日志中——importing ragdemo.adapters.http 必须已经把 httpx 自己的
+    logger 降到 WARNING，让这条 INFO 日志根本不产生，而不是依赖调用方脱敏。
+
+    这里特意不对 "httpx" logger 调用 caplog.set_level：那样会把它重新调回
+    INFO，等于绕过被测的修复。只在根 logger 上设置 INFO 阈值，验证即便
+    根/处理器愿意接收 INFO，httpx 自己的 logger 仍然因为被设成 WARNING
+    而不产生这条日志。
+    """
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
+    with caplog.at_level(logging.INFO):
+        _client(transport).get_json("/x", {"token": "sk-SECRET-VALUE"})
+
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    for record in caplog.records:
+        assert "sk-SECRET-VALUE" not in record.getMessage()
 
 
 def test_200_with_invalid_json_raises_upstream_unavailable() -> None:
