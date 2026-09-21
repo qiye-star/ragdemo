@@ -42,21 +42,27 @@ from ragdemo.parse.textin import (
     DocumentParser,
     PageBudget,
     ParsePermanent,
+    ParseRetryable,
     ParseTimeout,
     PrivateDocumentEgressBlocked,
 )
 from ragdemo.parse.tree import build_tree
-from ragdemo_core.blob import BlobStore
+from ragdemo_core.blob import BlobNotFound, BlobStore
 
 LOOKBACK = timedelta(days=1)
 
 # block_embeddings 每次 run 的上限。不传 limit 的话 embed_pending_blocks 会
-# fetchall() 全局待办队列——两个并发的回填分区各选中同一批行，谁都看不见
-# 对方还没提交的缓存行，账单翻倍（P-26）。5000 大约是 DEFAULT_BATCH_SIZE
-# （64）的 78 倍，单次 run 的内存与 API 调用量可控，需要的话可以多跑几次
-# run 把待办队列排空——按批提交（P-24 的修复）让重跑天然是断点续传，
-# 不必一次吃完「数十万块」的首次入库。partition 自身的范围收窄留给
-# 接线任务决定（见模块 docstring），这里只收紧上限，不改查询范围。
+# fetchall() 全局待办队列——首次入库时那是「数十万块」一次性吃进内存、
+# 一次性把它们全部送去调嵌入 API（P-26）。这道 LIMIT 挡的是单次 run 的
+# 内存占用与 API 调用量（爆炸半径），**不是**并发去重：`ORDER BY
+# b.block_id LIMIT 5000` 是确定性的，两个并发跑的回填分区会选中完全相同
+# 的一批行，不是不同的两批——真要避免两边都对着同一批未提交的行重复
+# 计费，需要 `FOR UPDATE SKIP LOCKED` 之类的行级协调，这里没有，留给
+# 接线任务。5000 大约是 DEFAULT_BATCH_SIZE（64）的 78 倍，单次 run 的
+# 内存与 API 调用量可控，需要的话可以多跑几次 run 把待办队列排空——
+# 按批提交（P-24 的修复）让重跑天然是断点续传，不必一次吃完首次入库的
+# 全部积压。partition 自身的范围收窄留给接线任务决定（见模块 docstring），
+# 这里只收紧单次 run 的上限，不改查询范围。
 MAX_BLOCKS_PER_EMBED_RUN = 5000
 
 
@@ -64,6 +70,13 @@ MAX_BLOCKS_PER_EMBED_RUN = 5000
 class PreparedDocument:
     doc: NormalizedDocument
     artifacts: ParseArtifacts | None
+    # `prepare_documents` 的 owner_user 参数原样带到这里——它只在调用
+    # parser.parse() 时用来触发私有材料闸门，闸门通过之后这个值就被
+    # 扔掉了，doc_blocks_loaded 拿不到它，写库时只能落成公共行
+    # （Finding 2：TEXTIN_ALLOW_PRIVATE 一旦打开，私有材料就会被写成
+    # 公共可见）。带在这里，doc_blocks_loaded 才转得出去给
+    # DocumentWriter.write_document(owner_user=...)。
+    owner_user: str | None = None
 
 
 def prepare_documents(
@@ -89,7 +102,7 @@ def prepare_documents(
         if doc.blocks:
             # 路径 A：供应商已经做过表格还原与章节识别，再解析一遍既花钱
             # 又不如原件准（05 §1 的优先级）。
-            prepared.append(PreparedDocument(doc, None))
+            prepared.append(PreparedDocument(doc, None, owner_user=owner_user))
             continue
         if doc.raw_bytes_ref is None:
             # 既没有块也没有原件，没东西可做——但不写行、不留记号地悄悄
@@ -103,6 +116,7 @@ def prepare_documents(
                         engine="skipped:no_content",
                         warnings=["既无 blocks 也无 raw_bytes_ref，没有可解析的内容"],
                     ),
+                    owner_user=owner_user,
                 )
             )
             continue
@@ -111,16 +125,23 @@ def prepare_documents(
 
         try:
             raw_bytes = blob.get(doc.raw_bytes_ref)
-        except FileNotFoundError as exc:
+        except BlobNotFound as exc:
             # raw_bytes_ref 指向的对象在存储里丢了。这不是 xParse 的错误码，
             # 但后果和 ParsePermanent 一样：这份文档现在这个状态永远解析
             # 不了。放在 try 外面的旧写法会让这个异常直接炸穿整个循环，
             # 把本次 run 已经处理好、还没来得及 return 的全部文档一起丢掉——
             # 这才是真正要修的问题，不只是"记个 marker"。
+            #
+            # 捕获 BlobStore 的契约异常 BlobNotFound，而不是 FileNotFoundError
+            # 本身：后者只是 LocalBlobStore 用 Path.read_bytes() 实现出来的
+            # 偶然产物，P4 换成 MinIO 适配器时供应商抛的是 NoSuchKey，不是
+            # FileNotFoundError，届时这里若还咬着实现细节不放，这个 catch
+            # 会静默失效（BlobNotFound 子类化 FileNotFoundError，向后兼容）。
             prepared.append(
                 PreparedDocument(
                     replace(doc, blocks=[]),
                     ParseArtifacts(engine="blob:missing", warnings=[str(exc)]),
+                    owner_user=owner_user,
                 )
             )
             continue
@@ -134,6 +155,7 @@ def prepare_documents(
                 PreparedDocument(
                     replace(doc, blocks=[]),
                     ParseArtifacts(engine=f"textin:{exc.marker}", warnings=[str(exc)]),
+                    owner_user=owner_user,
                 )
             )
             continue
@@ -142,8 +164,21 @@ def prepare_documents(
                 PreparedDocument(
                     replace(doc, blocks=[]),
                     ParseArtifacts(engine="textin:skipped", warnings=[str(exc)]),
+                    owner_user=owner_user,
                 )
             )
+            continue
+        except ParseRetryable:
+            # 供应商侧的临时故障（限流、5xx、出网代理网络抖动）。这一支
+            # 以前没在这里被捕获，会直接炸穿循环，把本次 run 已经处理好、
+            # 已经付过费的 PreparedDocument 一起丢掉——和上面 FileNotFoundError
+            # 那条要修的是同一个问题，只是漏了一支。
+            #
+            # 不写行、不留 marker：marker 的意思是「别再自动重试了」，
+            # 但可重试的失败恰恰要交给下一次分区重跑去自然重试——这正是
+            # ParseRetryable 这个类存在的意义。留白比写一行「失败」记号更
+            # 正确：下次重跑时这份文档在 core.document 里没有任何痕迹，
+            # 会被当成还没处理过，重新送一次 xParse。
             continue
         except PrivateDocumentEgressBlocked:
             raise  # 闸门不能被静默吞掉
@@ -159,6 +194,7 @@ def prepare_documents(
                     md_ref=result.md_ref,
                     warnings=list(result.warnings),
                 ),
+                owner_user=owner_user,
             )
         )
     return prepared
@@ -208,7 +244,12 @@ def doc_blocks_loaded(
             for c in chunks
             if c.block_type == "table"
         }
-        result = writer.write_document(doc, chunks, descriptions, artifacts=item.artifacts)
+        # item.owner_user 原样转发给写入层：这是 Finding 2 的闭环——不转发
+        # 的话，prepare_documents 那边的私有材料闸门挡住了外送 xParse，
+        # 但写库这一步会把结果悄悄存成公共行（owner_user 列留空）。
+        result = writer.write_document(
+            doc, chunks, descriptions, owner_user=item.owner_user, artifacts=item.artifacts
+        )
         if not result.skipped:
             total += len(result.block_ids)
     # entity_id 在这里没有单一取值——一次 run 横跨多份文档、多个实体，写库
@@ -233,8 +274,9 @@ def block_embeddings(
     conn: ResourceParam[psycopg.Connection],
     embedder: ResourceParam[Embedder],
 ) -> EmbedStats:
-    # P-26：不传 limit 会 fetchall() 全局待办队列——两个并发分区互相看不见
-    # 对方还没提交的缓存行，账单翻倍。上限的取值与理由见模块顶部常量。
+    # P-26：不传 limit 会 fetchall() 全局待办队列，单次 run 的内存占用与
+    # API 调用量不可控。上限的取值与理由见模块顶部常量——它挡的是单次
+    # run 的爆炸半径，不是并发分区之间的去重。
     stats = embed_pending_blocks(conn, embedder, limit=MAX_BLOCKS_PER_EMBED_RUN)
     # as_of／entity_id 在这里没有真实取值：这个资产查的是全局 embedding IS
     # NULL 队列，不按分区或实体过滤（P-26 明确把"按分区收窄查询范围"留给

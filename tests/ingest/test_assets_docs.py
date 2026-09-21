@@ -28,6 +28,7 @@ from ragdemo.parse.textin import (
     PageBudget,
     ParsePermanent,
     ParseResult,
+    ParseRetryable,
     PrivateDocumentEgressBlocked,
     TextInParser,
     artifact_keys,
@@ -277,6 +278,36 @@ def test_missing_blob_does_not_discard_earlier_prepared_documents(tmp_path: Path
     assert prepared[1].doc.blocks == []
     assert prepared[1].artifacts is not None
     assert prepared[1].artifacts.engine == "blob:missing"
+
+
+def test_transient_failure_does_not_discard_earlier_or_later_prepared_documents(
+    tmp_path: Path,
+) -> None:
+    """ParseRetryable（供应商侧的临时故障：限流／5xx／出网代理网络抖动）以前
+    没在 prepare_documents 里被捕获，会直接炸穿循环，把本次 run 已经处理好、
+    已经付过费的 PreparedDocument 一起丢掉——和 FileNotFoundError 那条要修
+    的是同一个问题，只是漏了一支。也不写 marker：marker 的意思是「别再
+    自动重试」，可重试的失败要留给下一次分区重跑自然重试。"""
+
+    class FlakyOnSecond(MockDocumentParser):
+        calls = 0
+
+        def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+            type(self).calls += 1
+            if type(self).calls == 2:
+                raise ParseRetryable("xParse 服务临时故障")
+            return super().parse(file_bytes, owner_user=owner_user)
+
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob, count=3)
+
+    prepared = prepare_documents(docs, FlakyOnSecond(), blob, PageBudget(1000), owner_user=None)
+
+    # 中间那份（第二次调用）触发 ParseRetryable，既不写行也不留 marker，
+    # 干脆不出现在 prepared 里；前后两份必须完整保留下来。
+    assert [p.doc.provider_doc_id for p in prepared] == ["PATH-B-0", "PATH-B-2"]
+    assert prepared[0].doc.blocks
+    assert prepared[1].doc.blocks
 
 
 def test_document_with_no_content_gets_a_marker_not_a_silent_drop(tmp_path: Path) -> None:
