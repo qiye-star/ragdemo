@@ -132,7 +132,7 @@ class TushareAdapter:
                     value=float(row[field_name]),
                     unit="CNY",
                     currency="CNY",
-                    valid_from=date(period_end.year, 1, 1),
+                    valid_from=period_end - timedelta(days=89),
                     known_at=known_at,
                     source_ref=f"{row['ts_code']}:{row['end_date']}:{field_name}",
                 )

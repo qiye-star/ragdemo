@@ -71,3 +71,13 @@ def test_error_response_raises() -> None:
     )
     with pytest.raises(ValueError, match="40203"):
         list(adapter.parse(bad))
+
+
+def test_valid_from_is_quarter_start_approximation() -> None:
+    """valid_from 取季度起点的近似值（period_end - 89天），与 MockFactAdapter 一致。"""
+    adapter = TushareAdapter.for_replay(FIXTURES)
+    records = list(adapter.parse(_raw("income_2024q3.json", "/income")))
+    cam = next(r for r in records if r.entity_ref == "688256.SH")
+    assert cam.period_end == date(2024, 9, 30)
+    assert cam.valid_from == date(2024, 9, 30) - timedelta(days=89)
+    assert cam.valid_from == date(2024, 7, 3)
