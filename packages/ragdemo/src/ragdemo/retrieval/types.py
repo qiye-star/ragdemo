@@ -1,4 +1,5 @@
 """检索的请求、配置与结果。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,6 +16,10 @@ class RetrievalConfig:
     rrf_k: int = 60
     ef_search: int = 200
     max_scan_tuples: int = 200_000
+    # 向量一路过滤后不足 candidate_k 时的过采样倍数增长率。ADR-0009 后果 3
+    # 把它定性为评测参数——改动要跑评测并把数字贴进 PR，所以它必须在这里
+    # 可配置，而不是藏在 vector.py 的模块常量里。
+    oversample_growth: int = 4
     rewrite_enabled: bool = False
     rerank_enabled: bool = True
 
@@ -27,6 +32,9 @@ class RetrievalConfig:
             raise ValueError("两路权重不能同时为 0")
         if self.rrf_k <= 0:
             raise ValueError("rrf_k 必须为正")
+        if self.oversample_growth < 2:
+            # 等于 1 会让迭代过采样原地踏步（k 永远不变），直接死循环。
+            raise ValueError("oversample_growth 必须至少为 2，否则过采样不会增长")
 
 
 @dataclass(frozen=True)

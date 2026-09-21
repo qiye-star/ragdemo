@@ -1,4 +1,5 @@
 """加权 RRF（06 §4）。用排名不用分数——BM25 分数无界，不能直接加权。"""
+
 from __future__ import annotations
 
 from ragdemo.retrieval.fusion import weighted_rrf

@@ -5,6 +5,7 @@
 RRF 只用排名（天然无量纲）。统一为加权 RRF——权重作用在 RRF 项上，
 既保留「BM25 更重要」的意图，又避免分数尺度问题（docs/06-retrieval.md §4.1）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

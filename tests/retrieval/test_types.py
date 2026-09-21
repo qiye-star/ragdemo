@@ -1,4 +1,5 @@
 """检索请求与配置的不变量。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

@@ -5,6 +5,7 @@
 
 降级发生率要监控：持续降级说明需要把重排模型本地化（adr/0004 的推翻条件）。
 """
+
 from __future__ import annotations
 
 import logging

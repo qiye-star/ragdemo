@@ -21,7 +21,7 @@ Chroma 不参与 PG 的事务，`known_at` / `superseded_at` 因此不能由它�
 迭代过采样：权威过滤会因时点/owner/entity/doc_type 淘汰一批候选，直接取
 `candidate_k` 个往往过滤后不够，等价于 pgvector 0.8 iterative index scan
 要解决的同一个问题。命中不足、且索引里可能还有更多数据时（即上一轮请求 k
-个、索引确实凑够了 k 个候选），按 `_OVERSAMPLE_GROWTH` 倍数扩大再查一次；
+个、索引确实凑够了 k 个候选），按 `RetrievalConfig.oversample_growth` 倍数扩大再查一次；
 索引确实没有更多数据了（返回数少于请求数）就用现有结果收尾，不会因为过滤后
 凑不够而死循环。
 """
@@ -39,12 +39,6 @@ from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
 from ragdemo.retrieval.vector_index import PgVectorIndex, VectorCandidate, VectorIndex
 from ragdemo_core.db.session import as_of_session
 
-# 过滤后不足 candidate_k 时的过采样倍数增长率。ADR-0009 后果 3 把它定性为
-# 「评测参数」，理想情况下应能从 RetrievalConfig 传进来；但本任务的文件范围
-# 明确不包含 retrieval/types.py（由其他并行任务持有），因此暂时只能做成模块内
-# 常量，已在 task-3-report.md 里记录为待跟进项，不是遗漏。
-_OVERSAMPLE_GROWTH = 4
-
 
 def apply_scan_settings(conn: psycopg.Connection, cfg: RetrievalConfig) -> None:
     """设置 pgvector 0.8 的迭代扫描参数。
@@ -58,21 +52,6 @@ def apply_scan_settings(conn: psycopg.Connection, cfg: RetrievalConfig) -> None:
     conn.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(cfg.ef_search),))
     conn.execute("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)")
     conn.execute("SELECT set_config('hnsw.max_scan_tuples', %s, true)", (str(cfg.max_scan_tuples),))
-
-
-def _single(values: list[str] | None) -> str | None:
-    """把请求里的多值过滤条件收窄成 `VectorIndex.query()` 能接受的单值预过滤。
-
-    `RetrievalRequest.entity_ids` / `doc_types` 是列表，但 `VectorIndex.query()`
-    协议只接受单个 `entity_id` / `doc_type`（预过滤，非权威判定）——这是上游
-    接口的一处已知缺口，见 task-3-report.md。只有恰好一个值时才下推给索引
-    做预过滤；多个值（或没有）时放弃预过滤，交给下面的权威过滤用
-    `entity_id = ANY(...)` 兜底——结果始终正确，只是候选生成阶段少一次窄化，
-    召回效率可能下降，不影响正确性。
-    """
-    if values and len(values) == 1:
-        return values[0]
-    return None
 
 
 def _authoritative_filter(
@@ -112,21 +91,23 @@ def vector_search(
 
     idx = index if index is not None else PgVectorIndex(conn)
     candidate_k = req.config.candidate_k
-    entity_id = _single(req.entity_ids)
-    doc_type = _single(req.doc_types)
 
     multiplier = 1
     filtered: list[VectorCandidate] = []
     while True:
         k = candidate_k * multiplier
         candidates = idx.query(
-            query_vector, k=k, as_of=req.as_of, entity_id=entity_id, doc_type=doc_type
+            query_vector,
+            k=k,
+            as_of=req.as_of,
+            entity_ids=req.entity_ids,
+            doc_types=req.doc_types,
         )
         filtered = _authoritative_filter(conn, req, candidates)
         exhausted = len(candidates) < k
         if len(filtered) >= candidate_k or exhausted:
             break
-        multiplier *= _OVERSAMPLE_GROWTH
+        multiplier *= req.config.oversample_growth
 
     top = filtered[:candidate_k]
     return [RankedHit(c.block_id, rank, 1.0 - c.distance) for rank, c in enumerate(top, start=1)]

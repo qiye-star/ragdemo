@@ -17,6 +17,7 @@
 `order` 里若混进了在 `as_of` 时点尚不可见的 block_id（例如上游传错），
 asof 视图会直接把它过滤掉，展开这一步不会替它把内容偷渡回结果。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

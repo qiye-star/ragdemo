@@ -93,14 +93,18 @@ class VectorIndex(Protocol):
         *,
         k: int,
         as_of: datetime | None = None,
-        entity_id: str | None = None,
-        doc_type: str | None = None,
+        entity_ids: Sequence[str] | None = None,
+        doc_types: Sequence[str] | None = None,
     ) -> list[VectorCandidate]:
         """按向量相似度返回候选，按距离升序排列。
 
-        `as_of` / `entity_id` / `doc_type` 是**预过滤**，用于减少候选数量与
+        `as_of` / `entity_ids` / `doc_types` 是**预过滤**，用于减少候选数量与
         提升召回相关性，不是最终的时点权威判定——调用方仍须再用
         `asof.doc_block` 过一遍。
+
+        entity / doc_type 收复数而不是单数：`RetrievalRequest` 携带的本来就是
+        列表，收单数会让多实体查询在候选生成阶段完全放弃窄化（只能靠权威过滤
+        兜底），过采样倍数因此被迫调高，召回率与延迟一起变差。
         """
         ...
 
@@ -142,6 +146,17 @@ def collection_name(owner_user: str | None) -> str:
 def _vector_literal(vector: Sequence[float]) -> str:
     """pgvector 的文本输入格式：`[x1,x2,...]`。"""
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
+
+
+def _membership(field: str, values: Sequence[str]) -> dict[str, object]:
+    """单值用 $eq、多值用 $in。
+
+    分开写不是洁癖：$in 只有一个元素时 Chroma 也接受，但 $eq 的语义更直接，
+    而且把「单值」这条最常见的路径与多值分开，将来换索引实现时更容易映射。
+    """
+    if len(values) == 1:
+        return {field: {"$eq": values[0]}}
+    return {field: {"$in": list(values)}}
 
 
 def _to_chroma_metadata(item: VectorItem) -> dict[str, str | int | float]:
@@ -191,8 +206,8 @@ class ChromaVectorIndex:
         *,
         k: int,
         as_of: datetime | None = None,
-        entity_id: str | None = None,
-        doc_type: str | None = None,
+        entity_ids: Sequence[str] | None = None,
+        doc_types: Sequence[str] | None = None,
     ) -> list[VectorCandidate]:
         if self._collection.count() == 0:
             return []
@@ -202,10 +217,11 @@ class ChromaVectorIndex:
             epoch = as_of.timestamp()
             conditions.append({"known_at": {"$lte": epoch}})
             conditions.append({"superseded_at": {"$gt": epoch}})
-        if entity_id is not None:
-            conditions.append({"entity_id": {"$eq": entity_id}})
-        if doc_type is not None:
-            conditions.append({"doc_type": {"$eq": doc_type}})
+        # 单值用 $eq、多值用 $in。两个都支持，$in 也能嵌在 $and 里（实测）。
+        if entity_ids:
+            conditions.append(_membership("entity_id", entity_ids))
+        if doc_types:
+            conditions.append(_membership("doc_type", doc_types))
 
         # 复合条件必须写成 {"$and": [...]}，不能把多个 key 平铺后还带操作符；
         # 只有一个条件时直接用它本身即可（实测约束 4）。
@@ -268,8 +284,8 @@ class PgVectorIndex:
         *,
         k: int,
         as_of: datetime | None = None,
-        entity_id: str | None = None,
-        doc_type: str | None = None,
+        entity_ids: Sequence[str] | None = None,
+        doc_types: Sequence[str] | None = None,
     ) -> list[VectorCandidate]:
         """按余弦距离升序返回候选。
 
@@ -289,8 +305,10 @@ class PgVectorIndex:
         qvec = _vector_literal(vector)
         params: dict[str, object] = {
             "qvec": qvec,
-            "entity_id": entity_id,
-            "doc_type": doc_type,
+            # 空列表与 None 都表示「不按这一维过滤」，统一成 NULL 交给下面的
+            # `IS NULL OR ...` 分支处理，避免 `= ANY('{}')` 恒假把结果清空。
+            "entity_ids": list(entity_ids) if entity_ids else None,
+            "doc_types": list(doc_types) if doc_types else None,
             "k": k,
         }
         source = "asof.doc_block" if as_of is not None else "core.doc_block"
@@ -299,8 +317,8 @@ class PgVectorIndex:
             f"  FROM {source} "
             " WHERE embedding IS NOT NULL "
             "   AND is_leaf "
-            "   AND (%(entity_id)s::text IS NULL OR entity_id = %(entity_id)s) "
-            "   AND (%(doc_type)s::text IS NULL OR doc_type = %(doc_type)s) "
+            "   AND (%(entity_ids)s::text[] IS NULL OR entity_id = ANY(%(entity_ids)s)) "
+            "   AND (%(doc_types)s::text[] IS NULL OR doc_type = ANY(%(doc_types)s)) "
             " ORDER BY embedding <=> %(qvec)s::vector "
             " LIMIT %(k)s"
         )

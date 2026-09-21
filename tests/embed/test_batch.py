@@ -32,8 +32,8 @@ class RecordingVectorIndex:
         *,
         k: int,
         as_of: datetime | None = None,
-        entity_id: str | None = None,
-        doc_type: str | None = None,
+        entity_ids: Sequence[str] | None = None,
+        doc_types: Sequence[str] | None = None,
     ) -> list[VectorCandidate]:
         raise NotImplementedError("本测试不需要 query")
 

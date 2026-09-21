@@ -1,4 +1,5 @@
 """BM25 一路：中文命中、时点过滤、实体过滤、下推验证。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -25,9 +26,7 @@ def test_ranks_start_at_one_and_are_contiguous(
 
 
 @pytest.mark.db
-def test_future_documents_are_invisible(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_future_documents_are_invisible(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """2025-03 的合同公告在 2024-12-31 的时点上必须不可见。"""
     hits = bm25_search(corpus, RetrievalRequest(query="采购合同", as_of=as_of_2024))
     assert hits == []
@@ -56,9 +55,7 @@ def test_entity_filter_excludes_other_companies(
 
 
 @pytest.mark.db
-def test_parent_blocks_are_never_returned(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_parent_blocks_are_never_returned(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     hits = bm25_search(corpus, RetrievalRequest(query="主营业务", as_of=as_of_2024))
     if hits:
         rows = corpus.execute(
@@ -84,9 +81,7 @@ def test_candidate_k_caps_the_result(corpus: psycopg.Connection, as_of_2024: dat
 
 
 @pytest.mark.db
-def test_explain_shows_bm25_index_usage(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_explain_shows_bm25_index_usage(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """P1 验收项：EXPLAIN 验证 BM25 过滤下推（10-roadmap P1）。
 
     小语料下优化器可能选顺序扫描，因此这里只断言计划可取到且包含表名；

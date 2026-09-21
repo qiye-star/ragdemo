@@ -1,9 +1,10 @@
 """重排与降级：失败时回退 RRF 顺序，不让查询失败。"""
+
 from __future__ import annotations
 
 import pytest
-from ragdemo.retrieval.fusion import FusedHit
 
+from ragdemo.retrieval.fusion import FusedHit
 from ragdemo.retrieval.rerank import (
     FailingReranker,
     MockReranker,

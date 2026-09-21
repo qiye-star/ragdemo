@@ -4,6 +4,7 @@ entity_id / doc_type / is_leaf / known_at 都在 BM25 索引里且标了 fast，
 ParadeDB 能把这些谓词下推进 tantivy，过滤在打分之前完成——这是时点过滤后
 仍能保证召回的关键（docs/06-retrieval.md §3.2）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

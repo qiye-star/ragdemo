@@ -1,4 +1,5 @@
 """过滤条件：时点谓词必须出现在 SQL 里（冗余谓词，06 §3.4）。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -55,7 +56,9 @@ def test_no_entity_filter_means_no_entity_clause() -> None:
 def test_doc_type_and_published_after_are_supported() -> None:
     sql, params = build_filters(
         RetrievalRequest(
-            query="算力", as_of=AS_OF, doc_types=["quarterly"],
+            query="算力",
+            as_of=AS_OF,
+            doc_types=["quarterly"],
             published_after=datetime(2024, 1, 1, tzinfo=UTC),
         )
     )

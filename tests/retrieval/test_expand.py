@@ -5,6 +5,7 @@
 既有做法，直接查 core 便于按 doc_id/block_type 定位测试用的 block_id），
 其余全部经 `expand_to_evidence` 走 asof 视图。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -47,9 +48,7 @@ def test_content_comes_from_the_parent_block(
 
 
 @pytest.mark.db
-def test_citation_uses_the_leaf_block_id(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_citation_uses_the_leaf_block_id(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """溯源要精确到段落，指到整个小节等于没指。"""
     leaf = _leaf_ids(corpus, 1)[0]
     evidence = expand_to_evidence(
@@ -77,9 +76,7 @@ def test_same_parent_is_returned_once_with_all_matched_children(
 
 
 @pytest.mark.db
-def test_table_block_uses_its_own_content(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_table_block_uses_its_own_content(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """表格块没有父块，用自身内容。"""
     row = corpus.execute(
         "SELECT block_id FROM core.doc_block WHERE block_type = 'table' LIMIT 1"
@@ -94,9 +91,7 @@ def test_table_block_uses_its_own_content(
 
 
 @pytest.mark.db
-def test_dedup_does_not_backfill_to_top_k(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_dedup_does_not_backfill_to_top_k(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """去重后不足 top_k 时不补位——宁可少给也不引入低相关证据（06 §6 规则 4）。"""
     leaves = _leaf_ids(corpus, 1)[:2]
     evidence = expand_to_evidence(

@@ -4,6 +4,7 @@
 PL/pgSQL 函数调用，很可能阻止优化器把谓词下推进 tantivy 或 HNSW 的过滤
 （docs/06-retrieval.md §3.4）。冗余不改变结果集，只影响执行计划。
 """
+
 from __future__ import annotations
 
 from typing import Any
