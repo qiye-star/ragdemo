@@ -1,0 +1,29 @@
+name: eval
+on: [pull_request]
+jobs:
+  retrieval:
+    runs-on: ubuntu-latest
+    services:
+      paradedb:
+        image: paradedb/paradedb:0.25.9-pg18
+        env:
+          POSTGRES_PASSWORD: ragdemo
+          POSTGRES_DB: ragdemo
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ragdemo"
+          --health-interval 5s --health-retries 20
+    env:
+      RAGDEMO_DSN: postgresql://postgres:ragdemo@localhost:5432/ragdemo
+      RAGDEMO_ADMIN_DSN: postgresql://postgres:ragdemo@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --all-packages
+      - run: uv run ragdemo db migrate
+      - run: uv run pytest -v -m db
+      - run: uv run ragdemo eval run --suite retrieval --gate | tee eval.md
+      - run: cat eval.md >> "$GITHUB_STEP_SUMMARY"

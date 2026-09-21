@@ -11,7 +11,7 @@ RAGDEMO_DSN       ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGD
 RAGDEMO_ADMIN_DSN ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGDEMO_DB_PORT)/postgres
 export POSTGRES_PASSWORD RAGDEMO_DB_PORT RAGDEMO_DSN RAGDEMO_ADMIN_DSN
 
-.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster backup restore
+.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 clean dagster backup restore eval-retrieval
 
 install:
 	uv sync --all-packages
@@ -46,6 +46,10 @@ test-schema:
 # P0 阶段验收：docs/10-roadmap.md P0 表格七项，含尚未满足的种子计数项
 accept-p0:
 	uv run pytest tests/test_p0_acceptance.py -v -m db
+
+# 检索评测 + 与主干基线比对，回退超容差（08 §4.1：0.02）以非零码退出，供 CI 门禁使用。
+eval-retrieval:
+	uv run ragdemo eval run --suite retrieval --gate
 
 clean:
 	$(COMPOSE) down -v
