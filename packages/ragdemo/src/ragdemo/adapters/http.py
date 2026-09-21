@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -122,11 +123,17 @@ class HttpClient:
             else:
                 self.calls_today += 1
                 if response.status_code < 400:
+                    try:
+                        payload = response.json()
+                    except json.JSONDecodeError as e:
+                        raise UpstreamUnavailable(
+                            f"{self.provider} {endpoint} 返回无效 JSON 体"
+                        ) from e
                     return RawResponse(
                         provider=self.provider,
                         endpoint=endpoint,
                         params=params,
-                        payload=response.json(),
+                        payload=payload,
                         http_status=response.status_code,
                         fetched_at=datetime.now(UTC),
                         cost_cents=self.cost_per_call_cents,

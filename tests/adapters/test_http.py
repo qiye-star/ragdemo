@@ -70,3 +70,13 @@ def test_token_bucket_limits_rate() -> None:
     bucket = TokenBucket(rate_per_minute=60)
     assert bucket.acquire() == 0.0
     assert bucket.acquire() > 0.0
+
+
+def test_200_with_invalid_json_raises_upstream_unavailable() -> None:
+    """200 响应但体不是有效 JSON 时，应抛 UpstreamUnavailable 而非原始 JSONDecodeError。"""
+    import json
+
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, content=b"not json"))
+    with pytest.raises(UpstreamUnavailable) as exc:
+        _client(transport).get_json("/x", {})
+    assert isinstance(exc.value.__cause__, json.JSONDecodeError)
