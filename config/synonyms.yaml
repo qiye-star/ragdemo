@@ -1,0 +1,6 @@
+# 检索同义词表。只在 RetrievalConfig.rewrite_enabled = true 时生效。
+算力: [计算力, compute]
+先进封装: [CoWoS, 2.5D 封装]
+大模型: [基础模型, foundation model]
+推理芯片: [推理加速卡, inference chip]
+训练芯片: [训练加速卡, training chip]
