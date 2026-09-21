@@ -11,10 +11,28 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
+class BlobNotFound(FileNotFoundError):
+    """`key` 在存储里不存在。
+
+    这是 `BlobStore.get()` 的契约异常，不是某个实现的偶然产物：
+    `LocalBlobStore` 以前直接让 `Path.read_bytes()` 的 `FileNotFoundError`
+    冒出去，调用方（`ragdemo/ingest/assets_docs.py` 的 `prepare_documents`）
+    捕的其实是这个实现细节，而不是一个有意设计的契约——P4 的 MinIO 适配器
+    抛的是供应商自己的 `NoSuchKey`，不是 `FileNotFoundError`，届时那个
+    catch 会静默失效，刚补上的洞又开了一次。子类化 `FileNotFoundError`
+    是为了不破坏任何已经在捕获它的既有调用方。
+    """
+
+
 @runtime_checkable
 class BlobStore(Protocol):
     def exists(self, key: str) -> bool: ...
-    def get(self, key: str) -> bytes: ...
+
+    def get(self, key: str) -> bytes:
+        """`key` 不存在时必须抛 `BlobNotFound`（或其子类）——不是任意异常，
+        也不是某个实现恰好抛出的原生异常。"""
+        ...
+
     def put(self, key: str, data: bytes) -> str: ...
 
 
@@ -36,7 +54,10 @@ class LocalBlobStore:
         return self._path(key).is_file()
 
     def get(self, key: str) -> bytes:
-        return self._path(key).read_bytes()
+        try:
+            return self._path(key).read_bytes()
+        except FileNotFoundError as exc:
+            raise BlobNotFound(key) from exc
 
     def put(self, key: str, data: bytes) -> str:
         path = self._path(key)
