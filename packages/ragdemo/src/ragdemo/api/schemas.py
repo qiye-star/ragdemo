@@ -322,3 +322,95 @@ class WarningsResponse(BaseModel):
     as_of: str
     aggregate: list[WarningAggregate]
     documents: list[WarningDocument]
+
+
+# --- 权限隔离探针 ---------------------------------------------------------
+
+
+class RelationCounts(BaseModel):
+    """一个身份分支在一张关系（asof.document 或 asof.doc_block）上看到的
+    行数分布——只有聚合计数，一个文本列都不取（约束 6：私有内容永不返回）。
+    """
+
+    total: int
+    public_rows: int
+    user_private_rows: int
+    tenant_private_rows: int
+    empty_owner_rows: int
+    foreign_user_rows: int
+    foreign_tenant_rows: int
+
+
+class IdentityBranch(BaseModel):
+    key: str
+    label: str
+    tenant: str | None
+    user: str | None
+    documents: RelationCounts
+    blocks: RelationCounts
+
+
+class ErrorBranch(BaseModel):
+    key: str
+    raised: bool
+    sqlstate: str | None
+    message_head: str | None
+    passed: bool
+
+
+class CheckResult(BaseModel):
+    name: str
+    status: str  # "passed" / "failed" / "skipped"
+    detail: str
+
+
+class ProbesResponse(BaseModel):
+    as_of: str
+    demo_seeded: bool
+    identity_branches: list[IdentityBranch]
+    checks: list[CheckResult]
+    error_branches: list[ErrorBranch]
+
+
+class PolicyDefinition(BaseModel):
+    schemaname: str
+    tablename: str
+    policyname: str
+    cmd: str
+    roles: list[str]
+    qual: str | None
+    with_check: str | None
+
+
+class RlsStatus(BaseModel):
+    relname: str
+    relrowsecurity: bool
+    relforcerowsecurity: bool
+    owner: str
+    owner_is_superuser: bool
+
+
+class AsofViewOwner(BaseModel):
+    relname: str
+    owner: str
+    owner_is_superuser: bool
+
+
+class ConnectionIdentity(BaseModel):
+    current_user: str
+    session_user: str
+    current_user_is_superuser: bool
+    asof_doc_block_select: bool
+    core_doc_block_select: bool
+    core_doc_block_insert: bool
+    core_document_select: bool
+    quality_metric_select: bool
+
+
+class CatalogResponse(BaseModel):
+    as_of: str
+    as_of_affects_result: bool
+    policies: list[PolicyDefinition]
+    rls_status: list[RlsStatus]
+    asof_view_owners: list[AsofViewOwner]
+    connection_identity: ConnectionIdentity
