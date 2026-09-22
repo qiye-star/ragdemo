@@ -143,3 +143,81 @@ def test_no_default_headers_means_no_special_behavior() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
     raw = _client(transport).get_json("/x", {})
     assert raw.payload == {"ok": True}
+
+
+# --- post_json（SiliconFlow 等真正按状态码分类的供应商；与 post_text 的
+# "任何状态码都不抛、分类交给调用方" 刻意不同——post_text 是为 MCP 网关
+# 定制的，那个上游把业务错误塞进 200/500 的响应体里，硬按状态码分类会把
+# 可诊断的上游故障变成一句"返回 500"。SiliconFlow 没有这个性质，
+# 复用 post_text 只会把状态码分类的活又摊给每个调用方重做一遍）--------
+
+
+def test_post_json_successful_request_returns_raw_response() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [1, 2]}))
+    raw = _client(transport).post_json("/x", {"input": ["a"]})
+    assert raw.http_status == 200
+    assert raw.payload == {"data": [1, 2]}
+    assert raw.fetched_at.tzinfo is not None
+
+
+def test_post_json_retries_then_succeeds() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503) if calls["n"] < 3 else httpx.Response(200, json={"ok": True})
+
+    raw = _client(httpx.MockTransport(handler)).post_json("/x", {})
+    assert raw.payload == {"ok": True}
+    assert calls["n"] == 3
+
+
+def test_post_json_exhausted_retries_raise_instead_of_returning_partial() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(503))
+    with pytest.raises(UpstreamUnavailable):
+        _client(transport).post_json("/x", {})
+
+
+def test_post_json_429_surfaces_retry_after() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "7"}))
+    with pytest.raises(UpstreamUnavailable) as exc:
+        _client(transport).post_json("/x", {})
+    assert isinstance(exc.value.__cause__, RateLimited)
+    assert exc.value.__cause__.retry_after_s == 7.0
+
+
+def test_post_json_4xx_other_than_429_is_not_retried() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(400, json={"error": "bad request"})
+
+    with pytest.raises(UpstreamUnavailable):
+        _client(httpx.MockTransport(handler)).post_json("/x", {})
+    assert calls["n"] == 1, "400 不该重试"
+
+
+def test_post_json_200_with_invalid_json_raises_upstream_unavailable() -> None:
+    import json
+
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, content=b"not json"))
+    with pytest.raises(UpstreamUnavailable) as exc:
+        _client(transport).post_json("/x", {})
+    assert isinstance(exc.value.__cause__, json.JSONDecodeError)
+
+
+def test_post_json_sends_body_and_default_headers() -> None:
+    import json
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(httpx.MockTransport(handler), default_headers={"Authorization": "Bearer x"})
+    client.post_json("/x", {"model": "bge-m3", "input": ["hi"]})
+
+    assert seen[0].headers["authorization"] == "Bearer x"
+    assert json.loads(seen[0].content) == {"model": "bge-m3", "input": ["hi"]}

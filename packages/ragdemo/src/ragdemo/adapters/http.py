@@ -216,6 +216,68 @@ class HttpClient:
             f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
         ) from last_error
 
+    def post_json(
+        self,
+        endpoint: str,
+        body: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> RawResponse:
+        """POST JSON 体，按状态码分类——与 `post_text` 刻意不同。
+
+        `post_text` 是为 MCP 网关定制的：那个上游把业务错误塞进 200/500
+        的响应体里，硬按状态码分类会把可诊断的上游故障变成一句「返回 500」。
+        SiliconFlow（嵌入/重排，adr/0004）没有这个性质，是一个按标准 HTTP
+        语义分类状态码的供应商——复用 `post_text` 只会把状态码分类的活
+        又摊给每个调用方重做一遍。这里的分类规则与 `get_json` 完全一致
+        （2xx 解析 JSON 返回；状态码在 `retry_on_status` 里重试；其余
+        4xx/5xx 直接 `UpstreamUnavailable`，不重试）。
+        """
+        if self.daily_quota is not None and self.calls_today >= self.daily_quota:
+            raise QuotaExceeded(f"{self.provider} 已达每日配额 {self.daily_quota}")
+
+        merged = {"Content-Type": "application/json", **dict(headers or {})}
+        last_error: Exception | None = None
+        for attempt in range(1, self.policy.max_attempts + 1):
+            wait = self.bucket.acquire()
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                response = self._client.post(endpoint, json=dict(body), headers=merged)
+            except httpx.TransportError as exc:
+                last_error = exc
+            else:
+                self.calls_today += 1
+                if response.status_code < 400:
+                    try:
+                        payload = response.json()
+                    except json.JSONDecodeError as e:
+                        raise UpstreamUnavailable(
+                            f"{self.provider} {endpoint} 返回无效 JSON 体"
+                        ) from e
+                    return RawResponse(
+                        provider=self.provider,
+                        endpoint=endpoint,
+                        params=body,
+                        payload=payload,
+                        http_status=response.status_code,
+                        fetched_at=datetime.now(UTC),
+                        cost_cents=self.cost_per_call_cents,
+                    )
+                if response.status_code not in self.policy.retry_on_status:
+                    raise UpstreamUnavailable(
+                        f"{self.provider} {endpoint} 返回 {response.status_code}（不重试）"
+                    )
+                last_error = _error_for(response)
+
+            if attempt < self.policy.max_attempts:
+                time.sleep(_backoff_seconds(last_error, attempt, self.policy))
+
+        raise UpstreamUnavailable(
+            f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
+        ) from last_error
+
     def post_text(
         self,
         endpoint: str,
