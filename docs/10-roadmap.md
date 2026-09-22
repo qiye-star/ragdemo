@@ -59,23 +59,42 @@ make db-init && make seed && make test-schema
 ## P1 底座（第 3–7 周）
 
 - [x] `Adapter` 抽象与 Mock 实现（`04-ingestion.md` §2）
-- [ ] Tushare 适配器 + Dagster 日分区资产（财务、行情）
-      —— **部分完成**：财务已接（`/income`，日分区资产 `fact_normalized` /
-      `fin_fact_loaded`）；**行情未接**——`core.price_daily` 至今只出现在 P0 的
-      schema 测试里，接入侧一行代码都没有
+- [x] Tushare 适配器 + Dagster 日分区资产（财务、行情）
+      —— 财务已接（`/income`，日分区资产 `fact_normalized` / `fin_fact_loaded`，
+      直连 REST）；**行情已接**（`price_normalized` / `price_daily_loaded`，
+      经 MCP 网关 `adapters/mcp_gateway.py` 取数，非直连 REST——网关聚合
+      Tushare/万得/同花顺/AkShare/财经新闻，已按既定分工做客户端，服务端由
+      运维自行部署，`a.finovadeep.com:8766`）。经真实网关验证：连续两次拉取
+      同一分区，watermark 生效后第二次 0 行、`core.price_daily` 行数不变。
 - [x] `AnnouncementProvider` 抽象接口 + Mock + 契约测试集
-- [ ] EDGAR 适配器（10-K / 10-Q / 8-K 列表与全文）
-      —— **部分完成**：列表已接（`parse_filings` 按 `TRACKED_FORMS` 过滤）；
-      **全文未抓**——只有 `FilingRef.document_url` 这个 URL 构造属性，
-      全仓库没有任何代码去取它指向的正文
+- [x] EDGAR 适配器（10-K / 10-Q / 8-K 列表与全文）
+      —— 列表已接（`parse_filings` 按 `TRACKED_FORMS` 过滤）；**全文已接**
+      （`fetch_full_text` + `ragdemo docs ingest-edgar` CLI）。过程中发现
+      `data.sec.gov`/`www.sec.gov` 对没有可辨识 User-Agent 的请求一律 403，
+      两条路径此前都连不通，已修（`HttpClient.default_headers`）。真实抓取
+      过 NVIDIA 一份 8-K 全文验证，`raw_ref` 指向的 blob 真实存在、非空。
 - [x] 时点写入中间件：`known_at` 计算、更正处理、幂等写入
 - [x] 实体解析三层降级 + `entity_resolution_queue`
 - [x] TextIn xParse 封装（含解析产物落盘）、切块器、父子块构造、元数据校验
 - [x] 嵌入器 + 批处理 + 缓存 + 断点续传
 - [x] `RetrievalService`：过滤 → 双路召回 → 加权 RRF → 重排 → 父子块
-- [x] `eval_retrieval` 录入工具 + 评测脚本 + CI 集成
+- [x] `eval_retrieval` 录入工具 + 评测脚本 + CI 集成 + 分层抽样/冻结快照工具
+      （`evals/sampler.py` / `evals/freeze.py`）
       —— 工具链齐了，但 `evals/` 下**一条用例都没有**（`eval_retrieval` 是空表），
-      门禁因此是空转的。录入属于 W9 创始人手工工作流，不是工程缺口
+      门禁因此是空转的。录入属于 W9 创始人手工工作流，不是工程缺口。
+      **另外修复了一个让 `eval run --gate` 从未真正拦截过任何回退的真实
+      bug**：门禁原本在把这次结果写进 `evals.eval_run` 之后才读"最近一次
+      运行"当基线，读到的永远是自己——已改成先读基线、再跑评测（见
+      `evals/cli.py::fetch_baseline`），并用真实改坏 `ChunkConfig` 的集成
+      测试验证过修复后确实会拦截（`recall@10` 从 1.0 真跌到 0.0，门禁正确
+      判定为回退）。
+- [x] 阶段 D/G 补的质量门禁：解析成功率、表格闭合率、块级置信度 P50、孤儿块、
+      叶子块长度合规率、向量覆盖率、每源应到/实到对账、接入延迟 P50/P95、
+      C 档触发路由——`Dagster asset_check`，阻断=True 的失败真实阻断
+      `block_embeddings` 物化（见 `docs/superpowers/plans/2026-09-22-
+      data-foundation.md` 阶段 D/F/G）
+- [x] 时点泄漏抽样重放（阶段 E）：每日抽 200 条历史块 × 三个历史 `as_of`，
+      哈希比对基线，真实篡改-恢复验证过检测有效
 - [x] 备份与恢复 runbook（`01-architecture.md` §4）
 - [ ] 内部诊断界面（只读切块检视 + 检索定位，[adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)）
       —— **不计入下面 P1 的九项验收**，是诊断工具而非验收对象
@@ -115,6 +134,14 @@ make db-init && make seed && make test-schema
 
 **结论：代码层面 P1 的 11 项做完 9 项，验收层面不能宣布 P1 通过。**
 第 2、3 项缺真实评测集（W9 手工工作流），第 1、6、8 项缺真实运行时间与演练窗口。
+
+**补充**（`docs/superpowers/plans/2026-09-22-data-foundation.md` 阶段 A→H 实施完毕
+后，全量测试 **670 passed**，仅剩 P0 未补齐数据导致的 2 项已知失败）：上表第 2、3
+项缺的"真实评测集"现在有了对应的抽样/冻结工具（阶段 H），但 `evals.eval_retrieval`
+本身仍是 0 行——工具就位不等于验收通过，仍然卡在创始人标注这一步。第 1、6 项
+（连续 5 天无人值守、7 天双跑一致性）阶段 E 补了一个更强的日常机制（每日抽样
+重放 + 真实篡改验证过检测有效），但这是"持续监控能力"，不能替代这两项**要求
+真实经过对应天数**的一次性验收动作本身。第 8 项（备份恢复演练）未变，仍未做。
 
 ## P2 单公司 Agent（第 8–11 周）
 
