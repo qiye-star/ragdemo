@@ -37,8 +37,34 @@ def test_quality_dashboard_excludes_rows_computed_after_as_of(
     r = client.get("/api/quality/dashboard", params={"as_of": AS_OF})
     assert r.status_code == 200
     rows = [m for m in r.json()["metrics"] if m["source_id"] == "test-src"]
+    assert rows[0]["metric"] == "parse_success_rate"
     assert len(rows) == 1
     assert rows[0]["value"] == pytest.approx(0.99)
+
+
+@pytest.mark.db
+def test_quality_dashboard_points_carry_their_own_metric_name(
+    client: TestClient, api_db: tuple[str, str]
+) -> None:
+    """回归测试：MetricPoint 曾经没有 metric 字段——dashboard 汇总多个
+    metric 在同一个列表里返回，前端按 metric 分组时把所有点全部归到了
+    同一个 undefined 桶（Task 12 手工验收时抓到的真实 bug）。"""
+    admin_dsn, _ = api_db
+    with psycopg.connect(admin_dsn) as conn:
+        conn.execute(
+            "INSERT INTO quality.quality_metric"
+            " (metric, source_id, partition_date, value, passed, computed_at)"
+            " VALUES ('parse_success_rate', 'a', '2025-06-01', 0.99, true,"
+            "         '2025-06-01T00:00:00+00'),"
+            "        ('table_closure_rate', 'a', '2025-06-01', 0.95, true,"
+            "         '2025-06-01T00:00:00+00')"
+        )
+        conn.commit()
+
+    r = client.get("/api/quality/dashboard", params={"as_of": AS_OF})
+    assert r.status_code == 200
+    by_metric = {m["metric"] for m in r.json()["metrics"] if m["source_id"] == "a"}
+    assert by_metric == {"parse_success_rate", "table_closure_rate"}
 
 
 @pytest.mark.db

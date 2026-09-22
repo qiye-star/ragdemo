@@ -395,6 +395,14 @@ main#view {
   stroke-dasharray: 2 2;
 }
 
+.chart .bar rect {
+  fill: var(--info);
+}
+
+.chart .bar-over rect {
+  fill: var(--fail);
+}
+
 /* 块长度区间条：用小 SVG 画（rect 的 x/width 是元素属性，不是 style
    属性，不受 CSP 的 style-src 限制）——CSS 做不出"宽度随数据连续变化"
    还不碰内联 style 这件事，SVG attribute 可以。 */
@@ -563,4 +571,21 @@ main#view {
 .table-scroll th {
   border: 1px solid var(--border);
   padding: 3px 6px;
+}
+
+/* 质量门禁看板 */
+.chip-btn {
+  font: inherit;
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.chip-btn:hover {
+  background: var(--border);
+  color: var(--text);
 }

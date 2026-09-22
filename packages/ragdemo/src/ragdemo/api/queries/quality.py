@@ -17,6 +17,7 @@ from ragdemo.api.serialize import (
     as_float,
     as_optional_float,
     as_optional_str,
+    as_str,
 )
 
 SOURCE_TABLE = "quality.quality_metric"
@@ -147,11 +148,15 @@ _HISTORY_SQL = """
 """
 
 
-def _row_to_point(row: tuple[object, ...], *, skip_metric_col: bool) -> MetricPoint:
-    # _DASHBOARD_SQL 多带一列 metric（第 0 列），_HISTORY_SQL 已经用
-    # WHERE metric = %(metric)s 固定了指标名，不需要再选出这一列。
-    offset = 1 if skip_metric_col else 0
+def _row_to_point(row: tuple[object, ...], *, has_metric_col: bool) -> MetricPoint:
+    """`_DASHBOARD_SQL` 多带一列 metric（第 0 列）——dashboard 汇总多个
+    metric 在同一个列表里，前端按 metric 分组必须知道每一行是谁的；
+    `_HISTORY_SQL` 已经用 `WHERE metric = %(metric)s` 固定了指标名，
+    调用方从 URL 就知道，不需要每行重复一遍。
+    """
+    offset = 1 if has_metric_col else 0
     return MetricPoint(
+        metric=as_str(row[0]) if has_metric_col else None,
         source_id=as_optional_str(row[offset]),
         partition_date=str(row[offset + 1]),
         value=as_float(row[offset + 2]),
@@ -176,7 +181,7 @@ def get_dashboard(
         source_table=SOURCE_TABLE,
         as_of_filter=AS_OF_FILTER,
         note=NON_ASOF_NOTE,
-        metrics=[_row_to_point(r, skip_metric_col=True) for r in rows],
+        metrics=[_row_to_point(r, has_metric_col=True) for r in rows],
     )
 
 
@@ -197,7 +202,7 @@ def get_metric_history(
         as_of=as_of.isoformat(),
         metric=metric,
         source_id=source_id,
-        points=[_row_to_point(r, skip_metric_col=False) for r in rows],
+        points=[_row_to_point(r, has_metric_col=False) for r in rows],
     )
 
 

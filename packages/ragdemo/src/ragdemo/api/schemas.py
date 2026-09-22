@@ -204,6 +204,12 @@ class MetricSpec(BaseModel):
 
 
 class MetricPoint(BaseModel):
+    # None 用在 /metrics/{metric}/history：那条路由的 URL 本身已经点名
+    # 了 metric，每个点重复带一遍纯属冗余。/quality/dashboard 汇总多个
+    # metric 在同一个列表里，这里必须非 None，否则前端按 metric 分组时
+    # 会把所有点都归到同一个 undefined 桶——这正是一次真实发生过的
+    # bug（web-diagnostic-ui 计划 Task 12 手工验收抓到）。
+    metric: str | None = None
     source_id: str | None
     partition_date: str
     value: float
