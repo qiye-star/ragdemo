@@ -50,6 +50,14 @@ _LEAK_QUERIES: dict[str, str] = {
           JOIN core.doc_block b ON b.block_id = ANY (o.evidence_blocks)
          WHERE b.known_at > o.as_of
     """,
+    # 012_asof_replay_and_publish_invariant.sql 已经把这条加成了 CHECK 约束，
+    # 新写入不可能违反它——这里留着是为了覆盖约束加上之前就存在的历史行
+    # （约束只挡新写入，不会去改存量数据），以及万一约束被后续迁移误删的
+    # 情况。一份公告不可能在发布之前就被知晓（CLAUDE.md §1.1）。
+    "known_at_before_publish_at": """
+        SELECT (SELECT count(*) FROM core.document  WHERE known_at < publish_at)
+             + (SELECT count(*) FROM core.doc_block WHERE known_at < publish_at)
+    """,
 }
 
 

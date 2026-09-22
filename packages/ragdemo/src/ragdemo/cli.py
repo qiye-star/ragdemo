@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
@@ -12,6 +12,8 @@ import psycopg
 
 from ragdemo.evals.cli import eval_group
 from ragdemo.ingest.cli import docs_group
+from ragdemo.quality.metrics import MetricResult, record_metric
+from ragdemo.quality.replay import replay_and_check
 from ragdemo.seed.loader import load_all
 from ragdemo_core.db.invariants import check_point_in_time_leaks, check_schema_invariants
 from ragdemo_core.db.migrate import migrate
@@ -73,3 +75,42 @@ def db_check() -> None:
     if violations or leaks:
         sys.exit(1)
     click.echo("全部检查通过")
+
+
+@db.command("replay-check")
+@click.option(
+    "--partition-date",
+    "partition_date_str",
+    default=None,
+    help="按哪一天的种子抽样（YYYY-MM-DD）；不传则用今天。种子由这个日期派生，"
+    "同一天重跑会抽中完全相同的一批块。",
+)
+def db_replay_check(partition_date_str: str | None) -> None:
+    """时点泄漏抽样重放：200 条历史块 × 三个历史 as_of，比对哈希基线；不一致以非零码退出。
+
+    首次遇到的 (block_id, as_of) 组合直接记基线，不算不一致——"没见过"和
+    "见过但对不上"是两种不同的状态，只有后者才是泄漏信号。
+    """
+    partition_date = date.fromisoformat(partition_date_str) if partition_date_str else date.today()
+    with psycopg.connect(_dsn()) as conn:
+        mismatches = replay_and_check(conn, partition_date)
+        record_metric(
+            conn,
+            partition_date,
+            MetricResult(
+                "asof_replay_mismatch_count",
+                float(len(mismatches)),
+                len(mismatches) == 0,
+                threshold=0.0,
+            ),
+        )
+
+    for m in mismatches:
+        click.echo(
+            f"[时点重放不一致] block_id={m.block_id} as_of={m.as_of.isoformat()} "
+            f"baseline={m.baseline_hash} replayed={m.replayed_hash}",
+            err=True,
+        )
+    if mismatches:
+        sys.exit(1)
+    click.echo("重放全部一致")
