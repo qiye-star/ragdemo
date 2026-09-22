@@ -433,3 +433,63 @@ class CatalogResponse(BaseModel):
     rls_status: list[RlsStatus]
     asof_view_owners: list[AsofViewOwner]
     connection_identity: ConnectionIdentity
+
+
+# --- 检索诊断 -----------------------------------------------------------
+
+
+class ModelsInfo(BaseModel):
+    embedder: str
+    reranker: str
+    embedder_is_mock: bool
+    reranker_is_mock: bool
+    corpus_embedding_versions: list[str]
+    # False 时向量列的排名没有语义意义（当前 embedder 与语料的
+    # embedding_version 对不上，或语料里根本没有向量）——界面必须显式
+    # 标注这件事，不能把噪声当排名端上来（web-diagnostic-ui 计划裁决 5）。
+    vector_path_is_meaningful: bool
+
+
+class RetrievalStatsOut(BaseModel):
+    bm25_hits: int
+    vec_hits: int
+    after_fusion: int
+    after_rerank: int
+    ms_bm25: float
+    ms_vec: float
+    ms_rerank: float
+    ms_total: float
+    degraded: bool
+    rerank_attempted: bool
+
+
+class CoverageInfo(BaseModel):
+    leaf_blocks: int
+    with_embedding: int
+
+
+class RetrievalRow(BaseModel):
+    block_id: int
+    doc_id: int
+    doc_title: str
+    section_path: str
+    page: int | None
+    preview: str
+    bm25_rank: int | None
+    bm25_score: float | None
+    vec_rank: int | None
+    vec_score: float | None
+    fused_rank: int | None
+    fused_score: float | None
+    rerank_rank: int | None
+    rerank_score: float | None
+    final_position: int | None
+
+
+class RetrievalSearchResponse(BaseModel):
+    query: str
+    as_of: str
+    models: ModelsInfo
+    stats: RetrievalStatsOut
+    coverage: CoverageInfo
+    rows: list[RetrievalRow]

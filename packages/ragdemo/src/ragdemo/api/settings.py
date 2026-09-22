@@ -29,6 +29,10 @@ class SettingsError(RuntimeError):
     """诊断接口必填的环境配置缺失或不合法。"""
 
 
+_VALID_RETRIEVAL_MODELS = frozenset({"mock", "siliconflow"})
+DEFAULT_RETRIEVAL_MODELS = "mock"
+
+
 @dataclass(frozen=True)
 class ApiSettings:
     # repr=False：ApiSettings 被打日志或异常回溯捕获时，DSN 里的口令不会
@@ -37,6 +41,13 @@ class ApiSettings:
     dsn: str = field(repr=False)
     set_role: str | None
     web_root: Path | None
+    # 检索诊断视图用哪套嵌入/重排模型。默认 "mock"——见
+    # docs/superpowers/plans/2026-09-22-web-diagnostic-ui.md 裁决 5：
+    # core.doc_block.embedding 全库都是 MockEmbedder 的伪向量，在没有补齐
+    # 评测集基线之前切换默认模型就是 CLAUDE.md §1.4 说的"改模型"，必须先
+    # 跑三套评测集。给个默认值是为了不破坏已经直接构造 ApiSettings(...) 的
+    # 既有测试/夹具，不代表这个字段可以随便传别的值——from_env() 仍然校验它。
+    retrieval_models: str = DEFAULT_RETRIEVAL_MODELS
 
 
 def from_env(env: Mapping[str, str] | None = None) -> ApiSettings:
@@ -70,4 +81,15 @@ def from_env(env: Mapping[str, str] | None = None) -> ApiSettings:
     web_root_raw = (source.get("RAGDEMO_API_WEB_ROOT") or "").strip()
     web_root = Path(web_root_raw) if web_root_raw else DEFAULT_WEB_ROOT
 
-    return ApiSettings(dsn=dsn, set_role=set_role, web_root=web_root)
+    retrieval_models = (source.get("RAGDEMO_API_RETRIEVAL_MODELS") or "").strip() or (
+        DEFAULT_RETRIEVAL_MODELS
+    )
+    if retrieval_models not in _VALID_RETRIEVAL_MODELS:
+        raise SettingsError(
+            f"RAGDEMO_API_RETRIEVAL_MODELS 必须是 {sorted(_VALID_RETRIEVAL_MODELS)} 之一，"
+            f"收到 {retrieval_models!r}"
+        )
+
+    return ApiSettings(
+        dsn=dsn, set_role=set_role, web_root=web_root, retrieval_models=retrieval_models
+    )

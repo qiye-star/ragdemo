@@ -54,6 +54,31 @@ def test_from_env_default_web_root_is_web_directory() -> None:
     assert settings.web_root == Path("web")
 
 
+def test_retrieval_models_defaults_to_mock() -> None:
+    settings = from_env({"RAGDEMO_API_DSN": "postgresql://ragdemo_api@127.0.0.1:5433/ragdemo"})
+    assert settings.retrieval_models == "mock"
+
+
+def test_retrieval_models_reads_from_env() -> None:
+    settings = from_env(
+        {
+            "RAGDEMO_API_DSN": "postgresql://ragdemo_api@127.0.0.1:5433/ragdemo",
+            "RAGDEMO_API_RETRIEVAL_MODELS": "siliconflow",
+        }
+    )
+    assert settings.retrieval_models == "siliconflow"
+
+
+def test_retrieval_models_rejects_unknown_value() -> None:
+    with pytest.raises(SettingsError, match="RAGDEMO_API_RETRIEVAL_MODELS"):
+        from_env(
+            {
+                "RAGDEMO_API_DSN": "postgresql://ragdemo_api@127.0.0.1:5433/ragdemo",
+                "RAGDEMO_API_RETRIEVAL_MODELS": "openai",
+            }
+        )
+
+
 def test_repr_never_contains_password() -> None:
     settings = ApiSettings(
         dsn="postgresql://ragdemo_api:super-secret-password@127.0.0.1:5433/ragdemo",

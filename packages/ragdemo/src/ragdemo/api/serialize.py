@@ -22,6 +22,12 @@ def as_int(value: object) -> int:
     raise TypeError(f"期望 int，收到 {type(value).__name__}: {value!r}")
 
 
+def as_optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return as_int(value)
+
+
 def as_str(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(f"期望 str，收到 {type(value).__name__}: {value!r}")

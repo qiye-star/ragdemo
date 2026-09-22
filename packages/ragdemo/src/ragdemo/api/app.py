@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ragdemo.api.constants import BANNER
 from ragdemo.api.errors import ApiError, ErrorCode
-from ragdemo.api.routers import blocks, documents, isolation, meta, parse_ops, quality
+from ragdemo.api.routers import blocks, documents, isolation, meta, parse_ops, quality, retrieval
 from ragdemo.api.settings import ApiSettings
 
 # Windows 上 mimetypes 靠读注册表判定扩展名，.js 在某些机器上会被映射成
@@ -48,6 +48,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(quality.router, prefix="/api")
     app.include_router(parse_ops.router, prefix="/api")
     app.include_router(isolation.router, prefix="/api")
+    app.include_router(retrieval.router, prefix="/api")
 
     @app.exception_handler(ApiError)
     async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:

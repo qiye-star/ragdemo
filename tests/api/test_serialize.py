@@ -14,6 +14,7 @@ from ragdemo.api.serialize import (
     as_float,
     as_int,
     as_optional_float,
+    as_optional_int,
     as_optional_str,
     as_str,
     as_str_list,
@@ -46,6 +47,11 @@ def test_as_str_rejects_non_str() -> None:
 def test_as_optional_str_passes_through_none() -> None:
     assert as_optional_str(None) is None
     assert as_optional_str("x") == "x"
+
+
+def test_as_optional_int_passes_through_none() -> None:
+    assert as_optional_int(None) is None
+    assert as_optional_int(7) == 7
 
 
 def test_as_bool_rejects_int_that_is_not_bool() -> None:
