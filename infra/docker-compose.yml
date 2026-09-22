@@ -75,10 +75,18 @@ services:
       # CA 卷）。这不是生产形态——生产形态是正向代理 + 导出 CA，走 8080
       # 那一路；见 phase-1b-report.md 里的说明。
       - "127.0.0.1:8081:8081"
+      # SiliconFlow 专用反向代理端口，原样复刻上面 TextIn 那一路——同样
+      # 不是生产形态。addon.py::request() 按 flow.request.pretty_host 查
+      # policy.yaml 白名单；mitmproxy 反向代理模式默认会把出站请求的 Host
+      # 头改写成反代目标（api.siliconflow.cn），而不是保留客户端连接的
+      # 127.0.0.1:8082（除非显式开 keep_host_header，这里没开）。这条链路
+      # 与 TextIn 那条共享同一个前提，已经在这台代理上跑通过。
+      - "127.0.0.1:8082:8082"
     # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
     # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
-    # /policy/addon.py`，这里只追加两个 --mode：显式声明 regular@8080（保留
-    # 原有正向代理行为，其余供应商走这条）与新增的 reverse@8081（TextIn 专用）。
+    # /policy/addon.py`，这里只追加三个 --mode：显式声明 regular@8080（保留
+    # 原有正向代理行为，其余供应商走这条）、reverse@8081（TextIn 专用）与
+    # 新增的 reverse@8082（SiliconFlow 专用）。
     # 踩过的坑：如果在这里把 "mitmdump --set ... -s ..." 又完整写一遍，
     # 会被当成 ENTRYPOINT 后面多出来的参数，mitmdump 把它们全部解读成一个
     # 正则过滤表达式（"Only processing flows that match ..."），代理直接不转发。
@@ -87,6 +95,8 @@ services:
       - regular@8080
       - --mode
       - reverse:https://api.textin.com@8081
+      - --mode
+      - reverse:https://api.siliconflow.cn@8082
     restart: unless-stopped
 
 volumes:

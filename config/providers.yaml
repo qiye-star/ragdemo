@@ -18,3 +18,17 @@ edgar:
     max_attempts: 4
     backoff_base_s: 1.0
   cost_per_call_cents: 0
+
+siliconflow:
+  # 嵌入与重排（adr/0004）。这里的 base_url 是生产域名，仅供文档与限流/
+  # 配额参数的唯一来源用——实际连接地址由 SILICONFLOW_BASE_URL 指向回环
+  # 反向代理（infra/egress-proxy），adapters/siliconflow.py::client_from_config
+  # 用调用方传入的 base_url 覆盖这里的值，密钥只在代理层。
+  base_url: https://api.siliconflow.cn
+  rate_limit_qpm: 1000
+  daily_quota: 20000
+  timeout_s: 60              # 批量嵌入比行情接口慢
+  retry:
+    max_attempts: 4
+    backoff_base_s: 1.0
+  cost_per_call_cents: 0

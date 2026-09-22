@@ -21,6 +21,11 @@ from pathlib import Path
 
 DEFAULT_BLOB_ROOT = "data/blob"
 DEFAULT_MAX_PAGES_PER_RUN = 500
+# docs/06-retrieval.md §5：重排模型定死为 bge-reranker-v2-m3；ADR-0004：
+# 嵌入维度固定 1024，bge-m3 是默认选择（Qwen3-Embedding 经 MRL 降到 1024
+# 后可互换，但换模型是数据回填决定，不是这里该猜的事）。
+DEFAULT_SILICONFLOW_EMBED_MODEL = "BAAI/bge-m3"
+DEFAULT_SILICONFLOW_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
 # 环境变量里"真"的拼写变体。没有出现在这里的一律按 False 处理——
 # 包括空字符串（未设置等价于默认值 False，而不是报错）。
@@ -38,6 +43,9 @@ class RagdemoConfig:
     textin_allow_private: bool
     textin_max_pages_per_run: int
     textin_cost_per_page_cny: Decimal | None
+    siliconflow_base_url: str | None
+    siliconflow_embed_model: str
+    siliconflow_rerank_model: str
 
     def validate(self) -> None:
         if self.textin_max_pages_per_run <= 0:
@@ -65,6 +73,18 @@ class RagdemoConfig:
         if self.textin_cost_per_page_cny is None:
             raise ConfigError("环境变量 TEXTIN_COST_PER_PAGE_CNY 未设置（参见 .env.example）")
         return self.textin_cost_per_page_cny
+
+    def require_siliconflow_base_url(self) -> str:
+        """只有真正要构造 SiliconFlowEmbedder/SiliconFlowReranker 时才调用。
+
+        没有默认值的理由与 `require_textin_base_url` 完全一致：写死一个
+        公网地址会让每一份 clone 默认把查询数据发到境外服务，违反
+        `CLAUDE.md` §0「数据境内存储」。正确值指向回环反向代理
+        （`infra/docker-compose.yml` 的 8082 端口），不是 api.siliconflow.cn 本身。
+        """
+        if not self.siliconflow_base_url:
+            raise ConfigError("环境变量 SILICONFLOW_BASE_URL 未设置（参见 .env.example）")
+        return self.siliconflow_base_url
 
 
 def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
@@ -98,12 +118,23 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
     else:
         textin_cost_per_page_cny = None
 
+    siliconflow_base_url = source.get("SILICONFLOW_BASE_URL") or None
+    siliconflow_embed_model = (
+        source.get("SILICONFLOW_EMBED_MODEL") or DEFAULT_SILICONFLOW_EMBED_MODEL
+    )
+    siliconflow_rerank_model = (
+        source.get("SILICONFLOW_RERANK_MODEL") or DEFAULT_SILICONFLOW_RERANK_MODEL
+    )
+
     cfg = RagdemoConfig(
         blob_root=blob_root,
         textin_base_url=textin_base_url,
         textin_allow_private=textin_allow_private,
         textin_max_pages_per_run=textin_max_pages_per_run,
         textin_cost_per_page_cny=textin_cost_per_page_cny,
+        siliconflow_base_url=siliconflow_base_url,
+        siliconflow_embed_model=siliconflow_embed_model,
+        siliconflow_rerank_model=siliconflow_rerank_model,
     )
     cfg.validate()
     return cfg
