@@ -15,7 +15,12 @@
   依赖边（Dagster 并发执行器会先跑 `block_embeddings`）、`embed_pending_blocks` 的并发
   去重洞（补 `FOR UPDATE OF b SKIP LOCKED`）。A1 的资产计数与实际不符（计划写“五个资产”，
   实际是 4 个文档资产 + 2 个事实资产 = 6 个），已按验收意图核实通过，不影响结论。
-- [ ] B · 来源登记与四条款
+- [x] **B · 来源登记与四条款** —— `bd7d43b`。验收 B1/B2/B5/B6 全过，B3/B4 由新增
+  契约测试覆盖并通过。只登记了 `mock-announcements`（仓库自控的 Mock）；真实来源
+  （`cninfo` 等）留给运维在商务确认四条款后手动登记，不替未拍板的来源编造合规状态——
+  B1 检出的 1 条"未登记"恰好是并发会话用 `cninfo` 写入的历史文档，这是设计的一部分，
+  不是缺陷。额外踩坑并修复：新建的 `core.source_registry` 表需要显式转移属主给
+  `app_owner`（`006_asof_views_and_roles.sql` 的属主转移只扫过当时已存在的表）。
 - [ ] C · 块级元数据补齐
 - [ ] D · 质量指标底座
 - [ ] E · 时点泄漏抽样重放
