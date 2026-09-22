@@ -1,0 +1,523 @@
+/* 内部诊断工具样式表。无预处理器、无框架——变量集中在 :root，
+   深色模式只跟随系统（prefers-color-scheme），不做手动切换按钮。 */
+
+:root {
+  color-scheme: light dark;
+
+  /* 中文字体栈：system-ui 在 Windows 上解析成缺 CJK 的 Segoe UI，
+     显式列出雅黑/苹方/思源双保险。 */
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "微软雅黑",
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC",
+    "WenQuanYi Micro Hei", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "SFMono-Regular", Menlo,
+    "DejaVu Sans Mono", "Microsoft YaHei", monospace;
+
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-2: #f1f2f4;
+  --border: #d8dbe0;
+  --text: #1b1d21;
+  --text-dim: #5c636e;
+
+  --ok: #1f7a4d;
+  --warn: #9a6400;
+  --fail: #b3261e;
+  --info: #1f5fa8;
+
+  --bt-paragraph: #2563a8;
+  --bt-paragraph-fill: #2563a829;
+  --bt-table: #9a5b00;
+  --bt-table-fill: #9a5b0029;
+  --bt-figure: #6b3fa0;
+  --bt-figure-fill: #6b3fa029;
+
+  --band: #1f7a4d1f;
+  --under: #9a6400;
+  --over: #b3261e;
+
+  /* 横幅用暗橙：任何主题下都不像产品主色，一眼就是"这是工具"。 */
+  --banner-bg: #7a2f00;
+  --banner-fg: #fff3e8;
+
+  --radius: 3px;
+  --gap: 8px;
+  --banner-h: 30px;
+  --asof-h: 46px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1b1e24;
+    --surface-2: #23272e;
+    --border: #363b44;
+    --text: #e6e8ec;
+    --text-dim: #9aa2af;
+    --ok: #4fbe86;
+    --warn: #e0a33a;
+    --fail: #f0736a;
+    --info: #6fa8e8;
+    --bt-paragraph: #6fa8e8;
+    --bt-paragraph-fill: #6fa8e833;
+    --bt-table: #e0a33a;
+    --bt-table-fill: #e0a33a33;
+    --bt-figure: #b388e8;
+    --bt-figure-fill: #b388e833;
+    --band: #4fbe8626;
+    --under: #e0a33a;
+    --over: #f0736a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 var(--font-sans);
+  min-width: 1100px;
+}
+
+#banner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: var(--banner-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: var(--banner-bg);
+  color: var(--banner-fg);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+
+#asof-bar {
+  position: sticky;
+  top: var(--banner-h);
+  z-index: 20;
+  height: var(--asof-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+#asof-bar label {
+  font-weight: 600;
+}
+
+#asof-bar input,
+#asof-bar button {
+  font: inherit;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 4px 8px;
+}
+
+#asof-bar button {
+  cursor: pointer;
+}
+
+#asof-bar button:hover {
+  background: var(--border);
+}
+
+#tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+#tabs a {
+  padding: 6px 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-size: 13px;
+}
+
+#tabs a.active {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  margin-bottom: -1px;
+  font-weight: 600;
+}
+
+main#view {
+  padding: 16px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+.loading {
+  color: var(--text-dim);
+  padding: 24px 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px 18px;
+  max-width: 720px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.card pre {
+  background: var(--surface-2);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.card-blocked {
+  border-left: 3px solid var(--info);
+}
+
+.card-empty {
+  border-left: 3px solid var(--text-dim);
+}
+
+.card-error {
+  border-left: 3px solid var(--fail);
+}
+
+.card-error .kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 8px 0;
+}
+
+.card-error dt {
+  color: var(--text-dim);
+}
+
+.card-error .err-msg {
+  color: var(--fail);
+}
+
+.card button {
+  margin-top: 10px;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.card button:hover {
+  background: var(--border);
+}
+
+/* 长中文正文：按原样展示，不做排版加工——这是原文块，不是排版稿。 */
+.content,
+.snip {
+  font-size: 14px;
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  text-align: left;
+}
+
+.content {
+  max-width: 42em;
+}
+
+.snip {
+  display: block;
+  max-width: 48em;
+  max-height: 3.7em;
+  overflow: hidden;
+}
+
+/* 表格：数字列等宽右对齐，表头吸附在时点条下方 */
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.grid-table th {
+  position: sticky;
+  top: calc(var(--banner-h) + var(--asof-h));
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 600;
+  z-index: 10;
+}
+
+.grid-table th,
+.grid-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.grid-table td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.grid-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+/* 通过/未通过：颜色 + 符号 + 文字三重，不靠颜色单通道 */
+.pass::before {
+  content: '✓ ';
+  color: var(--ok);
+}
+
+.fail::before {
+  content: '✗ ';
+  color: var(--fail);
+}
+
+/* 版面还原 */
+.page-canvas {
+  width: 100%;
+  max-height: calc(100vh - 260px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.page-paper {
+  fill: var(--surface);
+  stroke: var(--border);
+}
+
+.blk rect {
+  stroke-width: 1.25;
+  fill-opacity: 0.55;
+}
+
+.blk-paragraph rect {
+  fill: var(--bt-paragraph-fill);
+  stroke: var(--bt-paragraph);
+}
+
+.blk-table rect {
+  fill: var(--bt-table-fill);
+  stroke: var(--bt-table);
+  stroke-dasharray: 4 3;
+}
+
+.blk-figure rect {
+  fill: var(--bt-figure-fill);
+  stroke: var(--bt-figure);
+  stroke-dasharray: 1 3;
+}
+
+.blk:hover rect,
+.blk.pinned rect {
+  stroke-width: 2.5;
+}
+
+.blk-ord {
+  font: 10px var(--font-mono);
+  fill: var(--text-dim);
+}
+
+/* 图表 */
+.chart .grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart .line {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1.75;
+}
+
+.chart .threshold {
+  stroke: var(--warn);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 4;
+}
+
+.chart .threshold-label,
+.chart .tick {
+  font: 10.5px var(--font-mono);
+  fill: var(--text-dim);
+}
+
+.chart .pt-pass circle {
+  fill: var(--ok);
+}
+
+.chart .pt-fail circle {
+  fill: var(--fail);
+  stroke: var(--fail);
+  stroke-width: 2;
+  fill-opacity: 0.35;
+}
+
+.chart .no-sample {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-dasharray: 2 2;
+}
+
+/* 块长度区间条：目标区间底纹用渐变一次画出，不需要额外元素 */
+.len-bar {
+  --min: 200;
+  --max: 400;
+  --scale: 700;
+  position: relative;
+  display: inline-block;
+  width: 110px;
+  height: 14px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.len-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to right,
+    transparent 0 calc(var(--min) / var(--scale) * 100%),
+    var(--band) calc(var(--min) / var(--scale) * 100%) calc(var(--max) / var(--scale) * 100%),
+    transparent calc(var(--max) / var(--scale) * 100%) 100%
+  );
+}
+
+.len-fill {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  height: 6px;
+  background: var(--ok);
+}
+
+.leaf[data-range='under'] .len-fill,
+.leaf[data-range='over'] .len-fill {
+  background: var(--warn);
+}
+
+.leaf[data-range='under'],
+.leaf[data-range='over'] {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.len-bar--na {
+  background: repeating-linear-gradient(45deg, var(--surface-2) 0 4px, transparent 4px 8px);
+}
+
+.len-bar--na::before {
+  content: none;
+}
+
+/* 块树 */
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sec-head {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.crumbs .sep {
+  color: var(--text-dim);
+  margin: 0 4px;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+}
+
+.chip-out {
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+.leaves {
+  list-style: none;
+  margin: 0 0 8px 20px;
+  padding: 0;
+}
+
+.leaf {
+  display: grid;
+  grid-template-columns: 3em 3em 5em 7em 3em 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: var(--radius);
+}
+
+.leaf:hover {
+  background: var(--surface-2);
+}
+
+:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 1px;
+}
+
+@media print {
+  #banner {
+    position: static;
+  }
+
+  #tabs,
+  #asof-apply,
+  button {
+    display: none;
+  }
+}

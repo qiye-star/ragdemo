@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1180">
+<!-- default-src 'none' 让「不依赖 CDN」从约定变成浏览器层面做不到违反；
+     form-action 'none' 让这个页面结构上无法向任何地方提交表单（ADR-0010 推翻条件 1）。
+     这个页面本身也没有一个 <form> 元素——两者互为印证，不是各写各的。 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self';
+               img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<title>内部诊断工具（非产品界面）· ragdemo</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- ADR-0010 后果 2：内部工具一旦好用就会被拿给外人看，固定标识提醒这一点。
+     在 <main> 之外，任何视图重绘都碰不到它——不是靠约定，是靠 DOM 结构。 -->
+<div id="banner" role="note">内部诊断工具，非产品界面 · 只读 · 仅内网 · 不出具任何结论</div>
+
+<header id="asof-bar">
+  <label for="asof-input">as_of</label>
+  <input id="asof-input" type="datetime-local" step="1">
+  <span class="dim">（本地时间，将按 UTC 处理）</span>
+  <button id="asof-apply" type="button">应用时点</button>
+  <code id="asof-echo" class="mono" aria-live="polite">未选择</code>
+</header>
+
+<nav id="tabs" aria-label="视图">
+  <a href="#/docs" data-view="docs">文档</a>
+  <a href="#/layout" data-view="layout">版面还原</a>
+  <a href="#/blocks" data-view="blocks">块树</a>
+  <a href="#/quality" data-view="quality">质量门禁</a>
+  <a href="#/tiers" data-view="tiers">分档与预算</a>
+  <a href="#/isolation" data-view="isolation">权限隔离</a>
+</nav>
+
+<main id="view"></main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
