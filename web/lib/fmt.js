@@ -1,5 +1,7 @@
 // 文本/HTML 处理的小工具，纯函数。
 
+import { el } from './dom.js';
+
 /**
  * 前块后缀 == 后块前缀的最长长度（封顶 cap）。量出的实际值才是
  * "切块参数有没有真的生效"的证据，不写死 chunker.py 的 overlap_chars。
@@ -24,6 +26,16 @@ export function sanitizeTable(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const table = doc.body.querySelector('table');
   return table ? rebuild(table) : null;
+}
+
+/**
+ * `table_html` → 包了 `.table-scroll` 的可读表格，`sanitizeTable` 解析不出
+ * `<table>` 时返回 `null`（调用方据此跳过，不渲染空壳）。抽出来是因为
+ * blocks.js 与 layout.js 的详情面板要渲染同一件事。
+ */
+export function tableBlock(html) {
+  const table = sanitizeTable(html);
+  return table ? el('div', { class: 'table-scroll' }, table) : null;
 }
 
 function rebuild(node) {

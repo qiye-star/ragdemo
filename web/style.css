@@ -392,10 +392,10 @@ main#view {
   color: var(--fail);
 }
 
-/* 版面还原 */
+/* 版面还原——SVG 自带 width/height 属性（renderPage() 里设置），这里不再
+   用 width:100% 撑满容器：那会在 flex 布局的宽矮盒子里把纵向页面压扁，
+   留出大片空白边距。 */
 .page-canvas {
-  width: 100%;
-  max-height: calc(100vh - 260px);
   background: var(--surface);
   border: 1px solid var(--border);
 }
@@ -619,9 +619,34 @@ main#view {
   align-items: flex-start;
 }
 
+/* 版面还原专用——与 .layout-row 分开一个 class 是刻意的：block.js 的
+   块树+详情也用 .layout-row（flex，第一列吃剩余宽度），如果这里直接改
+   .layout-row 成 grid + max-content，块树那栏会被撑到内容的自然宽度
+   （长 section_path、长摘要都能轻易撑爆），而不是像 flex:1 那样让出空间。 */
+.page-row {
+  display: grid;
+  grid-template-columns: max-content minmax(420px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .layout-detail {
   min-width: 280px;
   max-width: 360px;
+}
+
+/* 版面还原的 JSON 面板要比块树的文字详情面板宽得多——单独的宽度规则，
+   靠源码顺序（同优先级选择器，后者胜）覆盖 .layout-detail 的窄上限，
+   不动 blocks.js 那边的既有布局。 */
+.page-detail {
+  min-width: 0;
+  max-width: none;
+}
+
+.json-dump {
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  white-space: pre;
 }
 
 /* 块树视图 */

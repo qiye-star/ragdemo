@@ -7,7 +7,7 @@ import { getJSON } from '../lib/api.js';
 import { el, clear } from '../lib/dom.js';
 import { emptyCard } from '../lib/status.js';
 import { svgEl } from '../lib/svg.js';
-import { overlapLen, sanitizeTable } from '../lib/fmt.js';
+import { overlapLen, tableBlock } from '../lib/fmt.js';
 import { viewLink } from '../lib/state.js';
 
 export const id = 'blocks';
@@ -125,7 +125,7 @@ function parentRow(p) {
   );
 }
 
-async function showLeafDetail(detailEl, block, allLeaves, asOf, signal) {
+async function showLeafDetail(detailEl, block, allLeaves, canShowRaw, asOf, signal) {
   clear(detailEl);
   detailEl.append(el('p', { class: 'dim' }, '加载详情……'));
 
@@ -145,13 +145,19 @@ async function showLeafDetail(detailEl, block, allLeaves, asOf, signal) {
     el('p', { class: 'mono dim' }, full.section_path || '（无章节）')
   );
 
+  // can_show_raw=false：这里此前不管这个标志、无条件把 content 整段吐
+  // 出来——原文能不能展示正是 source_registry.can_show_raw 要管的事，
+  // 版面还原视图加 JSON 面板时一并补上，这里不该继续开着这个洞。
+  if (!canShowRaw) {
+    detailEl.append(
+      el('p', { class: 'dim' }, 'source_registry.can_show_raw = false：原文与相邻重叠对比已隐藏。')
+    );
+    return;
+  }
+
   if (full.table_html) {
-    const table = sanitizeTable(full.table_html);
-    if (table) {
-      const wrap = el('div', { class: 'table-scroll' });
-      wrap.append(table);
-      detailEl.append(el('p', { class: 'dim' }, 'table_html（结构化形态）：'), wrap);
-    }
+    const table = tableBlock(full.table_html);
+    if (table) detailEl.append(el('p', { class: 'dim' }, 'table_html（结构化形态）：'), table);
   }
 
   detailEl.append(el('pre', { class: 'content' }, full.content));
@@ -185,7 +191,10 @@ export async function render(ctx) {
     );
   }
 
-  const body = await getJSON(`/api/documents/${docId}/blocks`, {}, { asOf: ctx.asOf, signal: ctx.signal });
+  const [doc, body] = await Promise.all([
+    getJSON(`/api/documents/${docId}`, {}, { asOf: ctx.asOf, signal: ctx.signal }),
+    getJSON(`/api/documents/${docId}/blocks`, {}, { asOf: ctx.asOf, signal: ctx.signal }),
+  ]);
   if (body.blocks.length === 0) {
     return emptyCard({
       what: `文档 ${docId} 的块`,
@@ -207,7 +216,9 @@ export async function render(ctx) {
     for (const p of g.parents) details.append(parentRow(p));
     const leavesList = el('ul', { class: 'leaves' });
     for (const b of g.leaves) {
-      leavesList.append(leafRow(b, (block) => showLeafDetail(detail, block, allLeaves, ctx.asOf, ctx.signal)));
+      leavesList.append(
+        leafRow(b, (block) => showLeafDetail(detail, block, allLeaves, doc.can_show_raw, ctx.asOf, ctx.signal))
+      );
     }
     details.append(leavesList);
     list.append(el('li', { class: 'sec' }, details));
