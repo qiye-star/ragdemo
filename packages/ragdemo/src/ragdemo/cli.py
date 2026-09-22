@@ -11,6 +11,7 @@ import click
 import psycopg
 
 from ragdemo.evals.cli import eval_group
+from ragdemo.ingest.cli import docs_group
 from ragdemo.seed.loader import load_all
 from ragdemo_core.db.invariants import check_point_in_time_leaks, check_schema_invariants
 from ragdemo_core.db.migrate import migrate
@@ -32,6 +33,7 @@ def main() -> None:
 
 
 main.add_command(eval_group)
+main.add_command(docs_group)
 
 
 @main.group()
