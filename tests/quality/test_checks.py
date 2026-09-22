@@ -1,4 +1,4 @@
-"""文档管线质量门禁：六项检查各自的通过/失败场景 + quality.dashboard 视图。
+"""文档管线质量门禁：八项检查各自的通过/失败场景 + quality.dashboard 视图。
 
 阻断（blocking=True）语义本身——检查失败时 block_embeddings 在同一次 run 里
 不被物化——是 Dagster 的运行时行为，单元测试直接调用检查函数验证不到；
@@ -8,14 +8,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import psycopg
 import pytest
-from dagster import build_op_context
+from dagster import AssetCheckSeverity, build_op_context
 from dagster._core.execution.context.invocation import DirectAssetCheckExecutionContext
 
 from ragdemo.quality.checks import (
+    ingest_latency_check,
+    ingest_reconciliation_check,
     leaf_length_compliance_check,
     orphan_block_check,
     parse_confidence_p50_check,
@@ -360,3 +363,125 @@ def test_dashboard_shows_the_latest_value_when_a_metric_is_recomputed(
         "SELECT count(*) FROM quality.quality_metric WHERE metric = 'parse_success_rate'"
     ).fetchone()  # type: ignore[misc]
     assert history_count == 2, "历史两次都应该保留在 quality_metric 里"
+
+
+# --- ingest_reconciliation_check（阶段 F，第七项）---------------------------
+
+
+def _seed_fetched_count(conn: psycopg.Connection, count: int) -> None:
+    """模拟 doc_normalized 已经为这个分区记过"应到"——见 assets_docs.py 里
+    `doc_normalized` 写 `fetched_count` 那一步。"""
+    conn.execute(
+        "INSERT INTO quality.quality_metric (metric, source_id, partition_date, value, passed) "
+        "VALUES ('fetched_count', 'mock-announcements', %s, %s, true)",
+        (date.fromisoformat(PARTITION_KEY), float(count)),
+    )
+    conn.commit()
+
+
+def _seed_reconcile_document(conn: psycopg.Connection, *, doc_id: int) -> None:
+    """"实到"：一行落进 `core.document`，`source='mock-announcements'`、
+    `publish_at` 落在这个分区的 (since, until] 窗口内——与 `_seed_fetched_
+    count` 记的"应到"比对的就是这张表这个窗口内的行数，不是任何上游资产的
+    Python 返回值。"""
+    conn.execute(
+        "INSERT INTO core.document (doc_id, doc_type, title, publish_at, source,"
+        " content_hash, version_group_id, valid_from, known_at, ingest_run_id) "
+        "OVERRIDING SYSTEM VALUE VALUES (%s,'announcement','t',%s,'mock-announcements',"
+        "%s,%s,'2024-10-28',%s,'r1')",
+        (doc_id, PUBLISH_AT, f"rc-hash-{doc_id}", doc_id, PUBLISH_AT),
+    )
+    conn.commit()
+
+
+@pytest.mark.db
+def test_reconciliation_skips_when_fetched_count_was_never_recorded(
+    conn: psycopg.Connection,
+) -> None:
+    """doc_normalized 还没为这个分区跑过——没有"应到"可比对，不该编造一个
+    数字，直接跳过，不是判定失败。"""
+    result = ingest_reconciliation_check(_check_ctx(), conn)
+
+    assert result.passed is True
+
+
+@pytest.mark.db
+def test_reconciliation_passes_with_no_note_when_counts_match(conn: psycopg.Connection) -> None:
+    _seed_fetched_count(conn, 2)
+    _seed_reconcile_document(conn, doc_id=1)
+    _seed_reconcile_document(conn, doc_id=2)
+
+    result = ingest_reconciliation_check(_check_ctx(), conn)
+
+    assert result.passed is True
+    (note,) = conn.execute(
+        "SELECT note FROM quality.quality_metric WHERE metric = 'reconcile_diff'"
+    ).fetchone()  # type: ignore[misc]
+    assert note is None
+
+
+@pytest.mark.db
+def test_reconciliation_passes_with_an_attributed_note_when_a_document_did_not_land(
+    conn: psycopg.Connection,
+) -> None:
+    """budget 耗尽或 ParseRetryable 都会让落进 core.document 的行数少于
+    doc_normalized 报的"应到"——这是已知、会在下次重跑时自然补齐的情况，
+    check 仍然通过，但必须留下归因。"""
+    _seed_fetched_count(conn, 2)
+    _seed_reconcile_document(conn, doc_id=1)  # 只有一份真正落库
+
+    result = ingest_reconciliation_check(_check_ctx(), conn)
+
+    assert result.passed is True
+    assert result.metadata is not None
+    assert result.metadata["diff"].value == -1  # type: ignore[union-attr]
+    (note,) = conn.execute(
+        "SELECT note FROM quality.quality_metric WHERE metric = 'reconcile_diff'"
+    ).fetchone()  # type: ignore[misc]
+    assert note is not None
+
+
+# --- ingest_latency_check（F6）------------------------------------------------
+
+
+def _seed_document_with_latency(
+    conn: psycopg.Connection, *, doc_id: int, source: str, delay_minutes: float
+) -> None:
+    publish_at = datetime(2024, 10, 28, 10, 0, tzinfo=UTC)
+    conn.execute(
+        "INSERT INTO core.document (doc_id, doc_type, title, publish_at, source,"
+        " content_hash, version_group_id, valid_from, known_at, ingest_run_id, ingested_at) "
+        "OVERRIDING SYSTEM VALUE VALUES (%s,'announcement','t',%s,%s,%s,%s,%s,%s,'r1',%s)",
+        (
+            doc_id,
+            publish_at,
+            source,
+            f"h{doc_id}",
+            doc_id,
+            publish_at.date(),
+            publish_at,
+            publish_at + timedelta(minutes=delay_minutes),
+        ),
+    )
+    conn.commit()
+
+
+@pytest.mark.db
+def test_ingest_latency_check_warns_but_does_not_block_when_slow(
+    conn: psycopg.Connection,
+) -> None:
+    _seed_document_with_latency(conn, doc_id=1, source="mock-announcements", delay_minutes=30)
+
+    result = ingest_latency_check(_check_ctx(), conn)
+
+    assert result.passed is False
+    assert result.severity == AssetCheckSeverity.WARN
+
+
+@pytest.mark.db
+def test_ingest_latency_check_passes_within_threshold(conn: psycopg.Connection) -> None:
+    _seed_document_with_latency(conn, doc_id=1, source="mock-announcements", delay_minutes=5)
+
+    result = ingest_latency_check(_check_ctx(), conn)
+
+    assert result.passed is True

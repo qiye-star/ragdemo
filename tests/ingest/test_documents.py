@@ -184,6 +184,112 @@ def test_reparse_marks_old_blocks_superseded_but_keeps_them(writer: DocumentWrit
     assert old_alive == old_superseded > 0
 
 
+# --- F3：供应商改一个标点重发，判为新版本而不是新文档 -----------------------
+
+
+@pytest.mark.db
+def test_correction_document_is_routed_as_a_new_version_not_a_fresh_document(
+    writer: DocumentWriter,
+) -> None:
+    """MockAnnouncementProvider 第二份文档本就声明 is_correction=True /
+    supersedes="SSE-688256-2024Q3"，内容不同（content_hash 也就不同）——
+    这正是"供应商改一个标点重发"的真实形状，不用另造夹具。"""
+    original, correction = _docs()
+    chunks1, desc1 = _prepare(original)
+    chunks2, desc2 = _prepare(correction)
+    first = writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
+
+    second = writer.write_document(correction, chunks2, desc2)  # type: ignore[arg-type]
+
+    assert second.doc_id != first.doc_id
+    version_group, supersedes, content_hash = writer.conn.execute(
+        "SELECT version_group_id, supersedes_doc_id, content_hash"
+        " FROM core.document WHERE doc_id = %s",
+        (second.doc_id,),
+    ).fetchone()  # type: ignore[misc]
+    (old_content_hash,) = writer.conn.execute(
+        "SELECT content_hash FROM core.document WHERE doc_id = %s", (first.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert version_group == first.doc_id  # 沿用前序文档的 version_group_id
+    assert supersedes == first.doc_id
+    assert content_hash != old_content_hash
+
+    (old_superseded_at,) = writer.conn.execute(
+        "SELECT superseded_at FROM core.document WHERE doc_id = %s", (first.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert old_superseded_at is not None
+
+
+@pytest.mark.db
+def test_correction_uses_the_callers_owner_user_not_the_predecessors(
+    writer: DocumentWriter,
+) -> None:
+    """归属由这次调用的调用方决定，不能被前序文档的归属悄悄覆盖——这里
+    刻意让前序是公共文档、更正是私有文档（与真实场景刚好相反的极端组合），
+    确保没有代码路径把"沿用前序的 owner_user"当成默认值。混淆这两者会让
+    一份该私有的更正文档被写成公共行，这正是 CLAUDE.md §0"用户上传材料
+    私有隔离"要防的事。"""
+    original, correction = _docs()
+    chunks1, desc1 = _prepare(original)
+    chunks2, desc2 = _prepare(correction)
+    # 前序：公共（owner_user=None）
+    writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
+
+    second = writer.write_document(  # type: ignore[arg-type]
+        correction, chunks2, desc2, owner_user="u1"
+    )
+
+    (owner_user,) = writer.conn.execute(
+        "SELECT owner_user FROM core.document WHERE doc_id = %s", (second.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert owner_user == "u1"
+
+
+@pytest.mark.db
+def test_correction_known_at_uses_its_own_publish_at_not_the_predecessors(
+    writer: DocumentWriter,
+) -> None:
+    """与"重解析"（原地换解析结果，known_at 必须沿用旧值）相反：更正公告是
+    真正的新内容，在现实中于一个更晚的时刻才被公开知道——known_at 必须来自
+    这份新文档自己的 publish_at，沿用旧值会让更正后的内容在它实际公开之前
+    就"被知道"，这是本该被阶段 E 的重放检测抓住的同类前视偏差。"""
+    original, correction = _docs()
+    chunks1, desc1 = _prepare(original)
+    chunks2, desc2 = _prepare(correction)
+    first = writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
+    second = writer.write_document(correction, chunks2, desc2)  # type: ignore[arg-type]
+
+    (new_known_at,) = writer.conn.execute(
+        "SELECT known_at FROM core.document WHERE doc_id = %s", (second.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    (old_known_at,) = writer.conn.execute(
+        "SELECT known_at FROM core.document WHERE doc_id = %s", (first.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+
+    assert new_known_at == writer._known_at(correction)  # type: ignore[arg-type]
+    assert new_known_at != old_known_at
+    assert new_known_at > old_known_at
+
+
+@pytest.mark.db
+def test_correction_without_a_findable_predecessor_falls_back_to_a_fresh_document(
+    writer: DocumentWriter,
+) -> None:
+    """前序文档还没入库（跨分区乱序到达）时不能因为"自称是更正"就抛错阻断
+    整个 run——落回当作全新文档处理。"""
+    _original, correction = _docs()
+    chunks, desc = _prepare(correction)
+
+    result = writer.write_document(correction, chunks, desc)  # type: ignore[arg-type]
+
+    version_group, supersedes = writer.conn.execute(
+        "SELECT version_group_id, supersedes_doc_id FROM core.document WHERE doc_id = %s",
+        (result.doc_id,),
+    ).fetchone()  # type: ignore[misc]
+    assert version_group == result.doc_id
+    assert supersedes is None
+
+
 # --- 提交必须真的发生，不能只是"同一个连接自己能看见自己的写入" ------------
 
 

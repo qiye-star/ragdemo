@@ -102,3 +102,44 @@ def test_200_with_invalid_json_raises_upstream_unavailable() -> None:
     with pytest.raises(UpstreamUnavailable) as exc:
         _client(transport).get_json("/x", {})
     assert isinstance(exc.value.__cause__, json.JSONDecodeError)
+
+
+# --- default_headers（阶段 F：EDGAR 需要一个可辨识的 User-Agent）------------
+
+
+def test_default_headers_are_sent_on_every_get_json_call() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(
+        httpx.MockTransport(handler), default_headers={"User-Agent": "ragdemo/1.0 test@x.invalid"}
+    )
+    client.get_json("/x", {})
+
+    assert seen[0].headers["user-agent"] == "ragdemo/1.0 test@x.invalid"
+
+
+def test_default_headers_are_sent_on_get_bytes() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"hello")
+
+    client = _client(
+        httpx.MockTransport(handler), default_headers={"User-Agent": "ragdemo/1.0 test@x.invalid"}
+    )
+    body = client.get_bytes("/x", {})
+
+    assert body == b"hello"
+    assert seen[0].headers["user-agent"] == "ragdemo/1.0 test@x.invalid"
+
+
+def test_no_default_headers_means_no_special_behavior() -> None:
+    """不传 default_headers 时行为必须和修复前完全一致——不能悄悄改变既有客户端。"""
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
+    raw = _client(transport).get_json("/x", {})
+    assert raw.payload == {"ok": True}

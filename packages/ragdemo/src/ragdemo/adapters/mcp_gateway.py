@@ -42,7 +42,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from ragdemo.adapters.base import RawResponse
@@ -122,6 +122,23 @@ def _text_of(result: Mapping[str, Any]) -> str:
         if isinstance(item, Mapping) and item.get("type") == "text"
     ]
     return "".join(parts)
+
+
+@runtime_checkable
+class GatewayClient(Protocol):
+    """`McpGatewayClient` 与 `mock.mcp_gateway.MockMcpGateway` 共同的接口。
+
+    资源注入的调用方（如 `ingest/assets.py::price_normalized`）该按这个
+    Protocol 类型标注，不按 `McpGatewayClient` 这个具体类——Mock 不是它的
+    子类，只是结构相同，与 `parse/textin.py::DocumentParser` 是同一个模式
+    （`TextInParser`/`MockDocumentParser` 也不共享继承关系）。
+    """
+
+    provider: str
+
+    def health(self) -> bool: ...
+    def list_tools(self) -> list[ToolSpec]: ...
+    def call_tool(self, name: str, arguments: Mapping[str, Any]) -> ToolCall: ...
 
 
 class McpGatewayClient:
@@ -259,6 +276,7 @@ def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
 __all__: Sequence[str] = (
     "MCP_ENDPOINT",
     "MCP_PROTOCOL_VERSION",
+    "GatewayClient",
     "McpGatewayClient",
     "McpProtocolError",
     "McpToolFailed",

@@ -105,14 +105,26 @@ class HttpClient:
         daily_quota: int | None = None,
         cost_per_call_cents: Decimal = Decimal(0),
         transport: httpx.BaseTransport | None = None,
+        default_headers: Mapping[str, str] | None = None,
     ) -> None:
+        """`default_headers` 应用到这个客户端发出的**每一个**请求（httpx.Client
+        在构造时合并进底层连接池，不需要每次调用都重复传）。加它的直接
+        动因是 EDGAR：SEC 的 `data.sec.gov` / `www.sec.gov` 对没有可辨识
+        User-Agent 的请求直接回 403（实测确认，不是文档猜测的）——这不是
+        限流也不是配额，重试多少次都一样，之前完全没有代码路径设置过
+        这个头，EDGAR 的两个真实主机此前都连不通。"""
         self.provider = provider
         self.policy = policy
         self.bucket = bucket
         self.daily_quota = daily_quota
         self.cost_per_call_cents = cost_per_call_cents
         self.calls_today = 0
-        self._client = httpx.Client(base_url=base_url, timeout=timeout_s, transport=transport)
+        self._client = httpx.Client(
+            base_url=base_url,
+            timeout=timeout_s,
+            transport=transport,
+            headers=default_headers,
+        )
 
     def get_json(self, endpoint: str, params: Mapping[str, Any]) -> RawResponse:
         if self.daily_quota is not None and self.calls_today >= self.daily_quota:
@@ -146,6 +158,51 @@ class HttpClient:
                         fetched_at=datetime.now(UTC),
                         cost_cents=self.cost_per_call_cents,
                     )
+                if response.status_code not in self.policy.retry_on_status:
+                    raise UpstreamUnavailable(
+                        f"{self.provider} {endpoint} 返回 {response.status_code}（不重试）"
+                    )
+                last_error = _error_for(response)
+
+            if attempt < self.policy.max_attempts:
+                time.sleep(_backoff_seconds(last_error, attempt, self.policy))
+
+        raise UpstreamUnavailable(
+            f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
+        ) from last_error
+
+    def get_bytes(
+        self,
+        endpoint: str,
+        params: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> bytes:
+        """GET 一个非 JSON 的二进制/文本资源（如 EDGAR 的申报全文 HTML）。
+
+        与 `get_json` 共用限流/重试/配额，但不解析响应体——调用方拿到的是
+        原始字节，自己决定怎么存（BlobStore）与怎么解析。不产出 `RawResponse`：
+        `RawResponse.payload` 的既有约定是"可 JSON 序列化的结构化数据"
+        （`ingest/snapshot.py::save_snapshot` 直接 `json.dumps` 它），塞一段
+        任意二进制/HTML 进去会在落 `provider_snapshot` 时破坏这个约定。
+        """
+        if self.daily_quota is not None and self.calls_today >= self.daily_quota:
+            raise QuotaExceeded(f"{self.provider} 已达每日配额 {self.daily_quota}")
+
+        last_error: Exception | None = None
+        for attempt in range(1, self.policy.max_attempts + 1):
+            wait = self.bucket.acquire()
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                response = self._client.get(endpoint, params=dict(params), headers=headers)
+            except httpx.TransportError as exc:
+                last_error = exc
+            else:
+                self.calls_today += 1
+                if response.status_code < 400:
+                    return response.content
                 if response.status_code not in self.policy.retry_on_status:
                     raise UpstreamUnavailable(
                         f"{self.provider} {endpoint} 返回 {response.status_code}（不重试）"

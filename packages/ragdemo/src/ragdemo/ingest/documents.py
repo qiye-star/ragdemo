@@ -123,6 +123,48 @@ class DocumentWriter:
         if existing is not None:
             return DocumentWriteResult(existing, [], skipped=True)
 
+        if doc.is_correction and doc.supersedes_provider_doc_id is not None:
+            # 阶段 F（F3）：供应商把同一份材料改一个标点重发，content_hash 会变，
+            # 上面那次按 content_hash 的存在性检查因此找不到旧行，若不做这一步
+            # 会被当成一份全新、与旧文档毫无关联的文档插入——version_group_id
+            # 各自独立，旧行也不会被标 superseded_at，asof 视图会同时展示两份
+            # "看起来不相关"的文档。NormalizedDocument 早就带着 is_correction /
+            # supersedes_provider_doc_id 这两个字段（normalize() 产出时由供应商
+            # 告知），只是在这次修复之前 DocumentWriter 完全没有读过它们。
+            #
+            # 按 provider_doc_id（存成 core.document.source_ref）找活着的前序
+            # 文档：找不到就说明前序还没入库（比如跨分区乱序到达，或前序被
+            # 这次改动之前的旧代码写漏了）——落回当作全新文档处理，不能因为
+            # "自称是更正"就抛错阻断整个 run（CLAUDE.md §1.6 的增量触发模型下，
+            # 乱序到达是常态）。
+            predecessor_id = self._live_doc_id_by_provider_id(doc.supersedes_provider_doc_id)
+            if predecessor_id is not None:
+                row = self.conn.execute(
+                    "SELECT version_group_id FROM core.document WHERE doc_id = %s",
+                    (predecessor_id,),
+                ).fetchone()
+                assert row is not None
+                (predecessor_version_group_id,) = row
+                self._require_valid(doc, chunks, descriptions)
+                entity_id = self._resolve_entity_id(doc.entity_ref)
+                return self._write_new_version(
+                    doc,
+                    entity_id,
+                    chunks,
+                    descriptions,
+                    supersedes_doc_id=predecessor_id,
+                    known_at=self._known_at(doc),
+                    version_group_id=int(predecessor_version_group_id),
+                    # 用调用方这次传入的 owner_user，不是前序文档存的那个——
+                    # 归属由这次调用的调用方决定（与非更正路径的规则一致），
+                    # 不能被前序文档的归属悄悄覆盖。混淆这两者曾经真实地把
+                    # 一份该私有的更正文档写成了公共行（RLS 隔离测试抓到的
+                    # 回归，见 tests/ingest/test_documents.py 对应用例）。
+                    owner_user=owner_user,
+                    artifacts=artifacts,
+                    chunking_version=chunking_version,
+                )
+
         self._require_valid(doc, chunks, descriptions)
         entity_id = self._resolve_entity_id(doc.entity_ref)
         doc_confidence = score_document(doc)
@@ -196,6 +238,73 @@ class DocumentWriter:
         ).fetchone()
         return int(row[0]) if row is not None else None
 
+    def _live_doc_id_by_provider_id(self, provider_doc_id: str) -> int | None:
+        """按供应商侧文档 ID（存成 source_ref）找活着的行——F3 更正路由用它把
+        "改标点重发"关联回原文档，而不是只看 content_hash。"""
+        row = self.conn.execute(
+            "SELECT doc_id FROM core.document WHERE source = %s AND source_ref = %s"
+            " AND superseded_at IS NULL",
+            (self.source, provider_doc_id),
+        ).fetchone()
+        return int(row[0]) if row is not None else None
+
+    def _write_new_version(
+        self,
+        doc: NormalizedDocument,
+        entity_id: str | None,
+        chunks: list[Chunk],
+        descriptions: Mapping[int, str],
+        *,
+        supersedes_doc_id: int,
+        known_at: datetime,
+        version_group_id: int,
+        owner_user: str | None,
+        artifacts: ParseArtifacts | None,
+        chunking_version: str | None,
+    ) -> DocumentWriteResult:
+        """把前序行标 superseded_at，插入沿用同一 version_group_id 的新行。
+
+        `reparse_document`（换解析器/换参数，known_at 必须沿用旧值——见模块
+        docstring 第 2 点）与 F3 的更正路由（供应商真正重发了新内容，known_at
+        必须是这份新内容自己的发布时刻）共用这段"标旧、插新"的骨架，只是
+        known_at 的取法不同——由调用方决定，这里不替调用方猜。
+        """
+        doc_confidence = score_document(doc)
+        page_confidence = score_pages(doc)
+        with self.conn.transaction():
+            # 先标旧行 superseded_at，再插新行——document_dedup_uk 是只覆盖
+            # superseded_at IS NULL 的部分唯一索引（008_document_dedup_partial.sql）。
+            self.conn.execute(
+                "UPDATE core.document SET superseded_at = now() WHERE doc_id = %s",
+                (supersedes_doc_id,),
+            )
+            self.conn.execute(
+                "UPDATE core.doc_block SET superseded_at = now() WHERE doc_id = %s",
+                (supersedes_doc_id,),
+            )
+            doc_id = self._insert_document(
+                doc,
+                known_at=known_at,
+                entity_id=entity_id,
+                version_group_id=version_group_id,
+                supersedes_doc_id=supersedes_doc_id,
+                artifacts=artifacts,
+                owner_user=owner_user,
+                parse_confidence=doc_confidence,
+            )
+            block_ids = self._insert_blocks(
+                doc,
+                doc_id,
+                entity_id,
+                chunks,
+                descriptions,
+                page_confidence=page_confidence,
+                doc_confidence=doc_confidence,
+                chunking_version=chunking_version,
+            )
+        self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
+        return DocumentWriteResult(doc_id, block_ids, skipped=False)
+
     def reparse_document(
         self,
         doc: NormalizedDocument,
@@ -222,44 +331,18 @@ class DocumentWriter:
             raise ValueError(f"被取代的文档 {supersedes_doc_id} 不存在")
         original_known_at, version_group_id, original_owner_user = row
         entity_id = self._resolve_entity_id(doc.entity_ref)
-        doc_confidence = score_document(doc)
-        page_confidence = score_pages(doc)
-
-        with self.conn.transaction():
-            # 先标旧行 superseded_at，再插新行——document_dedup_uk 是只覆盖
-            # superseded_at IS NULL 的部分唯一索引（008_document_dedup_partial.sql）。
-            # 顺序反过来的话，新行插入那一刻旧行还「活」着，content_hash 相同，
-            # 直接撞唯一索引：重解析永远走不通。
-            self.conn.execute(
-                "UPDATE core.document SET superseded_at = now() WHERE doc_id = %s",
-                (supersedes_doc_id,),
-            )
-            self.conn.execute(
-                "UPDATE core.doc_block SET superseded_at = now() WHERE doc_id = %s",
-                (supersedes_doc_id,),
-            )
-            doc_id = self._insert_document(
-                doc,
-                known_at=original_known_at,
-                entity_id=entity_id,
-                version_group_id=int(version_group_id),
-                supersedes_doc_id=supersedes_doc_id,
-                artifacts=artifacts,
-                owner_user=original_owner_user,
-                parse_confidence=doc_confidence,
-            )
-            block_ids = self._insert_blocks(
-                doc,
-                doc_id,
-                entity_id,
-                chunks,
-                descriptions,
-                page_confidence=page_confidence,
-                doc_confidence=doc_confidence,
-                chunking_version=chunking_version,
-            )
-        self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
-        return DocumentWriteResult(doc_id, block_ids, skipped=False)
+        return self._write_new_version(
+            doc,
+            entity_id,
+            chunks,
+            descriptions,
+            supersedes_doc_id=supersedes_doc_id,
+            known_at=original_known_at,
+            version_group_id=int(version_group_id),
+            owner_user=original_owner_user,
+            artifacts=artifacts,
+            chunking_version=chunking_version,
+        )
 
     # --- 内部 -------------------------------------------------------------
 

@@ -23,9 +23,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,9 @@ import click
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.adapters.base import FetchContext
+from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
+from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.local_manifest import ManifestError, count_pdf_pages, load_documents
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
@@ -428,3 +433,100 @@ def docs_embed(limit: int | None) -> None:
         f"pending={stats.pending} from_cache={stats.from_cache} "
         f"computed={stats.computed} written={stats.written}"
     )
+
+
+# --- docs ingest-edgar（阶段 F：F5，全文抓取此前完全没有代码）----------------
+
+
+def _edgar_user_agent() -> str:
+    ua = os.environ.get("EDGAR_USER_AGENT", "").strip()
+    if not ua:
+        raise click.ClickException(
+            "环境变量 EDGAR_USER_AGENT 未设置。SEC 的公平访问政策要求每个请求带"
+            "能联系到人的 User-Agent（形如 \"组织名 联系邮箱\"），这个值属于部署"
+            "配置（谁在运营这次抓取），不该由代码编造一个假联系方式。"
+        )
+    return ua
+
+
+@docs_group.command("ingest-edgar")
+@click.option("--cik", required=True, type=int, help="SEC 中央索引码，如 1045810（NVIDIA）")
+@click.option("--source", default="edgar", help="写入 core.document.source 的值")
+@click.option("--yes", is_flag=True, default=False, help="真正抓取全文并写库；不传则只 dry run")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="本次最多抓取几份申报的全文；不传则处理命中的全部申报（一家公司可能有"
+    "几十上百份历史申报，回填全部历史时应显式设置这个值，避免一次性发出"
+    "大量请求）",
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def docs_ingest_edgar(
+    cik: int, source: str, yes: bool, limit: int | None, blob_root_opt: Path | None
+) -> None:
+    """按 CIK 拉 EDGAR 申报列表，取全文字节存 blob，写一行 core.document
+    （路径 B，未解析——本命令只证明「原始文档真的能取到、真的能存住」，
+    这两步之后的解析走既有的 `docs ingest`/`docs rechunk` 流程，不在这里
+    重新实现一遍）。
+
+    默认 dry run：只列出命中的申报，不发起任何全文抓取（EDGAR 的全文体积
+    可能有几百 KB 到几 MB，不该在没有 --yes 的情况下悄悄发出去）。
+    """
+    user_agent = _edgar_user_agent()
+    submissions_client = HttpClient(
+        provider="edgar",
+        base_url="https://data.sec.gov",
+        policy=RetryPolicy(max_attempts=3, backoff_base_s=1.0),
+        bucket=TokenBucket(rate_per_minute=60),
+        default_headers={"User-Agent": user_agent},
+    )
+    adapter = EdgarAdapter(client=submissions_client)
+    ctx = FetchContext(ingest_run_id="cli:docs-ingest-edgar", partition_date=date.today())
+    refs = [ref for raw in adapter.fetch(ctx, cik=cik) for ref in adapter.parse_filings(raw)]
+
+    if not yes:
+        click.echo(f"[dry run] CIK {cik} 命中 {len(refs)} 份申报（{sorted(TRACKED_FORMS)}）")
+        for ref in refs:
+            click.echo(f"  - {ref.form_type} {ref.accession} {ref.document_url}")
+        click.echo("[dry run] 未发起任何全文抓取，--yes 才会真正取全文并写库")
+        return
+
+    if limit is not None:
+        refs = refs[:limit]
+
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    archives_client = HttpClient(
+        provider="edgar-archives",
+        base_url="https://www.sec.gov",
+        policy=RetryPolicy(max_attempts=3, backoff_base_s=1.0),
+        bucket=TokenBucket(rate_per_minute=60),
+        default_headers={"User-Agent": user_agent},
+    )
+
+    with psycopg.connect(_dsn()) as conn:
+        writer = DocumentWriter(conn, ingest_run_id="cli:docs-ingest-edgar", source=source)
+        for ref in refs:
+            body = adapter.fetch_full_text(ref, archives_client)
+            blob_key = f"edgar/{ref.cik}/{ref.accession}/{ref.primary_document}"
+            blob.put(blob_key, body)
+            doc = NormalizedDocument(
+                provider_doc_id=ref.accession,
+                entity_ref=str(cik),
+                doc_type=ref.form_type,
+                title=f"{ref.form_type} {ref.accession}",
+                period=None,
+                publish_at=ref.acceptance_datetime,
+                language="en",
+                source_url=ref.document_url,
+                raw_bytes_ref=blob_key,
+                content_hash=hashlib.sha256(body).hexdigest(),
+                is_correction=False,
+                supersedes_provider_doc_id=None,
+                page_count=None,
+                blocks=[],
+            )
+            result = writer.write_document(doc, [], {})
+            status = "跳过(已存在)" if result.skipped else "写入"
+            click.echo(f"{status} doc_id={result.doc_id} {ref.form_type} {ref.accession}")

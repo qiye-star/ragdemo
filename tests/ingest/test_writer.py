@@ -12,6 +12,7 @@ import psycopg
 import pytest
 
 from ragdemo.adapters.base import FactRecord
+from ragdemo.adapters.tushare import PriceRow
 from ragdemo.ingest.writer import (
     OutOfOrderCorrection,
     PointInTimeWriter,
@@ -169,3 +170,77 @@ def test_scale_factor_converts_provider_unit_before_write_and_compare(
     # 而不是因为「1234050000.0 != 123405.0」误判成一次更正。
     repeat = writer.write_fact(_record(raw_yuan_value, datetime(2024, 10, 29, 18, 32, tzinfo=UTC)))
     assert repeat is WriteOutcome.SKIPPED_IDENTICAL
+
+
+# --- write_price（阶段 F：core.price_daily 至今零接入代码）------------------
+
+
+def _price(
+    close: float, known_at: datetime, *, trade_date: date | None = None, ref: str = "688256.SH"
+) -> PriceRow:
+    return PriceRow(
+        entity_ref=ref,
+        trade_date=trade_date or known_at.date(),
+        open=close - 1,
+        high=close + 1,
+        low=close - 2,
+        close=close,
+        pre_close=close - 0.5,
+        volume=1_000_000.0,
+        amount=close * 1_000_000.0,
+        adj_factor=1.0,
+        is_suspended=False,
+        known_at=known_at,
+    )
+
+
+@pytest.mark.db
+def test_first_price_write_inserts(writer: PointInTimeWriter) -> None:
+    outcome = writer.write_price(_price(50.0, datetime(2024, 10, 28, 15, 30, tzinfo=UTC)))
+    assert outcome is WriteOutcome.INSERTED
+    (n,) = writer.conn.execute("SELECT count(*) FROM core.price_daily").fetchone()  # type: ignore[misc]
+    assert n == 1
+
+
+@pytest.mark.db
+def test_identical_price_rewrite_is_skipped_not_duplicated(writer: PointInTimeWriter) -> None:
+    rec = _price(50.0, datetime(2024, 10, 28, 15, 30, tzinfo=UTC))
+    assert writer.write_price(rec) is WriteOutcome.INSERTED
+    assert writer.write_price(rec) is WriteOutcome.SKIPPED_IDENTICAL
+    (n,) = writer.conn.execute("SELECT count(*) FROM core.price_daily").fetchone()  # type: ignore[misc]
+    assert n == 1
+
+
+@pytest.mark.db
+def test_changed_close_triggers_price_correction(writer: PointInTimeWriter) -> None:
+    trade_date = date(2024, 10, 28)
+    first_known_at = datetime(2024, 10, 28, 15, 30, tzinfo=UTC)
+    writer.write_price(_price(50.0, first_known_at, trade_date=trade_date))
+    corrected_at = datetime(2024, 10, 29, 9, 0, tzinfo=UTC)
+    outcome = writer.write_price(_price(51.0, corrected_at, trade_date=trade_date))
+    assert outcome is WriteOutcome.CORRECTED
+
+    rows = writer.conn.execute(
+        "SELECT close, superseded_at FROM core.price_daily ORDER BY known_at"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0][1] == corrected_at
+    assert rows[1][1] is None
+
+
+@pytest.mark.db
+def test_older_known_at_price_is_rejected(writer: PointInTimeWriter) -> None:
+    trade_date = date(2024, 10, 28)
+    later_known_at = datetime(2024, 10, 29, 9, 0, tzinfo=UTC)
+    writer.write_price(_price(51.0, later_known_at, trade_date=trade_date))
+    with pytest.raises(OutOfOrderCorrection):
+        writer.write_price(
+            _price(50.0, datetime(2024, 10, 28, 15, 30, tzinfo=UTC), trade_date=trade_date)
+        )
+
+
+@pytest.mark.db
+def test_write_prices_reports_counts_per_outcome(writer: PointInTimeWriter) -> None:
+    t = datetime(2024, 10, 28, 15, 30, tzinfo=UTC)
+    counts = writer.write_prices([_price(50.0, t), _price(50.0, t)])
+    assert counts == {WriteOutcome.INSERTED: 1, WriteOutcome.SKIPPED_IDENTICAL: 1}

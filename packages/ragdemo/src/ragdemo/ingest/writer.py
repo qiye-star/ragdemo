@@ -19,6 +19,7 @@ from typing import cast
 import psycopg
 
 from ragdemo.adapters.base import FactRecord
+from ragdemo.adapters.tushare import PriceRow
 
 _VALUE_EPSILON = 1e-9
 
@@ -159,5 +160,73 @@ class PointInTimeWriter:
         counts: dict[WriteOutcome, int] = {}
         for record in records:
             outcome = self.write_fact(record)
+            counts[outcome] = counts.get(outcome, 0) + 1
+        return counts
+
+    # --- 行情（阶段 F：F4，core.price_daily 至今零接入代码）-------------------
+
+    def write_price(self, record: PriceRow) -> WriteOutcome:
+        """与 write_fact 同一套时点写入规则，只是键从 (entity_id, metric_id,
+        period) 换成 (entity_id, trade_date)——core.price_daily 没有
+        metric_source_map 那一层供应商字段映射，行情的字段名在 schema 里
+        是固定的，不需要换算量纲。"""
+        entity_id = self._entity_id(record.entity_ref)
+
+        with self.conn.transaction():
+            live = self.conn.execute(
+                "SELECT close, known_at FROM core.price_daily"
+                " WHERE entity_id = %s AND trade_date = %s AND superseded_at IS NULL FOR UPDATE",
+                (entity_id, record.trade_date),
+            ).fetchone()
+
+            if live is not None:
+                existing_close = cast(Decimal, live[0])
+                existing_known_at = cast(datetime, live[1])
+                if record.known_at < existing_known_at:
+                    raise OutOfOrderCorrection(
+                        f"{entity_id}/{record.trade_date}: 新数据 known_at "
+                        f"{record.known_at} 早于现有 {existing_known_at}"
+                    )
+                if abs(float(existing_close) - record.close) < _VALUE_EPSILON:
+                    return WriteOutcome.SKIPPED_IDENTICAL
+                self.conn.execute(
+                    "UPDATE core.price_daily SET superseded_at = %s"
+                    " WHERE entity_id = %s AND trade_date = %s AND superseded_at IS NULL",
+                    (record.known_at, entity_id, record.trade_date),
+                )
+                outcome = WriteOutcome.CORRECTED
+            else:
+                outcome = WriteOutcome.INSERTED
+
+            self.conn.execute(
+                "INSERT INTO core.price_daily (entity_id, trade_date, open, high, low,"
+                " close, pre_close, volume, amount, adj_factor, is_suspended, valid_from,"
+                " known_at, source, source_ref, ingest_run_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    entity_id,
+                    record.trade_date,
+                    record.open,
+                    record.high,
+                    record.low,
+                    record.close,
+                    record.pre_close,
+                    record.volume,
+                    record.amount,
+                    record.adj_factor,
+                    record.is_suspended,
+                    record.trade_date,
+                    record.known_at,
+                    self.source,
+                    f"{record.entity_ref}:{record.trade_date.isoformat()}",
+                    self.ingest_run_id,
+                ),
+            )
+        return outcome
+
+    def write_prices(self, records: Iterable[PriceRow]) -> dict[WriteOutcome, int]:
+        counts: dict[WriteOutcome, int] = {}
+        for record in records:
+            outcome = self.write_price(record)
             counts[outcome] = counts.get(outcome, 0) + 1
         return counts

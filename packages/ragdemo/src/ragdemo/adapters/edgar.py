@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from ragdemo.adapters.base import FetchContext, RawResponse, require_aware
@@ -111,6 +112,25 @@ class EdgarAdapter:
                 acceptance_datetime=_parse_acceptance(row["acceptanceDateTime"]),
                 primary_document=str(row["primaryDocument"]),
             )
+
+    def fetch_full_text(self, ref: FilingRef, client: HttpClient) -> bytes:
+        """按 `FilingRef.document_url` 拉取申报全文字节（阶段 F：F5——此前只有
+        `document_url` 这个 URL 构造属性，没有任何代码真的去取全文）。
+
+        `client` 必须指向 `www.sec.gov`（`infra/egress-proxy/policy.yaml` 里
+        与取申报列表用的 `data.sec.gov` 是两条独立的出网白名单，见模块顶部
+        `ARCHIVES` 常量），不复用 `self._client`——那个连接的 `base_url` 是
+        `data.sec.gov`，两个不同主机不能共用同一个 `HttpClient` 实例
+        （httpx.Client 的 base_url 在构造时固定）。
+
+        `client` 必须带上 SEC 要求的 User-Agent（`HttpClient(..., default_
+        headers={"User-Agent": ...})`，见 http.py）——实测确认 `www.sec.gov`
+        与 `data.sec.gov` 对没有可辨识 UA 的请求一律回 403，不区分是取申报
+        列表还是取全文，这不是这个方法独有的要求，因此放在 `HttpClient` 构造
+        时统一配置，不在每次调用时单独传。
+        """
+        path = urlparse(ref.document_url).path
+        return client.get_bytes(path, {})
 
 
 def _rows(payload: Any) -> list[dict[str, Any]]:  # noqa: ANN401

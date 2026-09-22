@@ -44,14 +44,19 @@ def _xparse_payload() -> dict[str, Any]:
     return cast("dict[str, Any]", json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8")))
 
 
-def _normalized(ctx: Any) -> list[NormalizedDocument]:  # noqa: ANN401
+def _normalized(ctx: Any, conn: psycopg.Connection) -> list[NormalizedDocument]:  # noqa: ANN401
     """`doc_normalized` 是 `@asset` 装饰的函数：Dagster 的 `AssetsDefinition.__call__`
     对直接调用一律标注返回 `object`（不看被装饰函数的真实签名，见
     `dagster._core.definitions.assets.definition.assets_definition.AssetsDefinition.__call__`）。
     这里把结果转回调用方实际拿到的类型，不是加宽被测代码的类型。`ctx` 标 `Any` 是
     因为 `build_asset_context()` 返回的 `DirectAssetExecutionContext` 不在 dagster
-    顶层导出里，没有必要为一个测试内部小工具去引用它的私有模块路径。"""
-    return cast("list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider()))
+    顶层导出里，没有必要为一个测试内部小工具去引用它的私有模块路径。
+
+    `conn` 是阶段 F 加的参数：`doc_normalized` 把"应到"落一行
+    `quality_metric.fetched_count`，供 `ingest_reconciliation_check` 读回。"""
+    return cast(
+        "list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider(), conn)
+    )
 
 
 def _path_b_docs(blob: LocalBlobStore, *, count: int = 1) -> list[NormalizedDocument]:
@@ -112,7 +117,7 @@ def conn(temp_db: str) -> psycopg.Connection:
 @pytest.mark.db
 def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = _normalized(ctx)
+    docs = _normalized(ctx, conn)
     prepared = prepare_documents(
         docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
     )
@@ -135,7 +140,7 @@ def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path:
 @pytest.mark.db
 def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = _normalized(ctx)
+    docs = _normalized(ctx, conn)
     blob = LocalBlobStore(tmp_path)
     prepared = prepare_documents(
         docs, MockDocumentParser(), blob, PageBudget(1000), owner_user=None
@@ -184,7 +189,8 @@ def test_parse_artifact_refs_land_in_the_document_row(
         assert json_ref is not None and md_ref is not None
 
 
-def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
+@pytest.mark.db
+def test_path_a_documents_are_not_re_parsed(conn: psycopg.Connection, tmp_path: Path) -> None:
     """供应商已经给了结构化块，再送去解析既花钱又不如原件准（05 §1）。"""
 
     class Exploding(MockDocumentParser):
@@ -192,7 +198,7 @@ def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
             raise AssertionError("路径 A 的文档不应该被解析")
 
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = [d for d in _normalized(ctx) if d.blocks]
+    docs = [d for d in _normalized(ctx, conn) if d.blocks]
     prepared = prepare_documents(
         docs, Exploding(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
     )

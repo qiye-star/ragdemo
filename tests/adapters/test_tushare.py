@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from ragdemo.adapters.base import Adapter, FactRecord, FetchContext, RawResponse
+from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
 from ragdemo.adapters.tushare import TushareAdapter
 from tests.contracts.adapter_contract import AdapterContract
 
@@ -111,3 +112,83 @@ def test_valid_from_is_quarter_start_approximation() -> None:
     assert cam.period_end == date(2024, 9, 30)
     assert cam.valid_from == date(2024, 9, 30) - timedelta(days=89)
     assert cam.valid_from == date(2024, 7, 3)
+
+
+# --- fetch_daily（阶段 F：经 MCP 网关取行情）---------------------------------
+
+
+def test_fetch_daily_without_watermark_uses_a_single_trade_date() -> None:
+    """没有增量游标时退化为只拉 partition_date 当天——与既有全量拉取行为一致。"""
+    gateway = MockMcpGateway(
+        responses={"daily": [{"ts_code": "688256.SH", "trade_date": "20241028", "close": 50.0}]}
+    )
+    ctx = FetchContext(ingest_run_id="r1", partition_date=date(2024, 10, 28))
+
+    responses = list(TushareAdapter().fetch_daily(ctx, gateway, ts_code="688256.SH"))
+
+    assert gateway.calls == [("daily", {"ts_code": "688256.SH", "trade_date": "20241028"})]
+    assert len(responses) == 1
+    expected = [{"ts_code": "688256.SH", "trade_date": "20241028", "close": 50.0}]
+    assert responses[0].payload == expected
+
+
+def test_fetch_daily_with_a_stale_watermark_pulls_the_gap_since_the_day_after_it() -> None:
+    """F2：watermark 是"已确认处理到哪天"，区间从它的次日开始，不是它本身——
+    否则 watermark 当天的数据会被重复拉一遍。"""
+    gateway = MockMcpGateway(responses={"daily": []})
+    ctx = FetchContext(
+        ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241025"
+    )
+
+    list(TushareAdapter().fetch_daily(ctx, gateway, ts_code="688256.SH"))
+
+    assert gateway.calls == [
+        ("daily", {"ts_code": "688256.SH", "start_date": "20241026", "end_date": "20241028"})
+    ]
+
+
+def test_fetch_daily_with_a_watermark_already_covering_this_partition_pulls_nothing() -> None:
+    """F2 的核心场景：同一分区重跑，watermark 已经等于 partition_date——
+    区间为空，不必也不应该再调一次网关，拉取的记录数应显著少于第一次
+    （这里是 0）。"""
+    gateway = MockMcpGateway(responses={"daily": [{"ts_code": "688256.SH", "close": 1.0}]})
+    ctx = FetchContext(
+        ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241028"
+    )
+
+    responses = list(TushareAdapter().fetch_daily(ctx, gateway, ts_code="688256.SH"))
+
+    assert responses == []
+    assert gateway.calls == []
+
+
+def test_fetch_daily_result_feeds_parse_prices_directly() -> None:
+    """网关的 daily 工具直接返回展开过的行字典列表（真实网关实测确认，不是
+    Tushare REST 那种 fields/items 列式结构）——_rows() 原样透传，parse_prices()
+    不需要额外适配。"""
+    gateway = MockMcpGateway(
+        responses={
+            "daily": [
+                {
+                    "ts_code": "688256.SH",
+                    "trade_date": "20241028",
+                    "open": 49.0,
+                    "high": 51.0,
+                    "low": 48.5,
+                    "close": 50.0,
+                    "pre_close": 49.5,
+                    "vol": 1000.0,
+                    "amount": 50000.0,
+                }
+            ]
+        }
+    )
+    ctx = FetchContext(ingest_run_id="r1", partition_date=date(2024, 10, 28))
+    adapter = TushareAdapter()
+
+    (raw,) = list(adapter.fetch_daily(ctx, gateway, ts_code="688256.SH"))
+    (row,) = list(adapter.parse_prices(raw))
+
+    assert row.entity_ref == "688256.SH"
+    assert row.close == 50.0
+    assert row.adj_factor == 1.0  # daily 工具不带这个字段，parse_prices 兜底

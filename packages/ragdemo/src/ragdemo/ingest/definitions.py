@@ -33,12 +33,19 @@ from dagster import (
 )
 
 from ragdemo.adapters.announcements import AnnouncementProvider
+from ragdemo.adapters.mcp_gateway import GatewayClient, gateway_client_from_env
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.adapters.mock.facts import MockFactAdapter
+from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
 from ragdemo.config import load_config
 from ragdemo.embed.base import Embedder
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.ingest.assets import fact_normalized, fin_fact_loaded
+from ragdemo.ingest.assets import (
+    fact_normalized,
+    fin_fact_loaded,
+    price_daily_loaded,
+    price_normalized,
+)
 from ragdemo.ingest.assets_docs import (
     block_embeddings,
     doc_blocks_loaded,
@@ -75,8 +82,31 @@ def document_writer_resource(_context: InitResourceContext) -> DocumentWriter:
 @resource
 def conn_resource(_context: InitResourceContext) -> psycopg.Connection:
     """`block_embeddings` 直接用它查待办队列、写 embedding 列——与
-    `document_writer_resource` 是两条独立的连接，互不影响各自的事务边界。"""
+    `document_writer_resource` 是两条独立的连接，互不影响各自的事务边界。
+    `price_normalized` / `price_daily_loaded`（阶段 F）复用同一个资源读写
+    `core.ingest_watermark`，不需要再开一条独立连接。"""
     return _conn()
+
+
+@resource
+def tushare_writer_resource(_context: InitResourceContext) -> PointInTimeWriter:
+    """阶段 F：`source="tushare"`，与 `writer_resource`（`source="mock"`，
+    服务 `MockFactAdapter` 那条既有的事实管线）是两个独立的写入器——行情
+    真的来自 Tushare（经 MCP 网关），把它标成 "mock" 会违反 CLAUDE.md §1.3
+    「每个事实都必须携带来源标识」。"""
+    return PointInTimeWriter(_conn(), ingest_run_id="dagster", source="tushare")
+
+
+@resource
+def gateway_resource(_context: InitResourceContext) -> GatewayClient:
+    """按 `RAGDEMO_MCP_GATEWAY_URL` 是否设置选择真实网关客户端还是 Mock——
+    与 `parser_resource` 判断 `TEXTIN_BASE_URL` 同一套规则，不重新发明一套
+    开关。地址缺失时退回 Mock：本地开发与测试都不该被逼着配一个真实网关
+    地址（网关地址属于部署配置，见 adapters/mcp_gateway.py 的
+    `gateway_client_from_env` docstring）。"""
+    if not os.environ.get("RAGDEMO_MCP_GATEWAY_URL", "").strip():
+        return MockMcpGateway()
+    return gateway_client_from_env()
 
 
 @resource
@@ -157,6 +187,8 @@ defs = Definitions(
         doc_prepared,
         doc_blocks_loaded,
         block_embeddings,
+        price_normalized,
+        price_daily_loaded,
     ],
     asset_checks=list(ALL_CHECKS),
     jobs=[_document_reaction_job],
@@ -170,5 +202,7 @@ defs = Definitions(
         "document_writer": document_writer_resource,
         "embedder": embedder_resource,
         "conn": conn_resource,
+        "tushare_writer": tushare_writer_resource,
+        "gateway": gateway_resource,
     },
 )

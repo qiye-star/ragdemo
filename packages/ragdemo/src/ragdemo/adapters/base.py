@@ -31,16 +31,31 @@ def reject_future(value: datetime, field_name: str) -> datetime:
 
 @dataclass(frozen=True)
 class FetchContext:
-    """一次拉取的上下文。ingest_run_id 贯穿整条链路进入每一行数据。"""
+    """一次拉取的上下文。ingest_run_id 贯穿整条链路进入每一行数据。
+
+    `watermark` 是可选的增量游标（阶段 F，core.ingest_watermark），含义由
+    各适配器自己定义——可以是供应商的分页 token，也可以是"已处理到的最大
+    trade_date"。不是每个适配器都要用它：不使用时行为等价于按
+    partition_date 全量拉，这个字段只是提供一个可选的增量入口。
+    """
 
     ingest_run_id: str
     partition_date: date
     dry_run: bool = False
+    watermark: str | None = None
 
 
 @dataclass(frozen=True)
 class RawResponse:
-    """原始响应。入库 provider_snapshot 之后才进入解析。"""
+    """原始响应。入库 provider_snapshot 之后才进入解析。
+
+    `external_id` / `publish_time` / `checksum` 是阶段 F 补的三个可选字段，
+    供需要在"原始响应"这一层（早于 NormalizedDocument 的归一化）就能对账
+    与识别"这是不是同一份材料换了个标点重发"的适配器使用——不是每个适配器
+    都要填：公告类来源用 NormalizedDocument.provider_doc_id /
+    supersedes_provider_doc_id 已经能表达同一件事（见 DocumentWriter 阶段 F
+    的更正路由），这三个字段主要服务尚无归一化模型的数据（如行情、事实）。
+    """
 
     provider: str
     endpoint: str
@@ -49,9 +64,14 @@ class RawResponse:
     http_status: int
     fetched_at: datetime
     cost_cents: Decimal | None = None
+    external_id: str | None = None
+    publish_time: datetime | None = None
+    checksum: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.fetched_at, "fetched_at")
+        if self.publish_time is not None:
+            require_aware(self.publish_time, "publish_time")
 
 
 @dataclass(frozen=True)

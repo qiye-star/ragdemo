@@ -6,11 +6,12 @@
 在同一次 run 里不会被物化：Dagster 的 blocking asset check 语义就是
 "这一步失败，下游在本次 run 里不跑"。
 
-七项里六项在这里实现；"每源应到/实到对账"（`doc_normalized` 上的检查）
-留给阶段 F——它依赖 `core.ingest_watermark`/供应商"应到条数"这类阶段 F
-才会引入的数据，在阶段 D 就做这一项只能编造一个假的"应到"数字，不如
-明确留白（计划里 D 和 F 的先后顺序标注为"D 在 E/F 之前"，但这一条具体检查
-的数据依赖决定它必须等 F）。
+八项里六项在这里实现；第七、八项由阶段 F 补上——"每源应到/实到对账"
+（`ingest_reconciliation_check`）与"接入延迟"（`ingest_latency_check`），
+都依赖 `core.ingest_watermark`/`quality_metric.fetched_count` 这类阶段 F
+才会引入的数据，在阶段 D 就做这两项只能编造假数字，不如明确留白到 F
+（计划里 D 和 F 的先后顺序标注为"D 在 E/F 之前"，但这两条具体检查的数据
+依赖决定它们必须等 F）。
 
 本文件刻意不用 `from __future__ import annotations`：与 `assets_docs.py`
 同样的原因——Dagster 在装饰期对 `context` 参数做类型校验时直接比较
@@ -28,8 +29,9 @@ from dagster import (
     asset_check,
 )
 
-from ragdemo.ingest.assets_docs import block_embeddings, doc_blocks_loaded
+from ragdemo.ingest.assets_docs import block_embeddings, doc_blocks_loaded, doc_normalized
 from ragdemo.ingest.partitions import partition_window
+from ragdemo.ingest.reconcile import compute_ingest_latency, reconcile_counts
 from ragdemo.parse.confidence import table_looks_closed
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.quality.metrics import MetricResult, record_metric
@@ -224,6 +226,109 @@ def vector_coverage_check(
     )
 
 
+_RECONCILE_SOURCE_ID = "mock-announcements"  # 与 document_writer_resource 同一个来源
+
+
+@asset_check(asset=doc_blocks_loaded, blocking=True)
+def ingest_reconciliation_check(
+    context: AssetCheckExecutionContext, conn: ResourceParam[psycopg.Connection]
+) -> AssetCheckResult:
+    """第七项质量门禁：应到（`doc_normalized` 拉到的文档数）vs 实到
+    （这个分区窗口内真正落进 `core.document` 的行数）——阶段 D 留白到这里
+    的那一项（见模块 docstring）。
+
+    两个数字都只读 Postgres，不消费任何上游资产的 Python 返回值——与其余
+    七项检查完全同构。最初的版本让这个检查挂在 `doc_prepared` 上，直接把
+    `doc_prepared: list[PreparedDocument]` 当函数参数（读上游资产的物化
+    结果），在真实 Dagster 物化时稳定复现同一个错误：不管是自动按参数名
+    注入被检查资产本身，还是用 `additional_ins=AssetIn(partition_mapping=
+    IdentityPartitionMapping())` 显式声明额外的上游依赖，Dagster 都会去
+    加载 partitions_def 里"哪个分区排第一"（这里是 2022-01-01）而不是这次
+    实际物化的分区，那个分区从未跑过，直接 FileNotFoundError 崩溃——本
+    仓库其余七项检查没有一个消费过被检查资产或其上游的 Python 返回值，
+    全部只读 Postgres，这不是偶然，是同一个坑的前车之鉴。改成落在
+    `doc_blocks_loaded` 上、"实到"也现查 `core.document`，问题消失。
+
+    `prepare_documents`（ingest/assets_docs.py）有两条会让"实到"少于"应到"
+    的分支，都是刻意设计成"这次先跳过、留给下次分区重跑"，不是数据丢失：
+    `PageBudget` 耗尽时提前 break；单份文档遇到 `ParseRetryable`（供应商侧
+    临时故障）时 continue、不留任何记号。两者都会在下一次同分区重跑时自然
+    补齐（前者见 `MAX_PAGES_PER_PREPARE_RUN` 的注释，后者见
+    `prepare_documents` 对应分支的注释），因此这里给出的 note 不是猜测，
+    是这两条分支的既有约定——差异不代表数据永久丢失，只代表"还没轮到"。
+    """
+    row = conn.execute(
+        "SELECT value FROM quality.quality_metric"
+        " WHERE metric = 'fetched_count' AND source_id = %s AND partition_date = %s"
+        " ORDER BY computed_at DESC LIMIT 1",
+        (_RECONCILE_SOURCE_ID, _partition_date(context)),
+    ).fetchone()
+    # doc_normalized 还没为这个分区跑过（比如这个检查被单独物化）——没有
+    # "应到"可比对，不该编造一个数字，直接跳过对账，不是判定失败。
+    if row is None:
+        return AssetCheckResult(passed=True, metadata={"skipped": "no fetched_count yet"})
+    expected = int(row[0])
+    since, until = partition_window(context)
+    (actual,) = conn.execute(
+        "SELECT count(*) FROM core.document"
+        " WHERE source = %s AND publish_at > %s AND publish_at <= %s",
+        (_RECONCILE_SOURCE_ID, since, until),
+    ).fetchone()  # type: ignore[misc]
+    note = (
+        None
+        if actual == expected
+        else "prepare_documents 未覆盖全部输入（PageBudget 耗尽或遇到可重试解析"
+        "失败），差额会在下次同分区重跑时自然补齐，不是数据丢失"
+    )
+    result = reconcile_counts(
+        conn,
+        _partition_date(context),
+        _RECONCILE_SOURCE_ID,
+        expected=expected,
+        actual=actual,
+        note=note,
+    )
+    return AssetCheckResult(
+        passed=result.passed,
+        metadata={"expected": expected, "actual": actual, "diff": actual - expected},
+        severity=AssetCheckSeverity.ERROR,
+    )
+
+
+ANNOUNCEMENT_LATENCY_P95_THRESHOLD_MINUTES = 15.0  # 方案 §2.2：公告源合理，其余源不套用这个数字
+
+
+@asset_check(asset=doc_normalized, blocking=False)
+def ingest_latency_check(
+    context: AssetCheckExecutionContext, conn: ResourceParam[psycopg.Connection]
+) -> AssetCheckResult:
+    """接入延迟（F6）：只给已知会接近实时披露的公告源（`mock-announcements`）
+    设 15 分钟的 P95 阻断阈值——告警级别，不阻断下游物化，因为延迟高不代表
+    这批数据不能用，只代表值得关注（与 `parse_confidence_p50_check` 同一个
+    严重级别选择理由）。EDGAR 这类日频源不经这个检查：它的"新鲜度"概念
+    与公告完全不同，套用同一个阈值只会让指标永远红着然后被忽略（阶段 F
+    引言原话）——真正需要按源分别设阈值时，直接调 `compute_ingest_latency`
+    并传各自的 `p95_threshold_minutes`，不在这一个检查函数里堆条件分支。
+    """
+    since, until = partition_window(context)
+    result = compute_ingest_latency(
+        conn,
+        _partition_date(context),
+        _RECONCILE_SOURCE_ID,
+        since,
+        until,
+        p95_threshold_minutes=ANNOUNCEMENT_LATENCY_P95_THRESHOLD_MINUTES,
+    )
+    return AssetCheckResult(
+        passed=result.passed,
+        metadata={
+            "p95_minutes": result.value,
+            "threshold_minutes": ANNOUNCEMENT_LATENCY_P95_THRESHOLD_MINUTES,
+        },
+        severity=AssetCheckSeverity.WARN,
+    )
+
+
 ALL_CHECKS = (
     parse_success_rate_check,
     table_closure_rate_check,
@@ -231,4 +336,6 @@ ALL_CHECKS = (
     orphan_block_check,
     leaf_length_compliance_check,
     vector_coverage_check,
+    ingest_reconciliation_check,
+    ingest_latency_check,
 )

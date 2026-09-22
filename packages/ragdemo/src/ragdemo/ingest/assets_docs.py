@@ -48,6 +48,7 @@ from ragdemo.parse.textin import (
     PrivateDocumentEgressBlocked,
 )
 from ragdemo.parse.tree import build_tree
+from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo_core.blob import BlobNotFound, BlobStore
 
 # block_embeddings 每次 run 的上限。不传 limit 的话 embed_pending_blocks 会
@@ -198,7 +199,9 @@ def prepare_documents(
 
 @asset(partitions_def=DAILY, group_name="documents")
 def doc_normalized(
-    context: AssetExecutionContext, announcements: ResourceParam[AnnouncementProvider]
+    context: AssetExecutionContext,
+    announcements: ResourceParam[AnnouncementProvider],
+    conn: ResourceParam[psycopg.Connection],
 ) -> list[NormalizedDocument]:
     partition = date.fromisoformat(context.partition_key)
     fetch_ctx = FetchContext(
@@ -209,6 +212,20 @@ def doc_normalized(
         announcements.normalize(raw)
         for raw in announcements.list_documents(fetch_ctx, since=since, until=until)
     ]
+    # 阶段 F：把"应到"这个数字落一份到 quality_metric，供
+    # quality/checks.py::ingest_reconciliation_check 读回比对。不经 Dagster
+    # 的资产间依赖（额外 additional_ins + IdentityPartitionMapping 在真实
+    # 物化时踩过坑：Dagster 会把它解读成"这个检查依赖 doc_normalized 的
+    # 全部历史分区"，回填过的分区之外全部 FileNotFoundError）——落一行到
+    # Postgres，检查按 (source_id, partition_date) 读回，和其余七项检查
+    # 读 Postgres 而不读上游资产返回值的方式完全一致。
+    record_metric(
+        conn,
+        partition,
+        MetricResult(
+            "fetched_count", float(len(docs)), True, source_id=announcements.provider
+        ),
+    )
     context.log.info(
         "normalized documents",
         extra={
