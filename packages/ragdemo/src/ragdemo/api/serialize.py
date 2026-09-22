@@ -64,6 +64,12 @@ def as_datetime(value: object) -> datetime:
     return value
 
 
+def as_optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    return as_datetime(value)
+
+
 def as_bbox(value: object) -> tuple[tuple[float, float, float, float] | None, bool]:
     """返回 `(bbox 或 None, malformed)`。
 

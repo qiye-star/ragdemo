@@ -22,7 +22,11 @@
   <input id="asof-input" type="datetime-local" step="1">
   <span class="dim">（本地时间，将按 UTC 处理）</span>
   <button id="asof-apply" type="button">应用时点</button>
+  <button type="button" data-preset="now">现在</button>
+  <button id="asof-jump-earliest" type="button" data-preset="earliest" hidden>跳到最早</button>
+  <button id="asof-jump-latest" type="button" data-preset="latest" hidden>跳到最晚</button>
   <code id="asof-echo" class="mono" aria-live="polite">未选择</code>
+  <span id="asof-hint" class="dim" aria-live="polite"></span>
 </header>
 
 <nav id="tabs" aria-label="视图">

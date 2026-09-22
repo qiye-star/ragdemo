@@ -23,12 +23,25 @@ class VisibleCounts(BaseModel):
     blocks: int
 
 
+class KnownAtRange(BaseModel):
+    """当前 as_of 下，可见公开文档的 known_at 最早/最晚值。
+
+    两个字段同为 None 表示「这个 as_of 下一篇公开文档都不可见」，不是
+    「没查到」——前端据此在 as_of 选择器里给出「往后调时点」的引导，
+    而不是留一个不知道该填什么的空输入框。
+    """
+
+    earliest: str | None
+    latest: str | None
+
+
 class MetaResponse(BaseModel):
     banner: str
     read_only: bool
     as_of: str
     db: DbIdentity
     visible: VisibleCounts
+    known_at_range: KnownAtRange
 
 
 # --- 文档 --------------------------------------------------------------

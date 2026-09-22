@@ -113,6 +113,18 @@ body {
   font-weight: 600;
 }
 
+/* 每一个固定控件都不许被压缩折行——as_of 条上多了"现在/跳到最早/
+   跳到最晚"三个按钮之后，flex 容器空间变紧，若不锁住会把按钮文字
+   拆成两行（"应用"+"时点"），比横向挤出滚动条更难看也更难点。
+   会主动让路的只有 #asof-hint 一个（见下方 flex:1 1 auto）。 */
+#asof-bar label,
+#asof-bar input,
+#asof-bar button,
+#asof-bar > .dim,
+#asof-bar code {
+  flex-shrink: 0;
+}
+
 #asof-bar input,
 #asof-bar button {
   font: inherit;
@@ -122,6 +134,7 @@ body {
   background: var(--surface-2);
   color: var(--text);
   padding: 4px 8px;
+  white-space: nowrap;
 }
 
 #asof-bar button {
@@ -130,6 +143,18 @@ body {
 
 #asof-bar button:hover {
   background: var(--border);
+}
+
+/* 提示区可能比其余控件都长（范围 + 计数），压缩成省略号而不是把
+   as_of 条撑成两行——两行会打破 --asof-h 与 .grid-table th 粘顶
+   偏移量之间的假设(见下方 .grid-table th 的 top 计算)。 */
+#asof-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
 }
 
 #tabs {

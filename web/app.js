@@ -36,7 +36,7 @@ async function render() {
   const route = readRoute();
   const view = BY_ID.get(route.view) ?? PLACEHOLDER;
 
-  syncAsOfBar(route);
+  syncAsOfBar(route, inflight.signal);
   for (const a of document.querySelectorAll('#tabs a')) {
     a.classList.toggle('active', a.dataset.view === view.id);
     // 每次渲染都把当前 as_of 写回每个 tab 的 href——否则点标签页会静默

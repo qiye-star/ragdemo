@@ -2,6 +2,8 @@
 // localStorage——一个记住了但看不见的时点，正是 docs/03-point-in-time.md
 // 警告的那种"静默得出错误结论"的来源。链接可分享、可复现、后退键有效。
 
+import { getJSON } from './api.js';
+
 export function readRoute() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [path, qs] = raw.split('?');
@@ -55,8 +57,68 @@ export function bindAsOfBar(onApply) {
   onApply();
 }
 
+// as_of 选择器最大的痛点：不选一个时点就看不到任何东西，但不看到东西
+// 又不知道该选哪个时点。这里用一个单调递增的 token 而不是复用
+// AbortController——即使两次调用共享同一个 render() 的 signal（未被
+// abort），只要第二次调用已经发出，第一次的响应回来时也要认输，避免
+// 网络时序颠倒导致提示区显示了一个更早、已经过时的 as_of 的范围。
+let hintToken = 0;
+
+function clearAsOfHint() {
+  hintToken += 1;
+  const hint = document.getElementById('asof-hint');
+  const earliestBtn = document.getElementById('asof-jump-earliest');
+  const latestBtn = document.getElementById('asof-jump-latest');
+  if (hint) hint.textContent = '';
+  if (earliestBtn) earliestBtn.hidden = true;
+  if (latestBtn) latestBtn.hidden = true;
+}
+
+async function updateAsOfHint(asOf, signal) {
+  const token = (hintToken += 1);
+  const hint = document.getElementById('asof-hint');
+  const earliestBtn = document.getElementById('asof-jump-earliest');
+  const latestBtn = document.getElementById('asof-jump-latest');
+  if (hint) hint.textContent = '查询已知数据范围…';
+
+  let meta;
+  try {
+    meta = await getJSON('/api/meta', {}, { asOf, signal });
+  } catch (e) {
+    if (e.name === 'AbortError' || token !== hintToken) return;
+    if (hint) hint.textContent = ''; // 主视图自己的错误卡已经报过这次失败，提示区不重复报
+    if (earliestBtn) earliestBtn.hidden = true;
+    if (latestBtn) latestBtn.hidden = true;
+    return;
+  }
+  if (token !== hintToken) return;
+
+  const { earliest, latest } = meta.known_at_range;
+  if (earliest && latest) {
+    // 提示区只做到分钟精度——按钮 dataset 里存的仍是完整 ISO 值，
+    // 跳转不损失精度，缩短只是为了不把 as_of 条撑成两行。
+    if (hint) {
+      hint.textContent =
+        `已知公开文档 known_at：${earliest.slice(0, 16)} ~ ${latest.slice(0, 16)}` +
+        `（可见 ${meta.visible.documents} 篇）`;
+    }
+    if (earliestBtn) {
+      earliestBtn.hidden = false;
+      earliestBtn.dataset.presetValue = earliest;
+    }
+    if (latestBtn) {
+      latestBtn.hidden = false;
+      latestBtn.dataset.presetValue = latest;
+    }
+  } else {
+    if (hint) hint.textContent = '当前时点下没有任何公开文档可见——试试点击"现在"把时点往后调';
+    if (earliestBtn) earliestBtn.hidden = true;
+    if (latestBtn) latestBtn.hidden = true;
+  }
+}
+
 /** 每次路由变化后，把地址栏里的 as_of 同步回时点条的三处显示。 */
-export function syncAsOfBar(route) {
+export function syncAsOfBar(route, signal) {
   const echo = document.getElementById('asof-echo');
   echo.textContent = route.asOf || '未选择';
 
@@ -68,5 +130,11 @@ export function syncAsOfBar(route) {
   if (route.asOf && document.activeElement !== input) {
     const local = route.asOf.replace(/([+-]\d{2}:\d{2}|Z)$/, '').slice(0, 19);
     input.value = local;
+  }
+
+  if (route.asOf) {
+    updateAsOfHint(route.asOf, signal);
+  } else {
+    clearAsOfHint();
   }
 }
