@@ -81,7 +81,34 @@
   预算耗尽两个分支故意不写 `core.document` 行（写了的话，下次重跑会被
   `content_hash` 去重误判成"已存在"而永远跳过重试），`core.parse_retry_
   queue` 因此完全脱钩，只回答"现在还卡着的有哪些"。
-- [ ] H · 评测集数据侧与真实基线
+- [x] **H · 评测集数据侧与真实基线** —— `4de0de4`。H1/H2/H4/H5/H6/H7 全过；
+  H3（创始人标注 ≥100 条并入库 `eval_retrieval`）是外部依赖，本阶段交付的是
+  达成 H1/H2/H4/H5/H6/H7 所需的工具（分层抽样、冻结快照、门禁）本身，标注
+  产物 `evals/retrieval/2026-10-baseline.jsonl` 要等创始人交付后才会出现。
+  CLI 沿用既有的 `ragdemo eval`（单数、既有命令组），没有照计划文本改成
+  `ragdemo evals`（复数）——那样会破坏 `eval add-retrieval`/`eval run` 已有
+  的调用方式，不值得为了和计划文案对齐而改一个已经在用的公共接口。H6
+  （每周人工抽检 50 块）复用同一套分层抽样机制（`eval sample --n 50`），
+  没有另建一套重复实现。
+  **在为 H7 写集成测试时发现并修复了一个让 CI 门禁形同虚设的真实回归**：
+  `eval run --gate` 原来的调用顺序是先跑评测（`run_retrieval_eval` 会把
+  这次结果写进 `evals.eval_run`）再读"最近一次运行"当基线——那时"最近
+  一次"就是这次运行自己，门禁因此永远在和自己比，`current >= baseline -
+  tolerance` 恒成立，从未真正拦截过任何一次回退。原有的 5 个门禁单测
+  全部只给 `compare_to_baseline` 传外部算好的 `current` 值，从来不经过
+  真实的"写入之后再比较"时序，这个问题因此在阶段 D 之前就一直存在却没
+  被测出来。修复：拆出只读的 `fetch_baseline` 与纯比较的 `passes_gate`，
+  `run()` 改成先读基线、再跑评测；`compare_to_baseline` 保留原签名与行为
+  供已有单测使用，不破坏它们。
+  H7 用真实的 `chunk_document` + `DocumentWriter.reparse_document` +
+  `MockEmbedder` + `RetrievalService` 全链路验证："改坏 ChunkConfig"
+  （`leaf_max_chars` 砍到 50）会让重新切块产生全新 block_id、旧
+  `gold_block_ids` 因为块被标 `superseded_at` 而彻底从 `asof.doc_block`
+  的可见集合里消失——`recall@10` 因此从 1.0 真实跌到 0.0（不是猜的
+  "应该会下降"），修复后的门禁正确判定为回退。
+  真实验证：`eval sample`/`eval freeze` 都在共享开发库的真实语料（含
+  concurrent session 的 688041-hygon 年报真实数据）上跑通过，不是只在
+  夹具数据上测过。
 
 ---
 
