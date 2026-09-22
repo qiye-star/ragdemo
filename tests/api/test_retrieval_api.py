@@ -5,6 +5,7 @@ TestClient。
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 
 import psycopg
@@ -20,7 +21,7 @@ QUERY = "云端训练芯片"
 
 
 @pytest.fixture(autouse=True)
-def _clear_retrieval_cache() -> None:
+def _clear_retrieval_cache() -> Iterator[None]:
     """模块级 LRU 缓存跨测试用例持续存在——每个测试都该从空缓存开始，
     否则一个测试的结果可能悄悄喂给另一个用了相同 (query, as_of, ...) 的
     测试，看起来像是缓存生效了，其实只是没清干净。"""
