@@ -35,7 +35,32 @@
   固定并存进基线表，此后永远复用。用真实开发库手工篡改过一条并发会话的历史数据
   验证检测与恢复，过程无残留。"阻断当日发布资产"暂时落在 CLI 非零退出码上——
   真正的发布资产要等 P2+ 才存在。
-- [ ] F · 接入对账与新鲜度
+- [x] **F · 接入对账与新鲜度** —— `57c3684`。F1–F7 全过，且全部经真实环境验证，
+  不只是单测。计划与现实最大的一处出入：F 引言假设 Tushare 走直连 REST（`api.
+  tushare.pro`），但用户中途告知 Tushare/万得/同花顺/AkShare/财经新闻已经接进一个
+  真实部署的 MCP 网关（`a.finovadeep.com:8766`，271 个工具，见 `adapters/mcp_
+  gateway.py`，这是并发会话此前已按"只做客户端"的既定分工建好的）——`price_
+  normalized` 因此经这个网关取行情，不是新开一条直连 REST 的路，`tushare.py::
+  fetch_daily()` 的参数形状与响应形状都用真实网关实测过，不是照文档猜的。
+  过程中额外发现并修复三个真 bug：① 第一版 `ingest_reconciliation_check` 挂在
+  `doc_prepared` 上、直接读 `doc_normalized` 的 Python 返回值，真实 Dagster 物化
+  时稳定复现 `FileNotFoundError`（不管是自动注入还是 `additional_ins` +
+  `IdentityPartitionMapping` 显式声明，都会去加载 partitions_def 里排第一的历史
+  分区）——改成两个检查都只读 Postgres（"应到"经 `doc_normalized` 写的 `fetched_
+  count` 一行读回），与其余六项检查同构，问题消失，真实物化验证通过。② F3 的
+  更正路由一度把前序文档的 `owner_user` 当默认值覆盖调用方这次传入的
+  `owner_user`，会把该私有的更正公告悄悄写成公共行——RLS 隔离测试抓到这个回归，
+  已修复并补归因测试。③ EDGAR 的 `data.sec.gov`/`www.sec.gov` 对没有可辨识
+  User-Agent 的请求一律 403（实测确认），此前提交列表与全文两条路径都连不通；
+  `HttpClient` 补 `default_headers`。
+  真实验证：MCP 网关真实取 5 支股票行情两次——第一次 5 行全部 INSERTED，第二次
+  watermark 生效、拉取 0 行、`core.price_daily` 行数不变（F2）；真实 Dagster
+  物化跑通 `doc_normalized → doc_prepared → doc_blocks_loaded` 全链路，新增两项
+  检查都通过且写对 `quality_metric`（F1/F6）；`ragdemo docs ingest-edgar` 真实
+  抓取 NVIDIA CIK 1045810 的一份 8-K 全文，`doc_id=8` 的 `raw_ref` 指向的 blob
+  真实存在、29291 字节非空（F5）——这行真实数据留在了共享开发库里，没有清理，
+  因为它本身就是合法、可追溯的公开记录，不是测试垃圾。F7（`provider_snapshot`
+  可取回）复用阶段 A 就已经测过的既有基础设施，本阶段没有改动它。
 - [ ] G · C 档二次解析路由
 - [ ] H · 评测集数据侧与真实基线
 
