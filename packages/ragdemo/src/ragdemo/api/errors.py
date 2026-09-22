@@ -22,6 +22,7 @@ class ErrorCode:
     AS_OF_INVALID = "as_of_invalid"
     AS_OF_NAIVE = "as_of_naive"
     AS_OF_PLUS_DECODED_AS_SPACE = "as_of_plus_decoded_as_space"
+    INVALID_PARAM = "invalid_param"
     NOT_FOUND = "not_found"
     DB_UNAVAILABLE = "db_unavailable"
     # 以下两个是运行时告警器，不是正常业务错误——出现即代表约束 4/5 被绕过。

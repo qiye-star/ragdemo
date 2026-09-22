@@ -180,3 +180,145 @@ class BlockDetail(BaseModel):
     chunking_version: str | None
     embedding_version: str | None
     ancestors: list[BlockAncestor]
+
+
+# --- 质量门禁看板 ---------------------------------------------------------
+
+
+class MetricSpec(BaseModel):
+    """指标注册表的一行——前端据此排版，不靠 `SELECT DISTINCT metric` 猜。
+
+    `quality.quality_metric` 里实际有 11 个 metric 名，不是只有 8 个门禁
+    （见 docs/superpowers/plans/2026-09-22-web-diagnostic-ui.md 陷阱 1）。
+    `direction` 与 `is_gate`/`blocking` 都是静态元数据、不是从数据反推的——
+    `MetricResult` 的方向语义本来就没有存进数据库（`quality/metrics.py`
+    docstring 明说 record_metric 不猜方向），猜就是在生成论断。
+    """
+
+    metric: str
+    is_gate: bool
+    blocking: bool | None
+    direction: str | None  # "higher_is_better" / "lower_is_better" / None
+    has_no_sample_sentinel: bool
+    description: str
+
+
+class MetricPoint(BaseModel):
+    source_id: str | None
+    partition_date: str
+    value: float
+    threshold: float | None
+    passed: bool
+    note: str | None
+    computed_at: str
+
+
+class DashboardResponse(BaseModel):
+    as_of: str
+    source_table: str
+    as_of_filter: str
+    note: str
+    metrics: list[MetricPoint]
+
+
+class MetricHistoryResponse(BaseModel):
+    as_of: str
+    metric: str
+    source_id: str | None
+    points: list[MetricPoint]
+
+
+# --- 分档与预算 -----------------------------------------------------------
+
+
+class TierBucket(BaseModel):
+    tier: str
+    documents: int
+    budget_exceeded: int
+    confidence_avg: float | None
+    confidence_min: float | None
+
+
+class ParseEngineBucket(BaseModel):
+    parse_engine: str | None
+    documents: int
+
+
+class TierDistributionResponse(BaseModel):
+    as_of: str
+    tier_rule: str
+    tiers: list[TierBucket]
+    by_parse_engine: list[ParseEngineBucket]
+
+
+class PolicyRow(BaseModel):
+    policy_id: int
+    doc_type: str | None
+    confidence_below: float | None
+    closure_below: float | None
+    monthly_cap_cny: str  # Decimal 序列化成字符串，不是 float——金额精度不能丢
+    enabled: bool
+    known_at: str
+    superseded_at: str | None
+    active_at_as_of: bool
+
+
+class PoliciesResponse(BaseModel):
+    as_of: str
+    policies: list[PolicyRow]
+
+
+class BudgetBucket(BaseModel):
+    doc_type: str
+    pages_spent: int
+    rows: int  # 重复计入的原始行数——与 monthly_pages_spent 用同一条裸 sum(value)，
+    # 哪怕会把 run 重试写入的重复行算两遍：暴露问题，不是修问题。
+    cap_cny: str | None
+    cost_per_page_configured: bool
+    spent_cny: str | None
+
+
+class BudgetResponse(BaseModel):
+    as_of: str
+    month_start: str
+    month_end: str
+    buckets: list[BudgetBucket]
+
+
+class RetryQueueRow(BaseModel):
+    source: str
+    provider_doc_id: str
+    first_failed_at: str
+    retry_deadline: str
+    last_seen_at: str
+    attempts: int
+    overdue: bool
+
+
+class RetryQueueResponse(BaseModel):
+    as_of: str
+    point_in_time: str
+    reason: str
+    entries: list[RetryQueueRow]
+
+
+class WarningAggregate(BaseModel):
+    warning: str
+    documents: int
+
+
+class WarningDocument(BaseModel):
+    doc_id: int
+    doc_type: str
+    title: str
+    source: str
+    publish_at: str
+    page_count: int | None
+    parse_engine: str | None
+    parse_confidence: float | None
+
+
+class WarningsResponse(BaseModel):
+    as_of: str
+    aggregate: list[WarningAggregate]
+    documents: list[WarningDocument]
