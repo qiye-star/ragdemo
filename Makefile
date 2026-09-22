@@ -1,5 +1,8 @@
 # 全部目标走 uv run，Windows 与 Linux 行为一致，不依赖预先激活虚拟环境。
-COMPOSE := docker compose -f infra/docker-compose.yml
+# docker compose 默认读 compose 文件所在目录的 .env（infra/.env），而仓库的
+# .env 在根目录——不显式传 --env-file，egress-proxy 里新加的 TEXTIN_* 变量
+# 会静默解析成空字符串（Phase 1B 已核实的阻断点之一）。
+COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
 # 本地开发的缺省连接串，与 infra/docker-compose.yml 和 .env.example 保持一致。
 # 端口是 5433 而不是 5432：开发机上 5432 常被既有 postgres 占用。

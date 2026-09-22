@@ -66,8 +66,27 @@ services:
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
+      TEXTIN_APP_ID: ${TEXTIN_APP_ID:-}
+      TEXTIN_SECRET_CODE: ${TEXTIN_SECRET_CODE:-}
     ports:
       - "127.0.0.1:8080:8080"
+      # Phase 1B 新增：TextIn 专用反向代理端口。回环明文进、TLS 出到
+      # api.textin.com，不需要信任 mitmproxy 的 CA（这条通路没有导出/挂载
+      # CA 卷）。这不是生产形态——生产形态是正向代理 + 导出 CA，走 8080
+      # 那一路；见 phase-1b-report.md 里的说明。
+      - "127.0.0.1:8081:8081"
+    # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
+    # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
+    # /policy/addon.py`，这里只追加两个 --mode：显式声明 regular@8080（保留
+    # 原有正向代理行为，其余供应商走这条）与新增的 reverse@8081（TextIn 专用）。
+    # 踩过的坑：如果在这里把 "mitmdump --set ... -s ..." 又完整写一遍，
+    # 会被当成 ENTRYPOINT 后面多出来的参数，mitmdump 把它们全部解读成一个
+    # 正则过滤表达式（"Only processing flows that match ..."），代理直接不转发。
+    command:
+      - --mode
+      - regular@8080
+      - --mode
+      - reverse:https://api.textin.com@8081
     restart: unless-stopped
 
 volumes:
