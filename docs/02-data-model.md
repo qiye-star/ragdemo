@@ -430,6 +430,10 @@ CREATE TABLE core.document (
   parse_json_ref    text,                   -- xParse 完整响应 JSON 的对象存储 key
   parse_md_ref      text,                   -- result.markdown 的对象存储 key
   parse_warnings    jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- 以下两列由迁移 009_source_registry.sql 追加，继承自
+  -- core.source_registry（四条款，见 04-ingestion.md §1.1）。
+  can_show_raw      boolean NOT NULL DEFAULT true,
+  time_precision    text,                   -- 仅供审计，known_at 已按它调整过，不参与过滤
   owner_tenant      text,                   -- 多租户隔离；NULL = 公共空间
   owner_user        text,                   -- 用户私有空间；NULL = 非私有
   valid_from        date NOT NULL,
@@ -460,7 +464,7 @@ CREATE INDEX document_owner    ON core.document (owner_tenant, owner_user)
 **给 `core.document` 加列必须同时重建 `asof.document`**：视图用 `SELECT *`，
 列清单在 `CREATE VIEW` 时就固定了，新列不会自动出现。应用层只允许查 `asof` 视图
 （CLAUDE.md §1.1），漏掉这一步的后果是新列在整个应用侧永远不可见——不报错，只是查不到。
-迁移 007 用 `CREATE OR REPLACE VIEW` 重建（只允许在末尾追加列，正好够用，
+迁移 007、009 都用 `CREATE OR REPLACE VIEW` 重建（只允许在末尾追加列，正好够用，
 且会保留 `GRANT`；`DROP` + 重建则不会）。
 
 ### 5.2 `core.doc_block`
@@ -480,12 +484,13 @@ CREATE TABLE core.doc_block (
   embedding       vector(1024),
   tokens          int,
   is_leaf         boolean NOT NULL,           -- 叶子块（可被召回）；父块为 false
-  -- 以下四列从 document 反规范化而来，用途见 §5.3
+  -- 以下六列从 document 反规范化而来，用途见 §5.3
   entity_id       text REFERENCES core.entity,
   doc_type        text NOT NULL,
   publish_at      timestamptz NOT NULL,
   owner_tenant    text,
   owner_user      text,
+  can_show_raw    boolean NOT NULL DEFAULT true,  -- 009_source_registry.sql 追加
   valid_from      date NOT NULL,
   known_at        timestamptz NOT NULL,
   superseded_at   timestamptz,
@@ -508,14 +513,16 @@ CREATE INDEX doc_block_known_at    ON core.doc_block (known_at);
 （`05-document-pipeline.md` §4.2），两种判定在表格上结论相反。检索侧依赖这一列，
 见 `06-retrieval.md` §2。
 
-### 5.3 为什么 `doc_block` 要反规范化 `entity_id` / `doc_type` / `publish_at` / owner
+### 5.3 为什么 `doc_block` 要反规范化 `entity_id` / `doc_type` / `publish_at` / owner / `can_show_raw`
 
-简报把这些字段只放在 `document` 上。但检索时的过滤条件几乎全落在它们身上，而
+简报把这些字段只放在 `document` 上。但检索与权限过滤的条件几乎全落在它们身上，而
 **BM25 索引与 HNSW 索引都只能看见自己所在表的列**——过滤条件如果需要 JOIN
 `document` 才能求值，就无法下推进索引扫描，退化成「先取 top-k、再过滤」，
-时点过滤后召回会塌陷（见 `06-retrieval.md` §3）。
+时点过滤后召回会塌陷（见 `06-retrieval.md` §3）。`can_show_raw`（009 追加）是
+同一个理由的延伸：第 4 层权限中间件只读块上这一列决定能否展示原文片段，
+不需要 JOIN 回 `document` 更不需要回溯合同（`04-ingestion.md` §1.1）。
 
-代价是这五列在 `doc_block` 中冗余。可接受，因为：文档一旦入库这些值就不再变化
+代价是这六列在 `doc_block` 中冗余。可接受，因为：文档一旦入库这些值就不再变化
 （变化意味着新版本、新块），不存在更新不一致的窗口。写入中间件负责填充，
 CI 中有一致性校验测试。
 

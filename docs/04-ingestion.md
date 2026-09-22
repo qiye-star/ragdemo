@@ -18,6 +18,42 @@
 **接入原则**：批量同步走 REST / 数据文件；MCP 只做长尾按需查询；
 所有供应商 MCP 一律包在自有工具外壳层内（参数校验、日志、缓存、限流、结果规范化）。
 
+## 1.1 来源登记与四条款
+
+签约前必须确认的四条款——能否本地缓存、能否展示原文片段、能否做向量索引、
+发布时间精度——落成 `core.source_registry` 表（`db/migrations/009_source_registry.sql`），
+由 `DocumentWriter` 在构造时查询，查不到就拒绝写入（`SourceNotRegistered`）：
+
+```sql
+CREATE TABLE core.source_registry (
+  source_id      text PRIMARY KEY,   -- core.document.source 里出现的字符串
+  vendor         text NOT NULL,
+  layer          text NOT NULL,      -- structured/filing/industry/policy/news/user
+  can_cache      boolean NOT NULL,
+  can_show_raw   boolean NOT NULL,
+  can_vectorize  boolean NOT NULL,
+  time_precision text NOT NULL CHECK (time_precision IN ('second','minute','day')),
+  contract_expire_at date,
+  rate_limit_qps numeric
+);
+```
+
+**继承链**：`source_registry.can_show_raw` → 写入时刻复制到 `core.document.can_show_raw`
+→ 反规范化到 `core.doc_block.can_show_raw`。第 4 层权限中间件只读块上这一列，
+不需要 JOIN 回 `document` 更不需要回溯合同。
+
+**`time_precision` 影响 `known_at` 的计算**：`second`/`minute` 精度直接信任
+`publish_at`；`day` 精度的来源报不出发布时刻的具体时分秒，`known_at` 改取
+该来源自己时区下的当日 `23:59:59.999999`（保守上界），不是原样相信一个
+不存在的精确时刻——这是 `known_at` 定义（现实中最早可获知的时刻）在精度不足
+场景下的显式化，不是妥协。
+
+**新增一个来源前必须先登记它**，且四条款只能来自这张表：真实供应商（如
+cninfo/tushare/textin）的条款需要商务确认后由运维手写一条 `INSERT` 登记，
+代码不会替未拍板的来源猜一个"看起来安全"的默认值。仓库自己定义、自己控制
+的 Mock（如 `mock-announcements`）例外——四个值本就完全由我们自己决定，
+直接在迁移里登记（`009_source_registry.sql`）。
+
 ## 2. 适配器接口
 
 ### 2.1 基础抽象

@@ -1,10 +1,13 @@
 """文档与块入库。
 
-两条容易做错的地方：
-1. doc_block 的反规范化列（entity_id / doc_type / publish_at / known_at / owner_*）
-   必须与 document 完全一致——检索的过滤条件全落在它们身上（02 §5.3）。
+三条容易做错的地方：
+1. doc_block 的反规范化列（entity_id / doc_type / publish_at / known_at / owner_* /
+   can_show_raw）必须与 document 完全一致——检索的过滤条件全落在它们身上（02 §5.3）。
 2. 重解析沿用原文档的 known_at。取重解析时刻会让这份文档在历史回测中凭空消失
    （05 §7.2 第 2 步）。
+3. 四条款（can_cache / can_show_raw / can_vectorize / time_precision）只能来自
+   core.source_registry，不接受调用方传参覆盖——否则合同条款与代码行为随时可能
+   对不上（docs/superpowers/plans/2026-09-22-data-foundation.md 阶段 B）。
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -26,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 class MetadataInvalid(RuntimeError):
     """元数据校验未通过。整份文档不入库。"""
+
+
+class SourceNotRegistered(RuntimeError):
+    """`source` 在 `core.source_registry` 里没有登记。
+
+    四条款（能否缓存/能否展示原文/能否向量化/发布时间精度）没有默认值可猜——
+    猜错任何一条都是合规问题，不是工程小瑕疵。新接入一个来源必须先跑一条迁移
+    或运维脚本登记它，而不是让 DocumentWriter 悄悄假设一个"看起来安全"的默认值。
+    """
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,20 @@ class DocumentWriter:
         self.ingest_run_id = ingest_run_id
         self.source = source
         self.disclosure_lag = disclosure_lag
+        self.can_show_raw, self.time_precision = self._load_source_registry(source)
+
+    def _load_source_registry(self, source: str) -> tuple[bool, str]:
+        row = self.conn.execute(
+            "SELECT can_show_raw, time_precision FROM core.source_registry WHERE source_id = %s",
+            (source,),
+        ).fetchone()
+        if row is None:
+            raise SourceNotRegistered(
+                f"来源 {source!r} 没有在 core.source_registry 登记"
+                "（四条款：能否缓存/能否展示原文/能否向量化/发布时间精度）。"
+                "先跑一条迁移登记它，再重试。"
+            )
+        return bool(row[0]), str(row[1])
 
     # --- 公开方法 ---------------------------------------------------------
 
@@ -205,7 +231,16 @@ class DocumentWriter:
 
     # --- 内部 -------------------------------------------------------------
 
-    def _known_at(self, doc: NormalizedDocument) -> object:
+    def _known_at(self, doc: NormalizedDocument) -> datetime:
+        if self.time_precision == "day":
+            # `day` 精度的源报不出发布时刻的具体时分秒，publish_at 里的时间
+            # 部分不可信（可能是供应商随手填的午夜或任意时刻）。用该来源自己
+            # 时区下的当日 23:59:59.999999 做保守上界——"最迟不会晚于当天
+            # 结束"，比相信一个不存在的精确时刻安全（CLAUDE.md §1.1）。
+            day_end = datetime.combine(
+                doc.publish_at.date(), time.max, tzinfo=doc.publish_at.tzinfo
+            )
+            return known_at_for(day_end, self.disclosure_lag)
         return known_at_for(doc.publish_at, self.disclosure_lag)
 
     def _require_valid(
@@ -242,9 +277,9 @@ class DocumentWriter:
             " language, source, source_url, raw_ref, content_hash, version_group_id,"
             " is_correction, supersedes_doc_id, parse_engine, page_count, owner_user,"
             " valid_from, known_at, source_ref, ingest_run_id,"
-            " parse_json_ref, parse_md_ref, parse_warnings) "
+            " parse_json_ref, parse_md_ref, parse_warnings, can_show_raw, time_precision) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-            "%s,%s,%s) "
+            "%s,%s,%s,%s,%s) "
             "RETURNING doc_id",
             (
                 entity_id,
@@ -270,6 +305,8 @@ class DocumentWriter:
                 json_ref,
                 md_ref,
                 warnings,
+                self.can_show_raw,
+                self.time_precision,
             ),
         ).fetchone()
         assert row is not None
@@ -283,12 +320,13 @@ class DocumentWriter:
         chunks: list[Chunk],
         descriptions: Mapping[int, str],
     ) -> list[int]:
-        # owner_user 从刚插入的 document 行读回，而不是让调用方另传一份——
-        # 与 known_at / publish_at 同样的道理（本方法原有的反规范化列），
-        # 单一数据源保证 doc_block.owner_user 不可能与 document.owner_user
-        # 打架（02 §5.3：block 的反规范化列必须与 document 完全一致）。
-        known_at, publish_at, owner_user = self.conn.execute(
-            "SELECT known_at, publish_at, owner_user FROM core.document WHERE doc_id = %s",
+        # owner_user / can_show_raw 从刚插入的 document 行读回，而不是让调用方
+        # 另传一份——与 known_at / publish_at 同样的道理（本方法原有的反规范化
+        # 列），单一数据源保证 doc_block 这几列不可能与 document 打架
+        # （02 §5.3：block 的反规范化列必须与 document 完全一致）。
+        known_at, publish_at, owner_user, can_show_raw = self.conn.execute(
+            "SELECT known_at, publish_at, owner_user, can_show_raw"
+            " FROM core.document WHERE doc_id = %s",
             (doc_id,),
         ).fetchone()  # type: ignore[misc]
 
@@ -304,8 +342,8 @@ class DocumentWriter:
                 "INSERT INTO core.doc_block (doc_id, parent_block_id, block_type,"
                 " section_path, ordinal, page, bbox, content, content_desc, tokens,"
                 " is_leaf, entity_id, doc_type, publish_at, owner_user, valid_from, known_at,"
-                " source, source_ref, ingest_run_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                " source, source_ref, ingest_run_id, can_show_raw) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "RETURNING block_id",
                 (
                     doc_id,
@@ -328,6 +366,7 @@ class DocumentWriter:
                     self.source,
                     doc.provider_doc_id,
                     self.ingest_run_id,
+                    can_show_raw,
                 ),
             ).fetchone()
             assert row is not None

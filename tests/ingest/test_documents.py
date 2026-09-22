@@ -15,7 +15,7 @@ import pytest
 from ragdemo.adapters.announcements import NormalizedDocument
 from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
-from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid
+from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, SourceNotRegistered
 from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
@@ -96,6 +96,11 @@ def test_known_at_applies_disclosure_lag(temp_db: str) -> None:
         " l2_segment, l3_node, primary_node, tushare_code) "
         "VALUES ('CN.688256','寒武纪-U','listed','算力','AI芯片',"
         " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
+    )
+    conn.execute(
+        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
+        " can_show_raw, can_vectorize, time_precision) "
+        "VALUES ('mock','mock','filing',true,true,true,'second')"
     )
     conn.commit()
     w = DocumentWriter(conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1))
@@ -490,3 +495,82 @@ def test_private_document_is_invisible_to_other_users_through_rls(
         writer.conn.execute(f'DROP OWNED BY "{app_read_user}"')
         writer.conn.execute(f'DROP USER IF EXISTS "{app_read_user}"')
         writer.conn.commit()
+
+
+# --- 四条款：source_registry（阶段 B） ---------------------------------------
+
+
+@pytest.mark.db
+def test_unregistered_source_refuses_construction(temp_db: str) -> None:
+    """四条款没有默认值可猜——猜错任何一条都是合规问题，不是工程小瑕疵。
+    构造 DocumentWriter 那一刻就该失败，而不是等到第一次 write_document。"""
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    conn.commit()
+    with pytest.raises(SourceNotRegistered, match="从未登记的来源"):
+        DocumentWriter(conn, ingest_run_id="r1", source="从未登记的来源")
+
+
+@pytest.mark.db
+def test_can_show_raw_inherits_from_registry_to_document_and_block(temp_db: str) -> None:
+    """继承链 source_registry → document → doc_block，块上的这一列不该
+    需要 JOIN 回 document 才能判定（02 §5.3 反规范化列的同一个理由）。"""
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, entity_type, l1_layer,"
+        " l2_segment, l3_node, primary_node, tushare_code) "
+        "VALUES ('CN.688256','寒武纪-U','listed','算力','AI芯片',"
+        " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
+    )
+    conn.execute(
+        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
+        " can_show_raw, can_vectorize, time_precision) "
+        "VALUES ('licensed-vendor','some-vendor','filing',true,false,true,'second')"
+    )
+    conn.commit()
+    writer = DocumentWriter(conn, ingest_run_id="r1", source="licensed-vendor")
+    assert writer.can_show_raw is False
+
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    (doc_flag,) = conn.execute("SELECT can_show_raw FROM core.document").fetchone()  # type: ignore[misc]
+    assert doc_flag is False
+    (block_mismatches,) = conn.execute(
+        "SELECT count(*) FROM core.doc_block WHERE can_show_raw IS DISTINCT FROM false"
+    ).fetchone()  # type: ignore[misc]
+    assert block_mismatches == 0
+
+
+@pytest.mark.db
+def test_day_precision_known_at_is_conservative_day_end(temp_db: str) -> None:
+    """`time_precision='day'` 的来源报不出发布时刻的具体时分秒：known_at 取
+    该来源自己时区下的当日 23:59:59.999999（保守上界），不是 publish_at 原样。"""
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, entity_type, l1_layer,"
+        " l2_segment, l3_node, primary_node, tushare_code) "
+        "VALUES ('CN.688256','寒武纪-U','listed','算力','AI芯片',"
+        " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
+    )
+    conn.execute(
+        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
+        " can_show_raw, can_vectorize, time_precision) "
+        "VALUES ('day-precision-vendor','some-vendor','filing',true,true,true,'day')"
+    )
+    conn.commit()
+    writer = DocumentWriter(conn, ingest_run_id="r1", source="day-precision-vendor")
+
+    doc = _docs()[0]  # publish_at = 2024-10-28T18:32:00+08:00（MockAnnouncementProvider）
+    chunks, desc = _prepare(doc)
+    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    (known_at,) = conn.execute("SELECT known_at FROM core.document").fetchone()  # type: ignore[misc]
+    assert known_at != doc.publish_at, "day 精度不该原样相信 publish_at 里的具体时刻"
+    # 转到 publish_at 自己的时区，验证落在同一个日历日的 23:59:59
+    local = known_at.astimezone(doc.publish_at.tzinfo)
+    assert (local.hour, local.minute, local.second) == (23, 59, 59)
+    assert local.date() == doc.publish_at.date()

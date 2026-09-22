@@ -97,6 +97,14 @@ def conn(temp_db: str) -> psycopg.Connection:
         "VALUES ('CN.688256','寒武纪-U','listed','算力','AI芯片',"
         " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
     )
+    # mock-announcements 已经在 009_source_registry.sql 里登记（它是仓库自己
+    # 定义的 Mock，不是要签约确认的真实供应商）；plain 'mock' 只在测试里
+    # 出现（test_parse_artifact_refs_land_in_the_document_row），这里补上。
+    c.execute(
+        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
+        " can_show_raw, can_vectorize, time_precision) "
+        "VALUES ('mock','mock','filing',true,true,true,'second')"
+    )
     c.commit()
     return c
 

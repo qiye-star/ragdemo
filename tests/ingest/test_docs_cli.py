@@ -272,6 +272,14 @@ def conn(temp_db: str) -> psycopg.Connection:
         "VALUES ('CN.688041','海光信息技术股份有限公司','listed','算力','AI芯片',"
         " ARRAY['通用服务器CPU'],'通用服务器CPU','688041.SH')"
     )
+    # 'cninfo' 是 --source 的默认值（ingest/cli.py），这里只是测试夹具里的
+    # 一个占位登记——真实供应商的四条款要等商务确认后由运维登记
+    # （docs/superpowers/plans/2026-09-22-data-foundation.md 阶段 B）。
+    c.execute(
+        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
+        " can_show_raw, can_vectorize, time_precision) "
+        "VALUES ('cninfo','cninfo','filing',true,true,true,'second')"
+    )
     c.commit()
     return c
 
