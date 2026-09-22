@@ -9,7 +9,7 @@ repos:
     rev: v1.11.2
     hooks:
       - id: mypy
-        additional_dependencies: [psycopg, click, pytest]
+        additional_dependencies: [psycopg, click, pytest, fastapi, httpx]
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:

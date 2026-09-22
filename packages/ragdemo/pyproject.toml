@@ -11,6 +11,9 @@ dependencies = [
     "dagster>=1.8",
     # 向量召回（adr/0009）。只用本地自建实例，不连 Chroma Cloud——境内存储硬约束。
     "chromadb>=0.5",
+    # 内网只读诊断接口（adr/0010）：纯 GET，无写路由。
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]
