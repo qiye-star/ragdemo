@@ -9,6 +9,7 @@ import { readRoute, bindAsOfBar, syncAsOfBar } from './lib/state.js';
 import { asOfBlockedCard, errorCard, loading } from './lib/status.js';
 import { el } from './lib/dom.js';
 import * as docs from './views/docs.js';
+import * as layout from './views/layout.js';
 
 // 尚未接入的视图占位——route.view 落在这几个 key 上时用它兜底，
 // 不是错误状态，只是"这个视图还没做"。
@@ -20,7 +21,7 @@ const PLACEHOLDER = {
   },
 };
 
-const BY_ID = new Map([docs].map((v) => [v.id, v]));
+const BY_ID = new Map([docs, layout].map((v) => [v.id, v]));
 
 const mount = document.getElementById('view');
 let inflight = null;

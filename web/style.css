@@ -479,11 +479,18 @@ main#view {
   border-radius: 10px;
   padding: 1px 8px;
   color: var(--text-dim);
+  text-decoration: none;
 }
 
 .chip-out {
   color: var(--fail);
   border-color: var(--fail);
+}
+
+.chip-active {
+  color: var(--text);
+  border-color: var(--info);
+  font-weight: 600;
 }
 
 .leaves {
@@ -520,4 +527,25 @@ main#view {
   button {
     display: none;
   }
+}
+
+/* 版面还原视图专用布局——CSP 是 style-src 'self'，不允许内联 style
+   属性，所有一次性布局需求都得落成具名 class，不能图省事直接写在
+   元素上。 */
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.layout-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.layout-detail {
+  min-width: 280px;
+  max-width: 360px;
 }
