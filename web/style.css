@@ -701,3 +701,51 @@ main#view {
   background: var(--border);
   color: var(--text);
 }
+
+/* 检索诊断 */
+.retrieval-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.retrieval-input {
+  flex: 1;
+  max-width: 480px;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 5px 10px;
+}
+
+.retrieval-search button {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.retrieval-search button:hover {
+  background: var(--border);
+}
+
+.cell-sub {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40em;
+}
+
+/* 向量列语义无意义时（语料仍是 Mock 伪向量）标一个不同的底色，别让它
+   看起来跟真排名一样可信——颜色只是视觉降权，真正的文字警告在
+   modelsBanner() 里，这里不重复生成任何论断文案。 */
+.mock-col {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}

@@ -12,6 +12,7 @@ import * as blocks from './views/blocks.js';
 import * as quality from './views/quality.js';
 import * as tiers from './views/tiers.js';
 import * as isolation from './views/isolation.js';
+import * as retrieval from './views/retrieval.js';
 
 // 尚未接入的视图占位——route.view 落在这几个 key 上时用它兜底，
 // 不是错误状态，只是"这个视图还没做"。
@@ -23,7 +24,7 @@ const PLACEHOLDER = {
   },
 };
 
-const VIEWS = [docs, layout, blocks, quality, tiers, isolation];
+const VIEWS = [docs, layout, blocks, quality, tiers, isolation, retrieval];
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v]));
 
 const nav = document.getElementById('nav');
