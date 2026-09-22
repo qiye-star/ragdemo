@@ -175,9 +175,14 @@ def embed_pending_blocks(
                 computed += len(missing)
 
             for block_id in chunk_block_ids:
+                # embedding_version 与向量同一次 UPDATE 一起写：块从"待嵌入"
+                # 变成"已嵌入"这一步，两者必须原子地一起发生，不能有向量已写
+                # 但 embedding_version 还是旧值（或反过来）的中间状态
+                # （db/migrations/010_block_metadata.sql）。
                 conn.execute(
-                    "UPDATE core.doc_block SET embedding = %s WHERE block_id = %s",
-                    (_vector_literal(cached[keys[block_id]]), block_id),
+                    "UPDATE core.doc_block SET embedding = %s, embedding_version = %s"
+                    " WHERE block_id = %s",
+                    (_vector_literal(cached[keys[block_id]]), embedder.model, block_id),
                 )
                 written += 1
         conn.commit()  # 见函数 docstring：提交同时释放本批的 FOR UPDATE 锁。

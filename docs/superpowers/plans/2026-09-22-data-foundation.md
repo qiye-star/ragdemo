@@ -320,7 +320,8 @@ CREATE TABLE core.source_registry (
 - 改：`packages/ragdemo/src/ragdemo/parse/chunker.py`、`parse/textin.py`
 - 改：`packages/ragdemo/src/ragdemo/ingest/documents.py`
 - 建：`tests/parse/test_confidence.py`
-- 建：`docs/adr/0010-entity-ids-single-vs-array.md`（见下）
+- 建：`docs/adr/0011-entity-ids-single-value-pending-pushdown-test.md`（见下；编号从
+  0010 改成 0011——并发会话已经在同一天占用了 0010，见该 ADR 的索引）
 
 **具体动作**
 
@@ -350,7 +351,7 @@ CREATE TABLE core.source_registry (
    反规范化到块上的**唯一理由**就是让过滤条件能下推（`004_documents.sql` 的注释写得很清楚：
    「过滤条件若需 JOIN 才能求值就无法下推，时点过滤后召回会塌陷」）。
    改成数组要先确认 `pg_search` 对数组字段的下推行为，否则修一个正确性问题、
-   换来一个召回塌陷。**ADR-0010 的内容就是这个实测结论**，实测之前保持单值。
+   换来一个召回塌陷。**ADR-0011 的内容就是这个实测结论**，实测之前保持单值。
 
 ## 验收计划 C
 

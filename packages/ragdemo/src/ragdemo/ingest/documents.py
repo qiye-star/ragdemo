@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb
 
 from ragdemo.adapters.announcements import NormalizedDocument, known_at_for
 from ragdemo.parse.chunker import Chunk
+from ragdemo.parse.confidence import score_document, score_pages
 from ragdemo.parse.validate import validate_chunks
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ class DocumentWriter:
         *,
         owner_user: str | None = None,
         artifacts: ParseArtifacts | None = None,
+        chunking_version: str | None = None,
     ) -> DocumentWriteResult:
         """`owner_user` 为 None（缺省）时写公共行——与改动前的行为完全一致。
 
@@ -111,6 +113,11 @@ class DocumentWriter:
         不在这次修的范围内：现有代码库里没有任何地方产出租户级别的归属
         （embed / retrieval 也只认 owner_user），引入它需要的是 P4 才该做的
         租户模型设计决定，这里保持它恒为 NULL。
+
+        `chunking_version` 由调用方传入（通常是 `ChunkConfig.version`）：
+        `DocumentWriter` 只拿到已经切好的 `chunks`，不知道切它们用的是哪个
+        `ChunkConfig` 实例，这个值只有调用方知道。缺省 None——不强迫每个
+        既有调用点都跟着改。
         """
         existing = self._live_doc_id(doc.content_hash)
         if existing is not None:
@@ -118,6 +125,8 @@ class DocumentWriter:
 
         self._require_valid(doc, chunks, descriptions)
         entity_id = self._resolve_entity_id(doc.entity_ref)
+        doc_confidence = score_document(doc)
+        page_confidence = score_pages(doc)
         try:
             with self.conn.transaction():
                 doc_id = self._insert_document(
@@ -126,12 +135,22 @@ class DocumentWriter:
                     entity_id=entity_id,
                     artifacts=artifacts,
                     owner_user=owner_user,
+                    parse_confidence=doc_confidence,
                 )
                 self.conn.execute(
                     "UPDATE core.document SET version_group_id = %s WHERE doc_id = %s",
                     (doc_id, doc_id),
                 )
-                block_ids = self._insert_blocks(doc, doc_id, entity_id, chunks, descriptions)
+                block_ids = self._insert_blocks(
+                    doc,
+                    doc_id,
+                    entity_id,
+                    chunks,
+                    descriptions,
+                    page_confidence=page_confidence,
+                    doc_confidence=doc_confidence,
+                    chunking_version=chunking_version,
+                )
         except psycopg.errors.UniqueViolation:
             # 两份从未见过的文档并发写入：两边都在各自的存在性检查里判定"不存在"，
             # 然后都去插入——分区唯一索引 document_dedup_uk（source, content_hash
@@ -185,6 +204,7 @@ class DocumentWriter:
         *,
         supersedes_doc_id: int,
         artifacts: ParseArtifacts | None = None,
+        chunking_version: str | None = None,
     ) -> DocumentWriteResult:
         """升级解析器或换供应商后重新解析。新增版本，不原地替换。
 
@@ -202,6 +222,8 @@ class DocumentWriter:
             raise ValueError(f"被取代的文档 {supersedes_doc_id} 不存在")
         original_known_at, version_group_id, original_owner_user = row
         entity_id = self._resolve_entity_id(doc.entity_ref)
+        doc_confidence = score_document(doc)
+        page_confidence = score_pages(doc)
 
         with self.conn.transaction():
             # 先标旧行 superseded_at，再插新行——document_dedup_uk 是只覆盖
@@ -224,8 +246,18 @@ class DocumentWriter:
                 supersedes_doc_id=supersedes_doc_id,
                 artifacts=artifacts,
                 owner_user=original_owner_user,
+                parse_confidence=doc_confidence,
             )
-            block_ids = self._insert_blocks(doc, doc_id, entity_id, chunks, descriptions)
+            block_ids = self._insert_blocks(
+                doc,
+                doc_id,
+                entity_id,
+                chunks,
+                descriptions,
+                page_confidence=page_confidence,
+                doc_confidence=doc_confidence,
+                chunking_version=chunking_version,
+            )
         self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
         return DocumentWriteResult(doc_id, block_ids, skipped=False)
 
@@ -266,6 +298,7 @@ class DocumentWriter:
         supersedes_doc_id: int | None = None,
         artifacts: ParseArtifacts | None = None,
         owner_user: str | None = None,
+        parse_confidence: float | None = None,
     ) -> int:
         # 路径 A 走供应商结构化接口，没有解析产物；路径 B 三列都有（05 §2.4）。
         parse_engine = artifacts.engine if artifacts else f"vendor:{self.source}"
@@ -277,9 +310,10 @@ class DocumentWriter:
             " language, source, source_url, raw_ref, content_hash, version_group_id,"
             " is_correction, supersedes_doc_id, parse_engine, page_count, owner_user,"
             " valid_from, known_at, source_ref, ingest_run_id,"
-            " parse_json_ref, parse_md_ref, parse_warnings, can_show_raw, time_precision) "
+            " parse_json_ref, parse_md_ref, parse_warnings, can_show_raw, time_precision,"
+            " parse_confidence) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-            "%s,%s,%s,%s,%s) "
+            "%s,%s,%s,%s,%s,%s) "
             "RETURNING doc_id",
             (
                 entity_id,
@@ -307,6 +341,7 @@ class DocumentWriter:
                 warnings,
                 self.can_show_raw,
                 self.time_precision,
+                parse_confidence,
             ),
         ).fetchone()
         assert row is not None
@@ -319,6 +354,10 @@ class DocumentWriter:
         entity_id: str | None,
         chunks: list[Chunk],
         descriptions: Mapping[int, str],
+        *,
+        page_confidence: Mapping[int, float] | None = None,
+        doc_confidence: float | None = None,
+        chunking_version: str | None = None,
     ) -> list[int]:
         # owner_user / can_show_raw 从刚插入的 document 行读回，而不是让调用方
         # 另传一份——与 known_at / publish_at 同样的道理（本方法原有的反规范化
@@ -329,6 +368,7 @@ class DocumentWriter:
             " FROM core.document WHERE doc_id = %s",
             (doc_id,),
         ).fetchone()  # type: ignore[misc]
+        page_confidence = page_confidence or {}
 
         ordinal_to_block_id: dict[int, int] = {}
         # 先插父块，再插叶子块，这样 parent_block_id 已经拿得到
@@ -338,12 +378,20 @@ class DocumentWriter:
                 if chunk.parent_ordinal is not None
                 else None
             )
+            # 块用自己的 page 去查 per-page 分；查不到（page 为 None，或
+            # score_pages 因为 doc.page_count 未知返回了空字典）就回退用
+            # 文档整体分——见 parse/confidence.py 模块 docstring。
+            block_confidence = page_confidence.get(chunk.page) if chunk.page is not None else None
+            if block_confidence is None:
+                block_confidence = doc_confidence
             row = self.conn.execute(
                 "INSERT INTO core.doc_block (doc_id, parent_block_id, block_type,"
-                " section_path, ordinal, page, bbox, content, content_desc, tokens,"
+                " section_path, ordinal, page, bbox, content, content_desc, char_len,"
                 " is_leaf, entity_id, doc_type, publish_at, owner_user, valid_from, known_at,"
-                " source, source_ref, ingest_run_id, can_show_raw) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                " source, source_ref, ingest_run_id, can_show_raw, parse_confidence,"
+                " table_html, chunking_version) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "%s,%s) "
                 "RETURNING block_id",
                 (
                     doc_id,
@@ -367,6 +415,9 @@ class DocumentWriter:
                     doc.provider_doc_id,
                     self.ingest_run_id,
                     can_show_raw,
+                    block_confidence,
+                    chunk.table_html,
+                    chunking_version,
                 ),
             ).fetchone()
             assert row is not None

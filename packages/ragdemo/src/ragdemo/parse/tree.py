@@ -119,4 +119,5 @@ def _with_ordinal(chunk: Chunk, ordinal: int, *, parent: int | None, is_leaf: bo
         bbox=chunk.bbox,
         is_leaf=is_leaf,
         parent_ordinal=parent,
+        table_html=chunk.table_html,
     )

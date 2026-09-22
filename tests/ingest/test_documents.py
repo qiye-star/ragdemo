@@ -12,7 +12,7 @@ from typing import cast
 import psycopg
 import pytest
 
-from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
 from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, SourceNotRegistered
@@ -574,3 +574,146 @@ def test_day_precision_known_at_is_conservative_day_end(temp_db: str) -> None:
     local = known_at.astimezone(doc.publish_at.tzinfo)
     assert (local.hour, local.minute, local.second) == (23, 59, 59)
     assert local.date() == doc.publish_at.date()
+
+
+# --- 块级元数据（阶段 C：char_len / chunking_version / parse_confidence / table_html） ---
+
+
+def _doc_with_table(table_html: str, *, content_hash: str = "tbl-hash-1") -> NormalizedDocument:
+    blocks = [
+        NormalizedBlock(ordinal=0, block_type="title", section_path="", content="第一节", level=0),
+        NormalizedBlock(
+            ordinal=1,
+            block_type="table",
+            section_path="第一节",
+            content="| 甲 | 乙 |\n|---|---|\n| 1 | 2 |",
+            page=1,
+            table_html=table_html,
+        ),
+    ]
+    return NormalizedDocument(
+        provider_doc_id=f"P-{content_hash}",
+        entity_ref="688256.SH",
+        doc_type="annual_report",
+        title="含表格的文档",
+        period="2024",
+        publish_at=datetime(2024, 10, 28, 18, 32, tzinfo=UTC),
+        language="zh",
+        source_url=None,
+        raw_bytes_ref=None,
+        content_hash=content_hash,
+        is_correction=False,
+        supersedes_provider_doc_id=None,
+        page_count=1,
+        blocks=blocks,
+    )
+
+
+@pytest.mark.db
+def test_char_len_and_chunking_version_are_populated(writer: DocumentWriter) -> None:
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc, chunking_version=CFG.version)  # type: ignore[arg-type]
+
+    rows = writer.conn.execute(
+        "SELECT char_len, chunking_version FROM core.doc_block WHERE block_id = ANY(%s)",
+        (result.block_ids,),
+    ).fetchall()
+    assert rows
+    assert all(r[0] is not None and r[0] > 0 for r in rows)
+    assert all(r[1] == CFG.version for r in rows)
+
+
+@pytest.mark.db
+def test_parse_confidence_is_populated_on_document_and_blocks(writer: DocumentWriter) -> None:
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    (doc_confidence,) = writer.conn.execute(
+        "SELECT parse_confidence FROM core.document WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert doc_confidence is not None
+    assert 0.0 <= float(doc_confidence) <= 1.0
+
+    block_confidences = [
+        r[0]
+        for r in writer.conn.execute(
+            "SELECT parse_confidence FROM core.doc_block WHERE block_id = ANY(%s)",
+            (result.block_ids,),
+        ).fetchall()
+    ]
+    assert block_confidences
+    assert all(c is not None for c in block_confidences)
+
+
+@pytest.mark.db
+def test_table_html_is_written_only_for_table_blocks(writer: DocumentWriter) -> None:
+    doc = _doc_with_table("<table><tr><td>1</td><td>2</td></tr></table>")
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+
+    (table_html,) = writer.conn.execute(
+        "SELECT table_html FROM core.doc_block WHERE doc_id = %s AND block_type = 'table'",
+        (result.doc_id,),
+    ).fetchone()  # type: ignore[misc]
+    assert table_html == "<table><tr><td>1</td><td>2</td></tr></table>"
+
+    (non_table_with_html,) = writer.conn.execute(
+        "SELECT count(*) FROM core.doc_block"
+        " WHERE doc_id = %s AND block_type != 'table' AND table_html IS NOT NULL",
+        (result.doc_id,),
+    ).fetchone()  # type: ignore[misc]
+    assert non_table_with_html == 0
+
+
+@pytest.mark.db
+def test_rechunk_with_new_chunking_version_keeps_old_blocks_queryable(
+    writer: DocumentWriter,
+) -> None:
+    """重切走既有的 reparse_document 机制（新 doc_id，supersedes_doc_id 指向
+    旧文档）：旧块永远不被删除或修改，chunking_version 只是让"这批块用的是
+    哪版参数切出来的"可查（数据底座方案阶段 C 的 C5）。"""
+    doc = _docs()[0]
+    old_cfg = ChunkConfig(leaf_max_chars=300)
+    old_chunks = build_tree(chunk_document(doc, old_cfg))
+    old_desc = {c.ordinal: "d" for c in old_chunks if c.block_type == "table"}
+    first = writer.write_document(doc, old_chunks, old_desc, chunking_version=old_cfg.version)  # type: ignore[arg-type]
+
+    new_cfg = ChunkConfig(leaf_max_chars=350)
+    assert new_cfg.version != old_cfg.version, "前置条件：换了参数指纹应该不同"
+    new_chunks = build_tree(chunk_document(doc, new_cfg))
+    new_desc = {c.ordinal: "d" for c in new_chunks if c.block_type == "table"}
+    second = writer.reparse_document(
+        doc,
+        new_chunks,
+        new_desc,
+        supersedes_doc_id=first.doc_id,
+        chunking_version=new_cfg.version,
+    )  # type: ignore[arg-type]
+
+    assert second.doc_id != first.doc_id
+
+    old_versions = {
+        r[0]
+        for r in writer.conn.execute(
+            "SELECT DISTINCT chunking_version FROM core.doc_block WHERE doc_id = %s",
+            (first.doc_id,),
+        ).fetchall()
+    }
+    new_versions = {
+        r[0]
+        for r in writer.conn.execute(
+            "SELECT DISTINCT chunking_version FROM core.doc_block WHERE doc_id = %s",
+            (second.doc_id,),
+        ).fetchall()
+    }
+    assert old_versions == {old_cfg.version}
+    assert new_versions == {new_cfg.version}
+
+    # 旧块仍然可以直接按 block_id 查到——即便 doc_id 已经被 supersede。
+    (old_block_count,) = writer.conn.execute(
+        "SELECT count(*) FROM core.doc_block WHERE block_id = ANY(%s)",
+        (first.block_ids,),
+    ).fetchone()  # type: ignore[misc]
+    assert old_block_count == len(first.block_ids)

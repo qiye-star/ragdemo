@@ -36,6 +36,7 @@
 | [0008](0008-textin-xparse-document-parsing.md) | 通用文档解析用 TextIn xParse，取代 MinerU | 已接受 | 2026-09-21 |
 | [0009](0009-chroma-as-vector-candidate-generator.md) | Chroma 承担向量召回，pgvector 保留为时点权威 | 已接受 | 2026-09-21 |
 | [0010](0010-internal-diagnostic-web-ui-in-p1.md) | 内部诊断 Web 界面提前到 P1，产品前端仍在 P4 | 已接受 | 2026-09-22 |
+| [0011](0011-entity-ids-single-value-pending-pushdown-test.md) | `doc_block.entity_id` 暂维持单值，不改数组（待实测数组下推） | 已接受 | 2026-09-22 |
 
 ## 什么时候要写新 ADR
 

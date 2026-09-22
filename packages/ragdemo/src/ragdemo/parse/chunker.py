@@ -27,6 +27,9 @@ class Chunk:
     bbox: tuple[float, float, float, float] | None
     is_leaf: bool
     parent_ordinal: int | None = None
+    # 表格块的结构化形态（双形态之二），原样从 NormalizedBlock.table_html
+    # 带过来；非表格块恒为 None。见 adapters/announcements.py 的字段注释。
+    table_html: str | None = None
 
 
 def _last_sentence_boundary(text: str, lo: int, hi: int) -> int | None:
@@ -122,6 +125,7 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
                     page=block.page,
                     bbox=block.bbox,
                     is_leaf=True,
+                    table_html=block.table_html,
                 )
             )
             ordinal += 1

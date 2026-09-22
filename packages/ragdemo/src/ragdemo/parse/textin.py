@@ -169,6 +169,59 @@ def table_markdown(cells: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def table_html_from_cells(cells: Sequence[Mapping[str, Any]]) -> str:
+    """cells[] → 结构化 HTML 表格，**保留**原始 `rowspan`/`colspan`——不像
+    `table_markdown` 那样把合并单元格展开成重复值。
+
+    双形态各有用途：`table_markdown`（自然语言那一半）为检索优化，重复值让
+    「智能计算 2024H1 收入」在跨列表头上也能匹配到；这里为第 7 层的加总校验
+    优化——"这一格是不是被合并过"直接决定"这一行的数字要不要被算进纵向
+    合计"，展开成重复值会抹掉这个信息，加总校验就可能重复计入被合并的行。
+
+    没有被任何 cell 覆盖的网格位置渲染成空 `<td></td>`——与
+    `parse/confidence.py` 的 `_table_looks_closed`（读 Markdown 形态）是
+    同一个"未闭合"信号在两种形态上的体现，互相印证不互相依赖。
+    """
+    if not cells:
+        return ""
+    rows = max(int(c["row"]) + int(c.get("row_span", 1)) for c in cells)
+    cols = max(int(c["col"]) + int(c.get("col_span", 1)) for c in cells)
+    origin: dict[tuple[int, int], Mapping[str, Any]] = {}
+    covered: set[tuple[int, int]] = set()
+    for cell in cells:
+        r0, c0 = int(cell["row"]), int(cell["col"])
+        origin[(r0, c0)] = cell
+        row_span, col_span = int(cell.get("row_span", 1)), int(cell.get("col_span", 1))
+        for r in range(r0, r0 + row_span):
+            for c in range(c0, c0 + col_span):
+                if (r, c) != (r0, c0):
+                    covered.add((r, c))
+
+    parts = ["<table>"]
+    for r in range(rows):
+        parts.append("<tr>")
+        for c in range(cols):
+            if (r, c) in covered:
+                continue  # 被前面某个合并单元格的 span 覆盖，不重复渲染
+            origin_cell = origin.get((r, c))
+            if origin_cell is None:
+                parts.append("<td></td>")  # 网格里没有任何 cell 覆盖到这一格
+                continue
+            text = str(origin_cell.get("text", "")).replace("&", "&amp;")
+            text = text.replace("<", "&lt;").replace(">", "&gt;").strip()
+            row_span = int(origin_cell.get("row_span", 1))
+            col_span = int(origin_cell.get("col_span", 1))
+            attrs = ""
+            if row_span > 1:
+                attrs += f' rowspan="{row_span}"'
+            if col_span > 1:
+                attrs += f' colspan="{col_span}"'
+            parts.append(f"<td{attrs}>{text}</td>")
+        parts.append("</tr>")
+    parts.append("</table>")
+    return "".join(parts)
+
+
 def _page_offset(detail: Sequence[Mapping[str, Any]]) -> int:
     """page_id 是否 0 基，首次接入时用真实响应确认，在那之前防御式归一。
 
@@ -232,8 +285,11 @@ def blocks_from_detail(
         level = int(outline_level) if outline_level is not None else -1
         text = str(item.get("text", "")).strip()
 
+        table_html: str | None = None
         if kind == "table":
-            block_type, content = "table", table_markdown(item.get("cells") or [])
+            cells = item.get("cells") or []
+            block_type, content = "table", table_markdown(cells)
+            table_html = table_html_from_cells(cells) or None
         elif kind == "image":
             block_type, content = "figure", text
         elif level >= 0:
@@ -263,6 +319,7 @@ def blocks_from_detail(
                 page=page,
                 bbox=_bbox(item.get("position"), page_dims.get(page) if page else None),
                 level=level if level >= 0 else None,
+                table_html=table_html,
             )
         )
     return blocks

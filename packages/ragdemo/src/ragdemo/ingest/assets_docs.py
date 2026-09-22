@@ -296,7 +296,12 @@ def doc_blocks_loaded(
         # 的话，prepare_documents 那边的私有材料闸门挡住了外送 xParse，
         # 但写库这一步会把结果悄悄存成公共行（owner_user 列留空）。
         result = document_writer.write_document(
-            doc, chunks, descriptions, owner_user=item.owner_user, artifacts=item.artifacts
+            doc,
+            chunks,
+            descriptions,
+            owner_user=item.owner_user,
+            artifacts=item.artifacts,
+            chunking_version=cfg.version,
         )
         if not result.skipped:
             total += len(result.block_ids)

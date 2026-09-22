@@ -294,6 +294,7 @@ def docs_ingest(
                     descriptions,
                     owner_user=item.owner_user,
                     artifacts=item.artifacts,
+                    chunking_version=chunk_cfg.version,
                 )
             except MetadataInvalid as exc:
                 failures += 1
@@ -401,7 +402,12 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
             warnings=list(result.warnings),
         )
         write_result = writer.reparse_document(
-            doc, chunks, descriptions, supersedes_doc_id=doc_id, artifacts=artifacts
+            doc,
+            chunks,
+            descriptions,
+            supersedes_doc_id=doc_id,
+            artifacts=artifacts,
+            chunking_version=chunk_cfg.version,
         )
 
     click.echo(

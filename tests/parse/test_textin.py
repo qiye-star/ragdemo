@@ -26,6 +26,7 @@ from ragdemo.parse.textin import (
     artifact_keys,
     blocks_from_detail,
     param_fingerprint,
+    table_html_from_cells,
     table_markdown,
 )
 from ragdemo_core.blob import LocalBlobStore
@@ -175,6 +176,77 @@ def test_pipe_inside_a_cell_is_escaped() -> None:
 
 def test_empty_cells_produce_empty_string() -> None:
     assert table_markdown([]) == ""
+
+
+# --- 表格结构化形态（table_html，双形态之二） --------------------------------
+
+
+def test_table_html_preserves_span_instead_of_repeating() -> None:
+    """与 table_markdown 相反：合并单元格只渲染一次、带 colspan，
+    不展开成重复值——供第 7 层做加总校验，重复值会让它以为有两个单元格。"""
+    html = table_html_from_cells(
+        [
+            {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+            {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+        ]
+    )
+    assert html.count("2024H1") == 1
+    assert 'colspan="2"' in html
+
+
+def test_table_html_row_span_is_preserved() -> None:
+    html = table_html_from_cells(
+        [
+            {"row": 0, "col": 0, "row_span": 2, "col_span": 1, "text": "甲"},
+            {"row": 0, "col": 1, "row_span": 1, "col_span": 1, "text": "乙"},
+            {"row": 1, "col": 1, "row_span": 1, "col_span": 1, "text": "丙"},
+        ]
+    )
+    assert html.count("甲") == 1
+    assert 'rowspan="2"' in html
+
+
+def test_table_html_escapes_angle_brackets_and_ampersand() -> None:
+    html = table_html_from_cells(
+        [{"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "A<B> & C"}]
+    )
+    assert "<B>" not in html  # 原始 <B> 不该原样出现，否则破坏 HTML 结构
+    assert "&lt;B&gt;" in html
+    assert "&amp;" in html
+
+
+def test_table_html_unfilled_grid_position_is_an_empty_cell() -> None:
+    """网格里没有任何 cell 覆盖到的位置渲染成空 <td></td>——与
+    parse/confidence.py 的 _table_looks_closed（读 Markdown 形态）是同一个
+    "未闭合"信号在两种形态上的体现。"""
+    html = table_html_from_cells(
+        [
+            {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "甲"},
+            {"row": 0, "col": 1, "row_span": 1, "col_span": 1, "text": "乙"},
+            {"row": 1, "col": 0, "row_span": 1, "col_span": 1, "text": "丙"},
+            # (1, 1) 没有任何 cell 覆盖
+        ]
+    )
+    assert "<td></td>" in html
+
+
+def test_table_html_empty_cells_produce_empty_string() -> None:
+    assert table_html_from_cells([]) == ""
+
+
+def test_blocks_from_detail_populates_table_html_for_table_blocks() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    table = next(b for b in blocks if b.block_type == "table")
+    assert table.table_html is not None
+    assert table.table_html.startswith("<table>")
+    assert "智能计算" in table.table_html
+
+
+def test_blocks_from_detail_leaves_table_html_none_for_non_table_blocks() -> None:
+    blocks = blocks_from_detail(_detail(), page_dims={})
+    non_tables = [b for b in blocks if b.block_type != "table"]
+    assert non_tables
+    assert all(b.table_html is None for b in non_tables)
 
 
 # --- 私有材料闸门 -----------------------------------------------------------

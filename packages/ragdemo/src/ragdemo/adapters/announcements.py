@@ -26,6 +26,10 @@ class NormalizedBlock:
     page: int | None = None
     bbox: tuple[float, float, float, float] | None = None
     level: int | None = None
+    # 表格块的结构化形态（双形态之二，`content` 是供检索用的自然语言/Markdown
+    # 那一半）。只有 block_type == "table" 且供应商给出了 cells[] 时才非空；
+    # 供路径 C 的加总校验用，不参与向量检索（docs/05-document-pipeline.md §2.3）。
+    table_html: str | None = None
 
     def __post_init__(self) -> None:
         if self.block_type not in BLOCK_TYPES:
