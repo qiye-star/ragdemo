@@ -24,7 +24,7 @@ Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 
 import psycopg
 from dagster import AssetExecutionContext, ResourceParam, asset
@@ -35,6 +35,7 @@ from ragdemo.embed.base import Embedder
 from ragdemo.embed.batch import EmbedStats, embed_pending_blocks
 from ragdemo.ingest.assets import DAILY
 from ragdemo.ingest.documents import DocumentWriter, ParseArtifacts
+from ragdemo.ingest.partitions import partition_window
 from ragdemo.parse.chunker import chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
@@ -48,8 +49,6 @@ from ragdemo.parse.textin import (
 )
 from ragdemo.parse.tree import build_tree
 from ragdemo_core.blob import BlobNotFound, BlobStore
-
-LOOKBACK = timedelta(days=1)
 
 # block_embeddings 每次 run 的上限。不传 limit 的话 embed_pending_blocks 会
 # 把（本分区收窄后的）待办队列一次性吃进内存、一次性把它们全部送去调嵌入
@@ -197,16 +196,6 @@ def prepare_documents(
     return prepared
 
 
-def _partition_window(context: AssetExecutionContext) -> tuple[datetime, datetime]:
-    """把分区键翻成 `(since, until]` 抓取窗口——`doc_normalized` 用它去查供应商，
-    `block_embeddings` 用同一个窗口收窄待嵌入队列（两者必须是同一个窗口，
-    否则回填历史分区时 block_embeddings 会处理到不该属于它的块）。"""
-    partition = date.fromisoformat(context.partition_key)
-    until = datetime.combine(partition, datetime.max.time(), tzinfo=UTC)
-    since = until - LOOKBACK
-    return since, until
-
-
 @asset(partitions_def=DAILY, group_name="documents")
 def doc_normalized(
     context: AssetExecutionContext, announcements: ResourceParam[AnnouncementProvider]
@@ -215,7 +204,7 @@ def doc_normalized(
     fetch_ctx = FetchContext(
         ingest_run_id=context.op_execution_context.run_id, partition_date=partition
     )
-    since, until = _partition_window(context)
+    since, until = partition_window(context)
     docs = [
         announcements.normalize(raw)
         for raw in announcements.list_documents(fetch_ctx, since=since, until=until)
@@ -343,13 +332,13 @@ def block_embeddings(
     # 内部的 FOR UPDATE OF b SKIP LOCKED 解决）。
     #
     # published_after/until 收窄到本分区：与 doc_normalized 用的是同一个
-    # (since, until] 窗口（_partition_window），不是 ingested_at。不收窄的
-    # 话，重跑某一天的分区会把全部待办队列里其他分区的积压也一起吃掉；用
-    # ingested_at 收窄则会在回填历史分区时完全找不到该分区的块——回填今天
-    # 执行、写入的行 ingested_at 是今天，但这个分区该处理的是 publish_at
-    # 落在分区那一天的文档（模块内 _partition_window 的 docstring 有完整
-    # 解释）。
-    since, until = _partition_window(context)
+    # (since, until] 窗口（ingest/partitions.py 的 partition_window），不是
+    # ingested_at。不收窄的话，重跑某一天的分区会把全部待办队列里其他分区的
+    # 积压也一起吃掉；用 ingested_at 收窄则会在回填历史分区时完全找不到该
+    # 分区的块——回填今天执行、写入的行 ingested_at 是今天，但这个分区该
+    # 处理的是 publish_at 落在分区那一天的文档（partition_window 的
+    # docstring 有完整解释）。
+    since, until = partition_window(context)
     stats = embed_pending_blocks(
         conn,
         embedder,

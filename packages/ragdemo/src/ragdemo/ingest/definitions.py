@@ -48,6 +48,7 @@ from ragdemo.ingest.assets_docs import (
 from ragdemo.ingest.documents import DocumentWriter
 from ragdemo.ingest.writer import PointInTimeWriter
 from ragdemo.parse.textin import DocumentParser, MockDocumentParser, TextInParser
+from ragdemo.quality.checks import ALL_CHECKS
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 TRACKED_DOC_TYPES = ("quarterly", "annual_report", "announcement", "10-K", "10-Q", "8-K")
@@ -157,6 +158,7 @@ defs = Definitions(
         doc_blocks_loaded,
         block_embeddings,
     ],
+    asset_checks=list(ALL_CHECKS),
     jobs=[_document_reaction_job],
     sensors=[new_document_sensor],
     resources={

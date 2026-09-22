@@ -179,7 +179,7 @@ def table_html_from_cells(cells: Sequence[Mapping[str, Any]]) -> str:
     合计"，展开成重复值会抹掉这个信息，加总校验就可能重复计入被合并的行。
 
     没有被任何 cell 覆盖的网格位置渲染成空 `<td></td>`——与
-    `parse/confidence.py` 的 `_table_looks_closed`（读 Markdown 形态）是
+    `parse/confidence.py` 的 `table_looks_closed`（读 Markdown 形态）是
     同一个"未闭合"信号在两种形态上的体现，互相印证不互相依赖。
     """
     if not cells:

@@ -52,7 +52,7 @@ def _garbled_ratio(text: str) -> float:
     return bad / len(text)
 
 
-def _table_looks_closed(markdown_table: str) -> bool:
+def table_looks_closed(markdown_table: str) -> bool:
     """`table_markdown()` 把没有被任何 cell 覆盖的网格位置渲染成空单元格；
     一张真正闭合的表不应该有空单元格（哪怕是合并单元格产生的重复值也是
     非空的，见 `parse/textin.py` 的 `table_markdown` docstring）。"""
@@ -78,7 +78,7 @@ def _closure_score(blocks: Sequence[NormalizedBlock]) -> float:
     tables = [b for b in blocks if b.block_type == "table"]
     if not tables:
         return 1.0  # 没有表格，这一项不适用
-    closed = sum(1 for b in tables if _table_looks_closed(b.content))
+    closed = sum(1 for b in tables if table_looks_closed(b.content))
     return closed / len(tables)
 
 

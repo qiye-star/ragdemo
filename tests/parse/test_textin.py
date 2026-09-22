@@ -217,7 +217,7 @@ def test_table_html_escapes_angle_brackets_and_ampersand() -> None:
 
 def test_table_html_unfilled_grid_position_is_an_empty_cell() -> None:
     """网格里没有任何 cell 覆盖到的位置渲染成空 <td></td>——与
-    parse/confidence.py 的 _table_looks_closed（读 Markdown 形态）是同一个
+    parse/confidence.py 的 table_looks_closed（读 Markdown 形态）是同一个
     "未闭合"信号在两种形态上的体现。"""
     html = table_html_from_cells(
         [
