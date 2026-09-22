@@ -6,6 +6,7 @@ import { getJSON } from '../lib/api.js';
 import { el } from '../lib/dom.js';
 import { emptyCard } from '../lib/status.js';
 import { viewLink } from '../lib/state.js';
+import { dataTable } from '../lib/table.js';
 
 export const id = 'docs';
 export const title = '文档';
@@ -19,32 +20,32 @@ function warningBadges(warnings) {
   );
 }
 
-function row(doc) {
-  return el(
-    'tr',
-    { class: 'doc-row' },
-    el('td', { class: 'num' }, String(doc.doc_id)),
-    el(
-      'td',
-      {},
-      viewLink('layout', { doc: doc.doc_id, page: 1 }, doc.title),
-      warningBadges(doc.parse_warnings)
-    ),
-    el('td', {}, doc.doc_type),
-    el('td', {}, doc.source),
-    el('td', {}, (doc.publish_at || '').slice(0, 10)),
-    el('td', { class: 'num' }, doc.page_count == null ? '—' : String(doc.page_count)),
-    el('td', { class: 'mono' }, doc.parse_engine ?? '—'),
-    // 全站第一个也是唯一一个块树入口——此前「叶子/总块数」是纯文本，
-    // 块树视图只能靠手敲 hash 到达。
-    el('td', { class: 'num' }, viewLink('blocks', { doc: doc.doc_id }, `${doc.leaf_count}/${doc.block_count}`)),
-    el(
-      'td',
-      { class: 'num' },
-      doc.parse_confidence == null ? 'NULL（未评分）' : doc.parse_confidence.toFixed(4)
-    )
-  );
-}
+const COLUMNS = [
+  { label: 'doc_id', cls: 'num', get: (d) => String(d.doc_id) },
+  {
+    label: '标题',
+    // 数组会被 el() 展开成多个子节点——viewLink 与徽标（可能是 null）
+    // 各自独立，不需要额外包一层 <span>。
+    get: (d) => [viewLink('layout', { doc: d.doc_id, page: 1 }, d.title), warningBadges(d.parse_warnings)],
+  },
+  { label: 'doc_type', get: (d) => d.doc_type },
+  { label: 'source', get: (d) => d.source },
+  { label: 'publish_at', get: (d) => (d.publish_at || '').slice(0, 10) },
+  { label: 'pages', cls: 'num', get: (d) => d.page_count },
+  { label: 'parse_engine', cls: 'mono', get: (d) => d.parse_engine },
+  {
+    label: '叶子/总块数',
+    cls: 'num',
+    // 全站第一个也是唯一一个块树入口——此前是纯文本，块树视图只能靠手敲
+    // hash 到达。
+    get: (d) => viewLink('blocks', { doc: d.doc_id }, `${d.leaf_count}/${d.block_count}`),
+  },
+  {
+    label: 'confidence',
+    cls: 'num',
+    get: (d) => (d.parse_confidence == null ? 'NULL（未评分）' : d.parse_confidence.toFixed(4)),
+  },
+];
 
 export async function render(ctx) {
   const body = await getJSON('/api/documents', {}, { asOf: ctx.asOf, signal: ctx.signal });
@@ -63,27 +64,6 @@ export async function render(ctx) {
     'div',
     { class: 'table-wrap' },
     el('p', { class: 'dim' }, `${body.documents.length} 份文档（as_of = ${body.as_of}）`),
-    el(
-      'table',
-      { class: 'grid-table' },
-      el(
-        'thead',
-        {},
-        el(
-          'tr',
-          {},
-          el('th', {}, 'doc_id'),
-          el('th', {}, '标题'),
-          el('th', {}, 'doc_type'),
-          el('th', {}, 'source'),
-          el('th', {}, 'publish_at'),
-          el('th', {}, 'pages'),
-          el('th', {}, 'parse_engine'),
-          el('th', {}, '叶子/总块数'),
-          el('th', {}, 'confidence')
-        )
-      ),
-      el('tbody', {}, body.documents.map(row))
-    )
+    dataTable({ columns: COLUMNS, rows: body.documents })
   );
 }
