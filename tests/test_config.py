@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -66,3 +67,29 @@ def test_require_textin_base_url_raises_when_missing() -> None:
 def test_require_textin_base_url_returns_value_when_set() -> None:
     cfg = load_config({"TEXTIN_BASE_URL": "http://127.0.0.1:8081"})
     assert cfg.require_textin_base_url() == "http://127.0.0.1:8081"
+
+
+def test_textin_cost_per_page_cny_defaults_to_none() -> None:
+    cfg = load_config({})
+    assert cfg.textin_cost_per_page_cny is None
+
+
+def test_textin_cost_per_page_cny_reads_from_env() -> None:
+    cfg = load_config({"TEXTIN_COST_PER_PAGE_CNY": "0.35"})
+    assert cfg.textin_cost_per_page_cny == Decimal("0.35")
+
+
+def test_textin_cost_per_page_cny_rejects_non_numeric() -> None:
+    with pytest.raises(ConfigError, match="TEXTIN_COST_PER_PAGE_CNY"):
+        load_config({"TEXTIN_COST_PER_PAGE_CNY": "not-a-number"})
+
+
+def test_require_textin_cost_per_page_cny_raises_when_missing() -> None:
+    cfg = load_config({})
+    with pytest.raises(ConfigError, match="TEXTIN_COST_PER_PAGE_CNY"):
+        cfg.require_textin_cost_per_page_cny()
+
+
+def test_require_textin_cost_per_page_cny_returns_value_when_set() -> None:
+    cfg = load_config({"TEXTIN_COST_PER_PAGE_CNY": "0.35"})
+    assert cfg.require_textin_cost_per_page_cny() == Decimal("0.35")

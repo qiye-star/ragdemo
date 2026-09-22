@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 DEFAULT_BLOB_ROOT = "data/blob"
@@ -36,6 +37,7 @@ class RagdemoConfig:
     textin_base_url: str | None
     textin_allow_private: bool
     textin_max_pages_per_run: int
+    textin_cost_per_page_cny: Decimal | None
 
     def validate(self) -> None:
         if self.textin_max_pages_per_run <= 0:
@@ -53,6 +55,16 @@ class RagdemoConfig:
         if not self.textin_base_url:
             raise ConfigError("环境变量 TEXTIN_BASE_URL 未设置（参见 .env.example）")
         return self.textin_base_url
+
+    def require_textin_cost_per_page_cny(self) -> Decimal:
+        """只有真正要判定 C 档月度预算（`parse/router.py::check_monthly_
+        budget`）时才调用这个方法。C 档单价是商务合同条款，不该在代码里
+        编一个默认数字——没有配置就应该让调用方明确知道"预算判断做不了"，
+        而不是悄悄用一个瞎猜的价格算出一个看起来正常的数字。
+        """
+        if self.textin_cost_per_page_cny is None:
+            raise ConfigError("环境变量 TEXTIN_COST_PER_PAGE_CNY 未设置（参见 .env.example）")
+        return self.textin_cost_per_page_cny
 
 
 def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
@@ -74,11 +86,24 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
     else:
         textin_max_pages_per_run = DEFAULT_MAX_PAGES_PER_RUN
 
+    raw_cost_per_page = (source.get("TEXTIN_COST_PER_PAGE_CNY") or "").strip()
+    textin_cost_per_page_cny: Decimal | None
+    if raw_cost_per_page:
+        try:
+            textin_cost_per_page_cny = Decimal(raw_cost_per_page)
+        except InvalidOperation as exc:
+            raise ConfigError(
+                f"环境变量 TEXTIN_COST_PER_PAGE_CNY 必须是数字，收到 {raw_cost_per_page!r}"
+            ) from exc
+    else:
+        textin_cost_per_page_cny = None
+
     cfg = RagdemoConfig(
         blob_root=blob_root,
         textin_base_url=textin_base_url,
         textin_allow_private=textin_allow_private,
         textin_max_pages_per_run=textin_max_pages_per_run,
+        textin_cost_per_page_cny=textin_cost_per_page_cny,
     )
     cfg.validate()
     return cfg

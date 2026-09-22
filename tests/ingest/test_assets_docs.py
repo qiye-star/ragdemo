@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import psycopg
 import pytest
 from dagster import build_asset_context
@@ -20,9 +21,12 @@ from ragdemo.ingest.assets_docs import (
     block_embeddings,
     doc_blocks_loaded,
     doc_normalized,
+    doc_prepared,
     prepare_documents,
+    tier_c_reparse,
 )
 from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.parse.router import list_retry_queue, record_retry_pending
 from ragdemo.parse.textin import (
     MockDocumentParser,
     PageBudget,
@@ -324,6 +328,58 @@ def test_transient_failure_does_not_discard_earlier_or_later_prepared_documents(
     assert prepared[1].doc.blocks
 
 
+@pytest.mark.db
+def test_doc_prepared_asset_records_the_dropped_document_in_the_retry_queue(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    """G6：prepare_documents 本身不碰数据库，故意不写行——doc_prepared 这层
+    资产必须把"输入里有、输出里没有"的差集记进重试队列，否则没有任何地方
+    能查"现在到底有哪些文档卡着没进库"。"""
+
+    class FlakyOnSecond(MockDocumentParser):
+        calls = 0
+
+        def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+            type(self).calls += 1
+            if type(self).calls == 2:
+                raise ParseRetryable("xParse 服务临时故障")
+            return super().parse(file_bytes, owner_user=owner_user)
+
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob, count=3)
+    ctx = build_asset_context(partition_key="2024-10-28")
+
+    prepared = doc_prepared(ctx, docs, FlakyOnSecond(), blob, MockAnnouncementProvider(), conn)
+
+    assert [p.doc.provider_doc_id for p in prepared] == ["PATH-B-0", "PATH-B-2"]
+    (entry,) = list_retry_queue(conn, source=MockAnnouncementProvider().provider)
+    assert entry.provider_doc_id == "PATH-B-1"
+
+
+@pytest.mark.db
+def test_doc_prepared_asset_resolves_a_previously_queued_document_once_it_succeeds(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    """一份文档这次成功了——之前排在重试队列里的记录必须被摘除，不能永远
+    挂在队列里假装它还卡着。"""
+    blob = LocalBlobStore(tmp_path)
+    docs = _path_b_docs(blob, count=1)
+    ctx = build_asset_context(partition_key="2024-10-28")
+    announcements = MockAnnouncementProvider()
+
+    record_retry_pending(
+        conn,
+        source=announcements.provider,
+        provider_doc_ids=["PATH-B-0"],
+        at=datetime(2024, 10, 27, tzinfo=UTC),
+    )
+    assert list_retry_queue(conn, source=announcements.provider) != []
+
+    doc_prepared(ctx, docs, MockDocumentParser(), blob, announcements, conn)
+
+    assert list_retry_queue(conn, source=announcements.provider) == []
+
+
 def test_document_with_no_content_gets_a_marker_not_a_silent_drop(tmp_path: Path) -> None:
     """既没有块也没有原件的文档以前直接 continue：不写行、不留记号，
     下次分区重跑会对着同一份文档再判一次"没东西可做"，永远停不下来——和
@@ -340,3 +396,160 @@ def test_document_with_no_content_gets_a_marker_not_a_silent_drop(tmp_path: Path
     assert prepared[0].doc.blocks == []
     assert prepared[0].artifacts is not None
     assert prepared[0].artifacts.engine == "skipped:no_content"
+
+
+# --- tier_c_reparse（阶段 G）---------------------------------------------------
+
+XPARSE_FIXTURE = Path("tests/fixtures/xparse/annual_report.json")
+
+
+def _high_precision_parser(handler: Any, cache_root: Path) -> TextInParser:  # noqa: ANN401
+    """`cache_root` 是解析器自己的 xParse 产物缓存目录，与 `tier_c_reparse`
+    读原始字节用的 `blob` 资源是两个独立的 BlobStore 实例——两者用途不同，
+    不该共用同一个根目录。"""
+    return TextInParser(
+        "http://tier-c.invalid",
+        LocalBlobStore(cache_root),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _successful_reparse_transport() -> httpx.MockTransport:
+    payload = json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8"))
+    return httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
+
+
+def _seed_document_for_tier_c(
+    conn: psycopg.Connection,
+    blob: LocalBlobStore,
+    *,
+    doc_id: int,
+    doc_type: str = "quarterly",
+    parse_confidence: float = 0.3,
+    source: str = "mock-announcements",
+) -> str:
+    raw_ref = f"raw/tier-c-{doc_id}.pdf"
+    blob.put(raw_ref, b"%PDF-1.4 fake original bytes")
+    conn.execute(
+        "INSERT INTO core.document (doc_id, entity_id, doc_type, title, publish_at, source,"
+        " content_hash, version_group_id, valid_from, known_at, ingest_run_id, raw_ref,"
+        " parse_confidence, parse_engine) "
+        "OVERRIDING SYSTEM VALUE VALUES (%s,'CN.688256',%s,'原始标题',%s,%s,%s,%s,"
+        "'2024-10-01',%s,'r0',%s,%s,'textin:1+abc')",
+        (
+            doc_id,
+            doc_type,
+            PUBLISH_AT_TIER_C,
+            source,
+            f"tier-c-hash-{doc_id}",
+            doc_id,
+            PUBLISH_AT_TIER_C,
+            raw_ref,
+            parse_confidence,
+        ),
+    )
+    conn.commit()
+    return raw_ref
+
+
+PUBLISH_AT_TIER_C = "2024-10-28 10:00:00+00"
+
+
+@pytest.mark.db
+def test_tier_c_reparse_is_a_noop_without_a_parser(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    """`tier_c_parser` 为 None（TEXTIN_BASE_URL 未配置）——整体空操作，
+    不假装做了什么。"""
+    blob = LocalBlobStore(tmp_path)
+    _seed_document_for_tier_c(conn, blob, doc_id=9001)
+    ctx = build_asset_context(partition_key="2024-10-28")
+
+    result = tier_c_reparse(ctx, conn, blob, None)
+
+    assert result == 0
+
+
+@pytest.mark.db
+def test_tier_c_reparse_skips_high_confidence_documents(
+    conn: psycopg.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G 引言的触发条件都没满足——不该被路由到 C 档，不该花这笔钱。"""
+    monkeypatch.setenv("TEXTIN_COST_PER_PAGE_CNY", "0.5")
+    blob = LocalBlobStore(tmp_path)
+    _seed_document_for_tier_c(conn, blob, doc_id=9002, parse_confidence=0.95)
+    ctx = build_asset_context(partition_key="2024-10-28")
+    parser = _high_precision_parser(lambda r: httpx.Response(500), tmp_path / "cache")  # 不该被调用
+
+    result = tier_c_reparse(ctx, conn, blob, parser)
+
+    assert result == 0
+    (superseded,) = conn.execute(
+        "SELECT superseded_at FROM core.document WHERE doc_id = 9002"
+    ).fetchone()  # type: ignore[misc]
+    assert superseded is None
+
+
+@pytest.mark.db
+def test_tier_c_reparse_reparses_a_low_confidence_document(
+    conn: psycopg.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G2/G5：parse_confidence=0.3 自动进 C 档，重解析后 parse_engine 记录
+    高精度参数指纹，且新的 parse_confidence 必须高于 B 档那个人为压低的分数
+    ——不然这笔钱就白花了。"""
+    monkeypatch.setenv("TEXTIN_COST_PER_PAGE_CNY", "0.5")
+    blob = LocalBlobStore(tmp_path)
+    _seed_document_for_tier_c(conn, blob, doc_id=9003, parse_confidence=0.3)
+    ctx = build_asset_context(partition_key="2024-10-28")
+    parser = _high_precision_parser(
+        lambda r: httpx.Response(
+            200, json=json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8"))
+        ),
+        tmp_path / "cache",
+    )
+
+    result = tier_c_reparse(ctx, conn, blob, parser)
+
+    assert result == 1
+    (old_superseded,) = conn.execute(
+        "SELECT superseded_at FROM core.document WHERE doc_id = 9003"
+    ).fetchone()  # type: ignore[misc]
+    assert old_superseded is not None
+
+    new_confidence, new_engine, supersedes = conn.execute(
+        "SELECT parse_confidence, parse_engine, supersedes_doc_id FROM core.document"
+        " WHERE supersedes_doc_id = 9003"
+    ).fetchone()  # type: ignore[misc]
+    assert supersedes == 9003
+    assert new_engine.startswith("textin:")
+    assert float(new_confidence) > 0.3
+
+
+@pytest.mark.db
+def test_tier_c_reparse_degrades_with_a_budget_exceeded_warning_when_cap_is_zero(
+    conn: psycopg.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3/G4：月度上限为 0——告警 + parse_warnings 含 budget_exceeded，且仍然
+    入库（不是静默跳过），parse_confidence 保持低分（没有重解析就没有新分数）。"""
+    monkeypatch.setenv("TEXTIN_COST_PER_PAGE_CNY", "0.5")
+    conn.execute(
+        "INSERT INTO core.parse_tier_policy"
+        " (doc_type, confidence_below, closure_below, monthly_cap_cny, enabled, known_at) "
+        "VALUES ('edge-case', 0.7, 0.9, 0, true, now())"
+    )
+    conn.commit()
+    blob = LocalBlobStore(tmp_path)
+    _seed_document_for_tier_c(conn, blob, doc_id=9004, doc_type="edge-case", parse_confidence=0.3)
+    ctx = build_asset_context(partition_key="2024-10-28")
+    parser = _high_precision_parser(lambda r: httpx.Response(500), tmp_path / "cache")  # 不该被调用
+
+    result = tier_c_reparse(ctx, conn, blob, parser)
+
+    assert result == 0
+    confidence, warnings, superseded = conn.execute(
+        "SELECT parse_confidence, parse_warnings, superseded_at FROM core.document"
+        " WHERE doc_id = 9004"
+    ).fetchone()  # type: ignore[misc]
+    assert float(confidence) == 0.3
+    assert "budget_exceeded" in warnings
+    assert superseded is None

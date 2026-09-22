@@ -53,6 +53,16 @@ XPARSE_PARAMS: Final[Mapping[str, str | int]] = MappingProxyType(
     }
 )
 
+# C 档（阶段 G）用的高精度参数集：dpi 翻倍（144→288，图片型 PDF/扫描件在
+# 更高分辨率下 OCR 准确率通常更高），打开 raw_ocr（B 档为了响应体积关掉的
+# 逐行 OCR，见上面 XPARSE_PARAMS 的注释——C 档是"这份文档值得多花钱多花
+# 时间"的场景，体积不再是主要顾虑）。方案 §四"不自研解析器"：C 档是换参数
+# 或换供应商，不是自己写解析逻辑，这里改的只是传给同一个 xParse 接口的
+# 参数，没有新增任何解析代码路径。
+XPARSE_PARAMS_HIGH_PRECISION: Final[Mapping[str, str | int]] = MappingProxyType(
+    {**XPARSE_PARAMS, "dpi": 288, "raw_ocr": 1}
+)
+
 # 错误码分类。分错的代价是不对称的：把永久失败当成可重试会无限烧钱，
 # 把可重试当成永久失败会静默丢文档。
 _PERMANENT: Final[Mapping[int, str]] = MappingProxyType(

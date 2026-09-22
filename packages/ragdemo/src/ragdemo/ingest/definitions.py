@@ -51,10 +51,16 @@ from ragdemo.ingest.assets_docs import (
     doc_blocks_loaded,
     doc_normalized,
     doc_prepared,
+    tier_c_reparse,
 )
 from ragdemo.ingest.documents import DocumentWriter
 from ragdemo.ingest.writer import PointInTimeWriter
-from ragdemo.parse.textin import DocumentParser, MockDocumentParser, TextInParser
+from ragdemo.parse.textin import (
+    XPARSE_PARAMS_HIGH_PRECISION,
+    DocumentParser,
+    MockDocumentParser,
+    TextInParser,
+)
 from ragdemo.quality.checks import ALL_CHECKS
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
@@ -140,6 +146,24 @@ def parser_resource(_context: InitResourceContext) -> DocumentParser:
 
 
 @resource
+def tier_c_parser_resource(_context: InitResourceContext) -> TextInParser | None:
+    """阶段 G：C 档重解析用的高精度 `TextInParser`（`dpi`/`raw_ocr` 与 B 档
+    不同的参数集，见 `parse/textin.py::XPARSE_PARAMS_HIGH_PRECISION`）。
+    `TEXTIN_BASE_URL` 缺失时返回 None——与 `parser_resource` 不同的是这里
+    不退回一个 Mock：C 档本来就只在"真的要花钱换更高精度"时才有意义，
+    Mock 解析器测不出真实提升，`tier_c_reparse` 收到 None 就直接跳过整个
+    资产（见该资产 docstring）。"""
+    cfg = load_config()
+    if cfg.textin_base_url is None:
+        return None
+    return TextInParser(
+        cfg.require_textin_base_url(),
+        LocalBlobStore(cfg.blob_root),
+        params=XPARSE_PARAMS_HIGH_PRECISION,
+    )
+
+
+@resource
 def embedder_resource(_context: InitResourceContext) -> Embedder:
     """真实嵌入器留给 Phase 1.4——`ingest/cli.py` 的 `embed` 命令对
     `MockEmbedder` 有同一句注释。生产 `Definitions` 目前也只能接它。"""
@@ -186,6 +210,7 @@ defs = Definitions(
         doc_normalized,
         doc_prepared,
         doc_blocks_loaded,
+        tier_c_reparse,
         block_embeddings,
         price_normalized,
         price_daily_loaded,
@@ -204,5 +229,6 @@ defs = Definitions(
         "conn": conn_resource,
         "tushare_writer": tushare_writer_resource,
         "gateway": gateway_resource,
+        "tier_c_parser": tier_c_parser_resource,
     },
 )

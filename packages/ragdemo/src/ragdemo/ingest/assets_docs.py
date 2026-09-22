@@ -24,21 +24,32 @@ Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import UTC, date, datetime
 
 import psycopg
 from dagster import AssetExecutionContext, ResourceParam, asset
 
 from ragdemo.adapters.announcements import AnnouncementProvider, NormalizedDocument
 from ragdemo.adapters.base import FetchContext
+from ragdemo.adapters.local_manifest import count_pdf_pages
+from ragdemo.config import load_config
 from ragdemo.embed.base import Embedder
 from ragdemo.embed.batch import EmbedStats, embed_pending_blocks
 from ragdemo.ingest.assets import DAILY
 from ragdemo.ingest.documents import DocumentWriter, ParseArtifacts
 from ragdemo.ingest.partitions import partition_window
 from ragdemo.parse.chunker import chunk_document
+from ragdemo.parse.confidence import table_looks_closed
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
+from ragdemo.parse.router import (
+    check_monthly_budget,
+    load_active_policy,
+    record_c_tier_pages,
+    record_retry_pending,
+    resolve_retry_pending,
+    should_route_to_tier_c,
+)
 from ragdemo.parse.textin import (
     DocumentParser,
     PageBudget,
@@ -46,8 +57,10 @@ from ragdemo.parse.textin import (
     ParseRetryable,
     ParseTimeout,
     PrivateDocumentEgressBlocked,
+    TextInParser,
 )
 from ragdemo.parse.tree import build_tree
+from ragdemo.parse.validate import validate_chunks
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo_core.blob import BlobNotFound, BlobStore
 
@@ -254,6 +267,8 @@ def doc_prepared(
     doc_normalized: list[NormalizedDocument],
     parser: ResourceParam[DocumentParser],
     blob: ResourceParam[BlobStore],
+    announcements: ResourceParam[AnnouncementProvider],
+    conn: ResourceParam[psycopg.Connection],
 ) -> list[PreparedDocument]:
     """路径 A/B 分流 + 路径 B 的实际解析（把 `prepare_documents` 接成资产）。
 
@@ -267,15 +282,39 @@ def doc_prepared(
     只产出供应商公告，没有用户上传材料）。私有材料的入口在 P4 才接，届时
     这里要改成从分区配置或调用方读取真实的 owner_user，而不是继续写死
     None（docs/10-roadmap.md 的「用户上传 → 私有空间检索」）。
+
+    阶段 G（F6）：重试队列。`prepare_documents` 对 `budget.exhausted` 与
+    `ParseRetryable` 都故意"不写行、不留记号"（见该函数对应分支的注释），
+    这样下次分区重跑才会把它们当"还没处理过"——好处是重试天然发生，代价
+    是没有任何地方能查"现在到底有哪些文档卡着没进库"。`announcements` 与
+    `doc_normalized` 的差集（在输入里出现过、没能在输出里对应上一份
+    `PreparedDocument`）就是这批卡住的文档；`record_retry_pending`/
+    `resolve_retry_pending` 只负责让它们可查，不改变 `prepare_documents`
+    本身"不碰数据库"的纯函数边界。
     """
     budget = PageBudget(MAX_PAGES_PER_PREPARE_RUN)
     prepared = prepare_documents(doc_normalized, parser, blob, budget, owner_user=None)
+
+    processed_ids = {p.doc.provider_doc_id for p in prepared}
+    missing_ids = [
+        d.provider_doc_id for d in doc_normalized if d.provider_doc_id not in processed_ids
+    ]
+    if missing_ids:
+        record_retry_pending(
+            conn,
+            source=announcements.provider,
+            provider_doc_ids=missing_ids,
+            at=datetime.now(UTC),
+        )
+    resolve_retry_pending(conn, source=announcements.provider, provider_doc_ids=list(processed_ids))
+
     context.log.info(
         "prepared documents",
         extra={
             "run_id": context.op_execution_context.run_id,
             "count": len(prepared),
             "pages_remaining": budget.remaining,
+            "retry_pending": len(missing_ids),
         },
     )
     return prepared
@@ -327,7 +366,205 @@ def doc_blocks_loaded(
     return total
 
 
+def _entity_ref_for(conn: psycopg.Connection, entity_id: str | None) -> str | None:
+    """反查 entity_id 对应的任意一个供应商代码列，供重解析构造
+    `NormalizedDocument.entity_ref`——`core.document` 只存了已解析的
+    `entity_id`，没有存原始的供应商代码字符串；`DocumentWriter._resolve_
+    entity_id` 又只认供应商代码做匹配。取任意一列非空的代码即可，
+    `_resolve_entity_id` 用它反查出的一定还是同一个 entity_id（四列
+    OR 匹配，只要命中一列就够）。"""
+    if entity_id is None:
+        return None
+    row = conn.execute(
+        "SELECT tushare_code, ifind_code, wind_code, edgar_cik"
+        "  FROM core.entity WHERE entity_id = %s",
+        (entity_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return next((str(v) for v in row if v is not None), None)
+
+
+def _table_closure_for_document(conn: psycopg.Connection, doc_id: int) -> tuple[float | None, bool]:
+    """这份文档自己的表格闭合率与"是否含数值表格"——阶段 D 的
+    `table_closure_rate_check` 算的是整个分区窗口的比率，这里要的是单份
+    文档自己的，两者场景不同，各自独立计算，不复用同一个函数。"""
+    rows = conn.execute(
+        "SELECT content FROM core.doc_block WHERE doc_id = %s AND block_type = 'table'",
+        (doc_id,),
+    ).fetchall()
+    tables = [str(r[0]) for r in rows]
+    if not tables:
+        return None, False
+    closure_rate = sum(1 for t in tables if table_looks_closed(t)) / len(tables)
+    has_numeric = any(ch.isdigit() for t in tables for ch in t)
+    return closure_rate, has_numeric
+
+
+def _mark_budget_exceeded(conn: psycopg.Connection, doc_id: int) -> None:
+    """G3：超预算时仍然入库，只是告警降级——parse_warnings 追加
+    'budget_exceeded'，parse_confidence 原样保留（不重解析就没有新分数，
+    保留旧分数本身就是"仍标低置信度"）。"""
+    conn.execute(
+        "UPDATE core.document SET parse_warnings = parse_warnings || '[\"budget_exceeded\"]'::jsonb"
+        " WHERE doc_id = %s",
+        (doc_id,),
+    )
+    conn.commit()
+
+
+def _next_month(moment: datetime) -> datetime:
+    return datetime(moment.year + moment.month // 12, moment.month % 12 + 1, 1, tzinfo=UTC)
+
+
 @asset(partitions_def=DAILY, group_name="documents", deps=[doc_blocks_loaded])
+def tier_c_reparse(
+    context: AssetExecutionContext,
+    conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
+    tier_c_parser: ResourceParam[TextInParser | None],
+) -> int:
+    """低置信度文档的二次解析路由（阶段 G）。`deps=[doc_blocks_loaded]` 是
+    纯排序依赖，理由与 `block_embeddings` 对 `doc_blocks_loaded` 的依赖
+    完全一致（见该资产的 docstring）——这里同样不需要它的返回值，只要它
+    先跑完：这个资产读的是它刚写进 `core.document` 的那批行。
+
+    `tier_c_parser` 为 None 时整体空操作——`definitions.py` 按
+    `TEXTIN_BASE_URL` 是否设置决定注入真实的高精度 `TextInParser` 还是
+    None（与 `parser_resource` 同一个判断时机），离线开发/测试环境不该
+    假装做了 C 档重解析。解析器作为资源注入（而不是在这里现场构造），
+    是为了让测试能直接传一个带 `httpx.MockTransport` 的 `TextInParser`
+    实例进来，不需要真的连一次网。
+    """
+    if tier_c_parser is None:
+        context.log.info("tier C reparse skipped: TEXTIN_BASE_URL not configured")
+        return 0
+    cfg = load_config()
+    if cfg.textin_cost_per_page_cny is None:
+        context.log.info("tier C reparse skipped: TEXTIN_COST_PER_PAGE_CNY not configured")
+        return 0
+
+    since, until = partition_window(context)
+    rows = conn.execute(
+        "SELECT doc_id, doc_type, raw_ref, entity_id, parse_confidence, title, period,"
+        " publish_at, language, source, source_url, is_correction"
+        "  FROM core.document"
+        " WHERE publish_at > %s AND publish_at <= %s"
+        "   AND superseded_at IS NULL AND raw_ref IS NOT NULL",
+        (since, until),
+    ).fetchall()
+
+    parser = tier_c_parser
+    cost_per_page = cfg.require_textin_cost_per_page_cny()
+    now = datetime.now(UTC)
+    month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    month_end = _next_month(month_start)
+    describer = MockTableDescriber()
+    chunk_cfg = ChunkConfig()
+    reparsed = 0
+
+    for (
+        doc_id,
+        doc_type,
+        raw_ref,
+        entity_id,
+        parse_confidence,
+        title,
+        period,
+        publish_at,
+        language,
+        source,
+        source_url,
+        is_correction,
+    ) in rows:
+        table_closure, has_numeric = _table_closure_for_document(conn, doc_id)
+        policy = load_active_policy(conn, doc_type, now)
+        if not should_route_to_tier_c(
+            policy,
+            parse_confidence=float(parse_confidence) if parse_confidence is not None else None,
+            table_closure_rate=table_closure,
+            has_numeric_table=has_numeric,
+        ):
+            continue
+        assert policy is not None  # should_route_to_tier_c 只在有策略时才可能返回 True
+
+        raw_bytes = blob.get(raw_ref)
+        estimated_pages = count_pdf_pages(raw_bytes) or 1
+        decision = check_monthly_budget(
+            conn,
+            policy,
+            doc_type=doc_type,
+            month_start=month_start,
+            month_end=month_end,
+            pages_about_to_spend=estimated_pages,
+            cost_per_page_cny=cost_per_page,
+        )
+        if not decision.allowed:
+            _mark_budget_exceeded(conn, doc_id)
+            context.log.warning(
+                "tier C budget exceeded",
+                extra={
+                    "doc_id": doc_id,
+                    "doc_type": doc_type,
+                    "spent_cny": str(decision.spent_cny),
+                },
+            )
+            continue
+
+        result = parser.parse(raw_bytes)
+        new_doc = NormalizedDocument(
+            provider_doc_id=str(doc_id),
+            entity_ref=_entity_ref_for(conn, entity_id),
+            doc_type=doc_type,
+            title=title,
+            period=period,
+            publish_at=publish_at,
+            language=language,
+            source_url=source_url,
+            raw_bytes_ref=raw_ref,
+            content_hash=TextInParser.content_hash(raw_bytes),
+            is_correction=bool(is_correction),
+            supersedes_provider_doc_id=None,
+            page_count=result.page_count,
+            blocks=result.blocks,
+        )
+        chunks = build_tree(chunk_document(new_doc, chunk_cfg)) if new_doc.blocks else []
+        descriptions = {
+            c.ordinal: describer.describe(
+                c.content, title=new_doc.title, section_path=c.section_path
+            )
+            for c in chunks
+            if c.block_type == "table"
+        }
+        if validate_chunks(new_doc, chunks, descriptions):
+            # 重解析结果本身没通过元数据校验——保留原文档不动，不強行替换成
+            # 一份更差的结果；仍然告警，运维需要知道这份文档 C 档重解析失败了。
+            context.log.warning("tier C reparse failed validation", extra={"doc_id": doc_id})
+            continue
+
+        run_id = context.op_execution_context.run_id
+        writer = DocumentWriter(conn, ingest_run_id=run_id, source=source)
+        artifacts = ParseArtifacts(
+            engine=result.engine_version, json_ref=result.json_ref, md_ref=result.md_ref
+        )
+        writer.reparse_document(
+            new_doc,
+            chunks,
+            descriptions,
+            supersedes_doc_id=doc_id,
+            artifacts=artifacts,
+            chunking_version=chunk_cfg.version,
+        )
+        record_c_tier_pages(conn, doc_type=doc_type, pages=result.page_count, at=now)
+        reparsed += 1
+
+    context.log.info(
+        "tier C reparse", extra={"run_id": context.op_execution_context.run_id, "count": reparsed}
+    )
+    return reparsed
+
+
+@asset(partitions_def=DAILY, group_name="documents", deps=[doc_blocks_loaded, tier_c_reparse])
 def block_embeddings(
     context: AssetExecutionContext,
     conn: ResourceParam[psycopg.Connection],
