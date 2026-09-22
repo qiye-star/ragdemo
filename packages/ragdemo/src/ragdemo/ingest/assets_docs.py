@@ -9,11 +9,11 @@
 `psycopg.Connection` 都不是 Dagster 的 ResourceDefinition 子类，不加这层标记
 Dagster 会把它们当成需要上游资产产出的「输入」，直接调用（测试用的调用方式）会报
 `DagsterInvalidInvocationError: No value provided for required input`。
-`doc_blocks_loaded` 的 `prepared` 参数同样标了 `ResourceParam`——它不是真正的
-Dagster 资源，是 `prepare_documents()` 的普通返回值，这样标只是为了让直接调用
-成立；本任务不改 `definitions.py`，真正接入生产 DAG 时这三个资产该怎么串起来
-（`prepared` 从「资源」改回「资产依赖」，或者把 `prepare_documents` 挪进
-`doc_blocks_loaded` 内部调用）是留给接线任务的设计决定，不在这里下判断。
+
+`doc_prepared` 是这四个资产里第三个：它把 `prepare_documents()` 接成真正的资产
+依赖（消费 `doc_normalized` 的产出，产出喂给 `doc_blocks_loaded`），不再是测试
+期才存在的裸函数调用——`definitions.py` 现在注册全部四个资产，`prepared` 参数
+已经从「伪装成资源的资产依赖」改回真正的资产依赖，接线任务在这里完成。
 
 本文件刻意不用 `from __future__ import annotations`：与 ingest/assets.py 同样的
 原因——Dagster 在 `@asset` 装饰期对 `context` 参数做类型校验时直接比较
@@ -52,17 +52,14 @@ from ragdemo_core.blob import BlobNotFound, BlobStore
 LOOKBACK = timedelta(days=1)
 
 # block_embeddings 每次 run 的上限。不传 limit 的话 embed_pending_blocks 会
-# fetchall() 全局待办队列——首次入库时那是「数十万块」一次性吃进内存、
-# 一次性把它们全部送去调嵌入 API（P-26）。这道 LIMIT 挡的是单次 run 的
-# 内存占用与 API 调用量（爆炸半径），**不是**并发去重：`ORDER BY
-# b.block_id LIMIT 5000` 是确定性的，两个并发跑的回填分区会选中完全相同
-# 的一批行，不是不同的两批——真要避免两边都对着同一批未提交的行重复
-# 计费，需要 `FOR UPDATE SKIP LOCKED` 之类的行级协调，这里没有，留给
-# 接线任务。5000 大约是 DEFAULT_BATCH_SIZE（64）的 78 倍，单次 run 的
-# 内存与 API 调用量可控，需要的话可以多跑几次 run 把待办队列排空——
-# 按批提交（P-24 的修复）让重跑天然是断点续传，不必一次吃完首次入库的
-# 全部积压。partition 自身的范围收窄留给接线任务决定（见模块 docstring），
-# 这里只收紧单次 run 的上限，不改查询范围。
+# 把（本分区收窄后的）待办队列一次性吃进内存、一次性把它们全部送去调嵌入
+# API（P-26）。这道 LIMIT 挡的是单次 run 的内存占用与 API 调用量（爆炸
+# 半径）。并发去重是另一件事，由 `embed_pending_blocks` 内部的
+# `FOR UPDATE OF b SKIP LOCKED` 解决（embed/batch.py）——两个并发跑的分区
+# 各自按批次加锁选取，一方持有锁的那一批会被另一方跳过，不会重复计费。
+# 5000 大约是 DEFAULT_BATCH_SIZE（64）的 78 倍，单次 run 的内存与 API
+# 调用量可控，需要的话可以多跑几次 run 把待办队列排空——按批提交（P-24
+# 的修复）让重跑天然是断点续传，不必一次吃完首次入库的全部积压。
 MAX_BLOCKS_PER_EMBED_RUN = 5000
 
 
@@ -200,6 +197,16 @@ def prepare_documents(
     return prepared
 
 
+def _partition_window(context: AssetExecutionContext) -> tuple[datetime, datetime]:
+    """把分区键翻成 `(since, until]` 抓取窗口——`doc_normalized` 用它去查供应商，
+    `block_embeddings` 用同一个窗口收窄待嵌入队列（两者必须是同一个窗口，
+    否则回填历史分区时 block_embeddings 会处理到不该属于它的块）。"""
+    partition = date.fromisoformat(context.partition_key)
+    until = datetime.combine(partition, datetime.max.time(), tzinfo=UTC)
+    since = until - LOOKBACK
+    return since, until
+
+
 @asset(partitions_def=DAILY, group_name="documents")
 def doc_normalized(
     context: AssetExecutionContext, announcements: ResourceParam[AnnouncementProvider]
@@ -208,8 +215,7 @@ def doc_normalized(
     fetch_ctx = FetchContext(
         ingest_run_id=context.op_execution_context.run_id, partition_date=partition
     )
-    until = datetime.combine(partition, datetime.max.time(), tzinfo=UTC)
-    since = until - LOOKBACK
+    since, until = _partition_window(context)
     docs = [
         announcements.normalize(raw)
         for raw in announcements.list_documents(fetch_ctx, since=since, until=until)
@@ -227,16 +233,58 @@ def doc_normalized(
     return docs
 
 
+# prepare_documents 每次 run 的页数上限。与 MAX_BLOCKS_PER_EMBED_RUN 是同一个
+# 模式：TextIn 按页计费，PageBudget 只能事后扣减（页数要等响应回来才知道，
+# 拦不住已经发出去的这次调用，拦的是后面还没发的），没有这道闸门的话，回填
+# 历史分区可能一次性把整月预算烧穿。2000 页留出足够余量处理正常的一日分区，
+# 出现异常大批量回填时会在预算耗尽处自然停止（prepare_documents 的
+# `budget.exhausted` 分支），剩下的留给下一次 run。
+MAX_PAGES_PER_PREPARE_RUN = 2000
+
+
+@asset(partitions_def=DAILY, group_name="documents")
+def doc_prepared(
+    context: AssetExecutionContext,
+    doc_normalized: list[NormalizedDocument],
+    parser: ResourceParam[DocumentParser],
+    blob: ResourceParam[BlobStore],
+) -> list[PreparedDocument]:
+    """路径 A/B 分流 + 路径 B 的实际解析（把 `prepare_documents` 接成资产）。
+
+    `prepare_documents` 本身仍是纯函数——不碰数据库、不要 Dagster 上下文，
+    这层资产只是给它接上真正的上游依赖（`doc_normalized` 的产出）与两个
+    资源（`parser` / `blob`）。此前这一步只存在于测试里直接调用
+    `prepare_documents(...)`，`doc_blocks_loaded` 吃的是一个 `ResourceParam`
+    包过的 `Sequence[PreparedDocument]`，生产环境从来没有物化过它。
+
+    owner_user 固定传 None：这个资产目前只处理公开来源（`doc_normalized`
+    只产出供应商公告，没有用户上传材料）。私有材料的入口在 P4 才接，届时
+    这里要改成从分区配置或调用方读取真实的 owner_user，而不是继续写死
+    None（docs/10-roadmap.md 的「用户上传 → 私有空间检索」）。
+    """
+    budget = PageBudget(MAX_PAGES_PER_PREPARE_RUN)
+    prepared = prepare_documents(doc_normalized, parser, blob, budget, owner_user=None)
+    context.log.info(
+        "prepared documents",
+        extra={
+            "run_id": context.op_execution_context.run_id,
+            "count": len(prepared),
+            "pages_remaining": budget.remaining,
+        },
+    )
+    return prepared
+
+
 @asset(partitions_def=DAILY, group_name="documents")
 def doc_blocks_loaded(
     context: AssetExecutionContext,
-    prepared: ResourceParam[Sequence[PreparedDocument]],
-    writer: ResourceParam[DocumentWriter],
+    doc_prepared: list[PreparedDocument],
+    document_writer: ResourceParam[DocumentWriter],
 ) -> int:
     cfg = ChunkConfig()
     describer = MockTableDescriber()
     total = 0
-    for item in prepared:
+    for item in doc_prepared:
         doc = item.doc
         chunks = build_tree(chunk_document(doc, cfg)) if doc.blocks else []
         descriptions = {
@@ -247,7 +295,7 @@ def doc_blocks_loaded(
         # item.owner_user 原样转发给写入层：这是 Finding 2 的闭环——不转发
         # 的话，prepare_documents 那边的私有材料闸门挡住了外送 xParse，
         # 但写库这一步会把结果悄悄存成公共行（owner_user 列留空）。
-        result = writer.write_document(
+        result = document_writer.write_document(
             doc, chunks, descriptions, owner_user=item.owner_user, artifacts=item.artifacts
         )
         if not result.skipped:
@@ -256,7 +304,7 @@ def doc_blocks_loaded(
     # 时才真正解析出 core.entity 的 entity_id（DocumentWriter._resolve_
     # entity_id，对调用方不可见）。能不臆造就用手头真实有的字段：供应商侧
     # 的原始代码 entity_ref，去重后的列表，至少能定位到这批文档涉及谁。
-    entity_refs = sorted({item.doc.entity_ref for item in prepared if item.doc.entity_ref})
+    entity_refs = sorted({item.doc.entity_ref for item in doc_prepared if item.doc.entity_ref})
     context.log.info(
         "loaded blocks",
         extra={
@@ -268,21 +316,42 @@ def doc_blocks_loaded(
     return total
 
 
-@asset(partitions_def=DAILY, group_name="documents")
+@asset(partitions_def=DAILY, group_name="documents", deps=[doc_blocks_loaded])
 def block_embeddings(
     context: AssetExecutionContext,
     conn: ResourceParam[psycopg.Connection],
     embedder: ResourceParam[Embedder],
 ) -> EmbedStats:
-    # P-26：不传 limit 会 fetchall() 全局待办队列，单次 run 的内存占用与
+    """`deps=[doc_blocks_loaded]` 是纯排序依赖，不接它的返回值：这个资产
+    读的是 `core.doc_block.embedding IS NULL` 队列，是通过数据库状态、
+    不是通过 Dagster 的 I/O 管理器与 `doc_blocks_loaded` 关联的。不声明
+    这条边的话，`doc_blocks_loaded` 与 `block_embeddings` 在资产图里是两个
+    互不相干的节点，Dagster 的并发执行器可能先跑 `block_embeddings`——
+    这不是假设：接进 `Definitions` 后第一次真实物化就复现了，`block_
+    embeddings` 在 `doc_blocks_loaded` 还没开始时就已经跑完并报告了
+    0 条待办。`deps=` 只加一条排序边，不要求它的输出值，因此不需要在
+    函数签名里加一个用不到的 `doc_blocks_loaded: int` 参数。
+    """
+    # P-26：不传 limit 会 fetchall() 全部待办队列，单次 run 的内存占用与
     # API 调用量不可控。上限的取值与理由见模块顶部常量——它挡的是单次
-    # run 的爆炸半径，不是并发分区之间的去重。
-    stats = embed_pending_blocks(conn, embedder, limit=MAX_BLOCKS_PER_EMBED_RUN)
-    # as_of／entity_id 在这里没有真实取值：这个资产查的是全局 embedding IS
-    # NULL 队列，不按分区或实体过滤（P-26 明确把"按分区收窄查询范围"留给
-    # 接线任务），队列本身也横跨多个实体。硬填会违反"不得臆造值"，所以
-    # 只带 partition_key——它是这次 run 真实携带的调度信息，不等价于
-    # 查询用的 as_of，因此没有借用那个字段名。
+    # run 的爆炸半径，不是并发分区之间的去重（那个由 embed_pending_blocks
+    # 内部的 FOR UPDATE OF b SKIP LOCKED 解决）。
+    #
+    # published_after/until 收窄到本分区：与 doc_normalized 用的是同一个
+    # (since, until] 窗口（_partition_window），不是 ingested_at。不收窄的
+    # 话，重跑某一天的分区会把全部待办队列里其他分区的积压也一起吃掉；用
+    # ingested_at 收窄则会在回填历史分区时完全找不到该分区的块——回填今天
+    # 执行、写入的行 ingested_at 是今天，但这个分区该处理的是 publish_at
+    # 落在分区那一天的文档（模块内 _partition_window 的 docstring 有完整
+    # 解释）。
+    since, until = _partition_window(context)
+    stats = embed_pending_blocks(
+        conn,
+        embedder,
+        limit=MAX_BLOCKS_PER_EMBED_RUN,
+        published_after=since,
+        published_until=until,
+    )
     context.log.info(
         "embedded",
         extra={

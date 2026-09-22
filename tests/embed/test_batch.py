@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
@@ -212,6 +212,52 @@ def test_index_not_called_when_no_pending_blocks(conn: psycopg.Connection) -> No
     assert index.upserted == []
 
 
+# --- 分区窗口收窄（published_after/until，与 ingested_at 无关） -------------
+
+
+def _add_block_published_at(
+    conn: psycopg.Connection, content: str, publish_at: str, *, ordinal: int = 0
+) -> None:
+    """与 `_add_blocks` 不同：允许指定 `publish_at`，用来测试窗口收窄。"""
+    conn.execute(
+        "INSERT INTO core.doc_block (doc_id, block_type, section_path, ordinal,"
+        " content, is_leaf, entity_id, doc_type, publish_at, valid_from, known_at,"
+        " source, ingest_run_id) "
+        "VALUES (1,'paragraph','第一节',%s,%s,true,'CN.688256','quarterly',"
+        " %s,'2024-07-01',%s,'mock','r1')",
+        (ordinal, content, publish_at, publish_at),
+    )
+    conn.commit()
+
+
+@pytest.mark.db
+def test_publish_window_excludes_blocks_outside_the_partition(conn: psycopg.Connection) -> None:
+    """两块分别落在 2024-10-27 与 2024-10-28；只传 2024-10-28 那天的窗口，
+    应该只处理落在窗口内的那一块——这就是回填历史分区时必须成立的东西：
+    收窄用的是 publish_at（业务时间），不是这一行被物理写入的时刻。"""
+    # UTC 10-27 10:32 / UTC 10-28 10:32
+    _add_block_published_at(conn, "十月二十七日", "2024-10-27 18:32+08", ordinal=0)
+    _add_block_published_at(conn, "十月二十八日", "2024-10-28 18:32+08", ordinal=1)
+
+    # (since, until] 半开区间只圈住 UTC 10-28 那一天，第一块（UTC 10-27）落在窗口外。
+    since = datetime(2024, 10, 27, 23, 59, 59, 999999, tzinfo=UTC)
+    until = datetime(2024, 10, 28, 23, 59, 59, 999999, tzinfo=UTC)
+
+    stats = embed_pending_blocks(conn, MockEmbedder(), published_after=since, published_until=until)
+
+    assert stats.written == 1
+    (remaining,) = conn.execute(
+        "SELECT count(*) FROM core.doc_block WHERE is_leaf AND embedding IS NULL"
+    ).fetchone()  # type: ignore[misc]
+    assert remaining == 1, "窗口外的那一块不该被这次调用处理"
+
+
+@pytest.mark.db
+def test_publish_window_requires_both_bounds_together(conn: psycopg.Connection) -> None:
+    with pytest.raises(ValueError, match="published_after"):
+        embed_pending_blocks(conn, MockEmbedder(), published_after=datetime.now(UTC))
+
+
 # --- owner_user 隔离（CLAUDE.md §0：用户上传材料私有隔离） ------------------
 
 
@@ -333,3 +379,48 @@ def test_committed_batches_survive_a_crash_in_a_later_batch(
         assert still_pending == 2, "第二批（丙/丁）崩溃时还没提交，重跑时应该还在待办队列里"
     finally:
         other_conn.close()
+
+
+# --- 并发分区不重复计费（FOR UPDATE OF b SKIP LOCKED） -----------------------
+
+
+@pytest.mark.db
+def test_concurrent_run_skips_rows_locked_by_another_connection(
+    conn: psycopg.Connection, temp_db: str
+) -> None:
+    """旧实现只在最开始做一次不带锁的 SELECT，两个并发跑的分区会选中完全
+    相同的一批 block_id，重复调用计费的嵌入 API。用一个独立连接手工
+    `FOR UPDATE SKIP LOCKED` 住这两条块（模拟"另一个分区正在处理、还没
+    提交"），验证 embed_pending_blocks 在这段时间里必须一条都拿不到——
+    而不是像旧实现那样对同一批行再算一次向量。"""
+    _add_blocks(conn, ["甲", "乙"])
+
+    holder = psycopg.connect(temp_db)
+    locked_ids = [
+        int(r[0])
+        for r in holder.execute(
+            "SELECT block_id FROM core.doc_block WHERE is_leaf AND embedding IS NULL "
+            "ORDER BY block_id FOR UPDATE SKIP LOCKED"
+        ).fetchall()
+    ]
+    assert locked_ids == [
+        int(r[0])
+        for r in conn.execute(
+            "SELECT block_id FROM core.doc_block WHERE is_leaf ORDER BY block_id"
+        ).fetchall()
+    ], "前置条件：holder 锁住的应该正是这两条待办块"
+
+    try:
+        embedder = CountingEmbedder()
+        stats = embed_pending_blocks(conn, embedder, batch_size=64)
+
+        assert stats.written == 0, "两条待办块都被 holder 锁住，本次调用应该一条都拿不到"
+        assert stats.pending == 0
+        assert embedder.batches == 0, "拿不到行就不该调用嵌入 API（这正是要防的重复计费）"
+    finally:
+        holder.rollback()  # 释放锁，不影响其他测试复用同一个 temp_db
+        holder.close()
+
+    # holder 释放锁之后，正常重跑应该能补上这两条——待办没有被误标记为"已处理"。
+    stats_after = embed_pending_blocks(conn, MockEmbedder())
+    assert stats_after.written == 2

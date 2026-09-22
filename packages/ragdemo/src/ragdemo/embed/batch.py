@@ -52,6 +52,8 @@ def embed_pending_blocks(
     limit: int | None = None,
     owner_user: str = PUBLIC_OWNER,
     index: VectorIndex | None = None,
+    published_after: datetime | None = None,
+    published_until: datetime | None = None,
 ) -> EmbedStats:
     """为尚未嵌入的叶子块生成向量并写回。
 
@@ -62,14 +64,41 @@ def embed_pending_blocks(
     core.doc_block 行撤销它们。写向量索引失败不回滚 PG：PG 是真相，
     向量索引是可重建的派生物，重跑本函数会补上。
 
-    提交必须显式做：`conn.execute` 已经在本函数最上面的 SELECT 那一刻
-    隐式开了一个外层事务，下面的 `with conn.transaction()` 因此只是
-    SAVEPOINT 而不是顶层事务（ragdemo_core/db/migrate.py:61-64 记录过
-    同一个坑）。数十万块的首次入库如果中途崩溃，没有显式 commit 的话，
-    已经算过、已经付过 API 费用的向量会连同 embedding_cache 一起被整体
-    回滚——断点续传就名不副实了。按批提交把损失面从"整个 run"缩小到
-    "最后一个未提交的批"。
+    **并发安全**：待办队列的 SELECT 带 `FOR UPDATE OF b SKIP LOCKED`，且
+    加锁与释放都在同一批次的事务内完成——每一批自己 SELECT、自己
+    UPDATE、自己 commit，不是先一次性 SELECT 全部待办、再切片分批处理。
+    两个并发跑的分区各自按批次推进时，一方持有行锁的那一批会被另一方的
+    SKIP LOCKED 跳过，天然不会选中同一批 block_id 重复计费——这正是本
+    函数曾经的洞：旧实现只在最开始做一次不带锁的 SELECT，两个并发调用会
+    拿到完全相同的一批 block_id（`ORDER BY block_id LIMIT n` 对两边都是
+    确定性的）。批次提交后锁立即释放，与"按批提交缩小崩溃损失面"这个
+    目标不冲突——提交本来就是每批发生一次，锁的生命周期只是被收紧到
+    与它对齐。
+
+    提交必须显式做：`conn.execute` 在事务块内隐式参与当前事务，`with
+    conn.transaction()` 因此只是 SAVEPOINT 而不是顶层事务
+    （ragdemo_core/db/migrate.py:61-64 记录过同一个坑）。数十万块的首次
+    入库如果中途崩溃，没有显式 commit 的话，已经算过、已经付过 API 费用
+    的向量会连同 embedding_cache 一起被整体回滚——断点续传就名不副实了。
+    按批提交把损失面从"整个 run"缩小到"最后一个未提交的批"。
+
+    `published_after` / `published_until` 缺省都不过滤（保留旧行为：一次扫
+    全部待办队列），必须同时提供或同时省略——两者圈出的是一个
+    `(published_after, published_until]` 半开区间。`ragdemo.ingest.
+    assets_docs.block_embeddings` 传自己那一分区的抓取窗口（与
+    `doc_normalized` 用的是同一个 since/until），把处理范围收窄到"这个
+    分区对应的文档产出的块"。
+
+    这里故意不用 `ingested_at`（块被写入 PG 的物理时刻）做收窄：Dagster
+    分区的含义是"这个分区代表的业务时间窗口"，而不是"代码碰巧在哪天执行"。
+    回填历史分区时两者完全不同——今天回填 2024-10-28 这个分区，写进去的
+    行 `ingested_at` 是今天，但这个分区该处理的仍然是 `publish_at` 落在
+    2024-10-28 那一天的文档。按 `ingested_at` 收窄会让回填出来的分区永远
+    找不到自己该处理的块。
     """
+    if (published_after is None) != (published_until is None):
+        raise ValueError("published_after 与 published_until 必须同时提供或同时省略")
+
     # owner_user 在 EmbeddingCache / core.embedding_cache 里的公共分区哨兵是
     # `''`（该表主键三列不能为 NULL，004_documents.sql）；但 core.doc_block
     # 这一列上公共块存的是 NULL（同一份迁移 §5.1 的注释：owner_tenant /
@@ -77,67 +106,81 @@ def embed_pending_blocks(
     # 做一次映射，否则默认调用（owner_user="")会选中全部私有块——
     # 那正是本函数被发现的那个洞（CLAUDE.md §0 用户上传材料私有隔离）。
     doc_block_owner = None if owner_user == PUBLIC_OWNER else owner_user
-
-    rows = conn.execute(
-        "SELECT b.block_id, d.title, b.section_path, b.content_desc, b.content, "
-        "       b.doc_id, b.entity_id, b.doc_type, b.known_at, b.superseded_at, b.publish_at "
-        "  FROM core.doc_block b JOIN core.document d USING (doc_id) "
-        " WHERE b.is_leaf AND b.embedding IS NULL "
-        "   AND b.owner_user IS NOT DISTINCT FROM %s "
-        " ORDER BY b.block_id " + ("LIMIT %s" if limit is not None else ""),
-        (doc_block_owner, limit) if limit is not None else (doc_block_owner,),
-    ).fetchall()
-
-    if not rows:
-        return EmbedStats(pending=0, from_cache=0, computed=0, written=0, indexed=0)
-
-    inputs: dict[int, str] = {
-        int(r[0]): embedding_input(
-            doc_title=str(r[1] or ""),
-            section_path=str(r[2] or ""),
-            content_desc=str(r[3] or ""),
-            content=str(r[4]),
-        )
-        for r in rows
-    }
-    # 向量索引用的元数据：doc_id / entity_id / doc_type / known_at /
-    # superseded_at / publish_at，直接取自本批待嵌入块，供写 index 时复用。
-    metadata: dict[int, tuple[int, str | None, str, datetime, datetime | None, datetime]] = {
-        int(r[0]): (int(r[5]), r[6], str(r[7]), r[8], r[9], r[10]) for r in rows
-    }
-    keys = {block_id: content_key(text) for block_id, text in inputs.items()}
-    key_to_text = {keys[bid]: text for bid, text in inputs.items()}
-
     cache = EmbeddingCache(conn, model=embedder.model, owner_user=owner_user)
-    cached: dict[str, list[float]] = cache.get_many(sorted(set(keys.values())))
 
+    pending = 0
     computed = 0
     written = 0
     indexed = 0
 
-    # 按块（而不是按去重后的内容键）分批：这样每一批都能对应到一组具体的
-    # block_id，提交才能以"这批块"为粒度发生。缓存 dict 跨批次持续累积，
-    # 同样的模板段落只要在更早的批次里算过一次，后面的批次直接命中，
-    # 不会重复调用计费 API。
-    for start in range(0, len(rows), batch_size):
-        chunk_block_ids = [int(r[0]) for r in rows[start : start + batch_size]]
-
-        missing = sorted({keys[bid] for bid in chunk_block_ids if keys[bid] not in cached})
-        if missing:
-            vectors = [l2_normalize(v) for v in embedder.embed([key_to_text[k] for k in missing])]
-            new_vectors = dict(zip(missing, vectors, strict=True))
-            cache.put_many(new_vectors)
-            cached.update(new_vectors)
-            computed += len(missing)
+    while limit is None or written < limit:
+        take = batch_size if limit is None else min(batch_size, limit - written)
 
         with conn.transaction():
+            window_filter = (
+                " AND b.publish_at > %s AND b.publish_at <= %s "
+                if published_after is not None
+                else ""
+            )
+            params: tuple[object, ...] = (
+                (doc_block_owner, published_after, published_until, take)
+                if published_after is not None
+                else (doc_block_owner, take)
+            )
+            rows = conn.execute(
+                "SELECT b.block_id, d.title, b.section_path, b.content_desc, b.content, "
+                "       b.doc_id, b.entity_id, b.doc_type, "
+                "       b.known_at, b.superseded_at, b.publish_at "
+                "  FROM core.doc_block b JOIN core.document d USING (doc_id) "
+                " WHERE b.is_leaf AND b.embedding IS NULL "
+                "   AND b.owner_user IS NOT DISTINCT FROM %s "
+                + window_filter
+                + " ORDER BY b.block_id "
+                " LIMIT %s "
+                " FOR UPDATE OF b SKIP LOCKED",
+                params,
+            ).fetchall()
+
+            if not rows:
+                break
+
+            pending += len(rows)
+            chunk_block_ids = [int(r[0]) for r in rows]
+            inputs: dict[int, str] = {
+                int(r[0]): embedding_input(
+                    doc_title=str(r[1] or ""),
+                    section_path=str(r[2] or ""),
+                    content_desc=str(r[3] or ""),
+                    content=str(r[4]),
+                )
+                for r in rows
+            }
+            # 向量索引用的元数据：doc_id / entity_id / doc_type / known_at /
+            # superseded_at / publish_at，直接取自本批待嵌入块，供写 index 时复用。
+            metadata: dict[
+                int, tuple[int, str | None, str, datetime, datetime | None, datetime]
+            ] = {int(r[0]): (int(r[5]), r[6], str(r[7]), r[8], r[9], r[10]) for r in rows}
+            keys = {block_id: content_key(text) for block_id, text in inputs.items()}
+            key_to_text = {keys[bid]: text for bid, text in inputs.items()}
+
+            cached = cache.get_many(sorted(set(keys.values())))
+            missing = sorted(set(keys.values()) - set(cached.keys()))
+            if missing:
+                vectors = [
+                    l2_normalize(v) for v in embedder.embed([key_to_text[k] for k in missing])
+                ]
+                new_vectors = dict(zip(missing, vectors, strict=True))
+                cache.put_many(new_vectors)
+                cached.update(new_vectors)
+                computed += len(missing)
+
             for block_id in chunk_block_ids:
                 conn.execute(
                     "UPDATE core.doc_block SET embedding = %s WHERE block_id = %s",
                     (_vector_literal(cached[keys[block_id]]), block_id),
                 )
                 written += 1
-        conn.commit()  # 见函数 docstring：上面的 with 块只是 SAVEPOINT。
+        conn.commit()  # 见函数 docstring：提交同时释放本批的 FOR UPDATE 锁。
 
         if index is not None:
             items = [
@@ -156,9 +199,14 @@ def embed_pending_blocks(
             index.upsert(items)
             indexed += len(items)
 
+        if len(rows) < take:
+            # 拿到的比要的少：待办队列（在本进程可见、未被其他事务锁住的
+            # 范围内）已经见底，没必要再发一轮空查询去确认。
+            break
+
     return EmbedStats(
-        pending=len(rows),
-        from_cache=len(rows) - computed,
+        pending=pending,
+        from_cache=pending - computed,
         computed=computed,
         written=written,
         indexed=indexed,

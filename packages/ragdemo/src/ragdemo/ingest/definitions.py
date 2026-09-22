@@ -5,6 +5,14 @@
 候选行，供 LangGraph 侧监听器按 event_id 取任务）留给 Agent 层接入时实现——
 **Dagster 资产不直接调用 Agent**，避免数据管线被模型调用的延迟与失败拖垮
 （docs/01-architecture.md §3）。
+
+文档管线的三个资产（`doc_normalized` / `doc_prepared` / `doc_blocks_loaded` /
+`block_embeddings`）此前写完了、有测试，但从未注册进这里的 `Definitions`——
+生产环境从来没有物化过它们。本文件把它们接上：`announcements` / `parser` /
+`embedder` 目前都只能是 Mock（供应商未定 ADR-0005；真实解析器走
+`ragdemo.config.load_config()` 判断，见 `parser_resource`；真实嵌入器留给
+Phase 1.4，与 `ingest/cli.py` 的 `embed` 命令是同一个处境），`blob` /
+`document_writer` / `conn` 是真实资源。
 """
 
 from __future__ import annotations
@@ -24,9 +32,23 @@ from dagster import (
     sensor,
 )
 
+from ragdemo.adapters.announcements import AnnouncementProvider
+from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.adapters.mock.facts import MockFactAdapter
+from ragdemo.config import load_config
+from ragdemo.embed.base import Embedder
+from ragdemo.embed.mock import MockEmbedder
 from ragdemo.ingest.assets import fact_normalized, fin_fact_loaded
+from ragdemo.ingest.assets_docs import (
+    block_embeddings,
+    doc_blocks_loaded,
+    doc_normalized,
+    doc_prepared,
+)
+from ragdemo.ingest.documents import DocumentWriter
 from ragdemo.ingest.writer import PointInTimeWriter
+from ragdemo.parse.textin import DocumentParser, MockDocumentParser, TextInParser
+from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 TRACKED_DOC_TYPES = ("quarterly", "annual_report", "announcement", "10-K", "10-Q", "8-K")
 
@@ -39,6 +61,58 @@ def _conn() -> psycopg.Connection:
 def writer_resource(_context: InitResourceContext) -> PointInTimeWriter:
     """惰性构造：只有 Dagster 真正初始化该资源时才会连库，而不是模块导入时。"""
     return PointInTimeWriter(_conn(), ingest_run_id="dagster", source="mock")
+
+
+@resource
+def document_writer_resource(_context: InitResourceContext) -> DocumentWriter:
+    """惰性构造，理由与 `writer_resource` 相同。`source` 固定为
+    "mock-announcements"：与下面 `announcements_resource` 是同一个来源，
+    真实供应商接入时两处要一起改，不能只改一处。"""
+    return DocumentWriter(_conn(), ingest_run_id="dagster", source="mock-announcements")
+
+
+@resource
+def conn_resource(_context: InitResourceContext) -> psycopg.Connection:
+    """`block_embeddings` 直接用它查待办队列、写 embedding 列——与
+    `document_writer_resource` 是两条独立的连接，互不影响各自的事务边界。"""
+    return _conn()
+
+
+@resource
+def announcements_resource(_context: InitResourceContext) -> AnnouncementProvider:
+    """公告供应商未定（ADR-0005 只锁定了 `AnnouncementProvider` 接口，不锁
+    供应商），生产环境目前没有真实实现可接——与事实侧的
+    `adapter: MockFactAdapter()` 是同一个处境，不是本次接线任务要解决的
+    缺口：供应商选型属于 `docs/10-roadmap.md` 另一项未完成的交付。"""
+    return MockAnnouncementProvider()
+
+
+@resource
+def blob_resource(_context: InitResourceContext) -> BlobStore:
+    return LocalBlobStore(load_config().blob_root)
+
+
+@resource
+def parser_resource(_context: InitResourceContext) -> DocumentParser:
+    """按 `TEXTIN_BASE_URL` 是否设置选择真实解析器还是 Mock——与 `ragdemo
+    docs ingest` CLI（`ingest/cli.py` 的 `--parser` 判断）同一套规则，不
+    重新发明一套开关。`base_url` 缺失时退回 `MockDocumentParser`：本地
+    开发与测试都不该被逼着配一个真实解析器地址。"""
+    cfg = load_config()
+    if cfg.textin_base_url is None:
+        return MockDocumentParser()
+    return TextInParser(
+        cfg.require_textin_base_url(),
+        LocalBlobStore(cfg.blob_root),
+        allow_private=cfg.textin_allow_private,
+    )
+
+
+@resource
+def embedder_resource(_context: InitResourceContext) -> Embedder:
+    """真实嵌入器留给 Phase 1.4——`ingest/cli.py` 的 `embed` 命令对
+    `MockEmbedder` 有同一句注释。生产 `Definitions` 目前也只能接它。"""
+    return MockEmbedder()
 
 
 # 临时目标：传感器发现新文档后，重新物化这两个事实资产。
@@ -75,11 +149,24 @@ def new_document_sensor(ctx: SensorEvaluationContext) -> RunRequest | SkipReason
 
 
 defs = Definitions(
-    assets=[fact_normalized, fin_fact_loaded],
+    assets=[
+        fact_normalized,
+        fin_fact_loaded,
+        doc_normalized,
+        doc_prepared,
+        doc_blocks_loaded,
+        block_embeddings,
+    ],
     jobs=[_document_reaction_job],
     sensors=[new_document_sensor],
     resources={
         "adapter": MockFactAdapter(),
         "writer": writer_resource,
+        "announcements": announcements_resource,
+        "blob": blob_resource,
+        "parser": parser_resource,
+        "document_writer": document_writer_resource,
+        "embedder": embedder_resource,
+        "conn": conn_resource,
     },
 )
