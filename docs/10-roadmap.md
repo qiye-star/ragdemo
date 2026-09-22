@@ -77,6 +77,8 @@ make db-init && make seed && make test-schema
       —— 工具链齐了，但 `evals/` 下**一条用例都没有**（`eval_retrieval` 是空表），
       门禁因此是空转的。录入属于 W9 创始人手工工作流，不是工程缺口
 - [x] 备份与恢复 runbook（`01-architecture.md` §4）
+- [ ] 内部诊断界面（只读切块检视 + 检索定位，[adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)）
+      —— **不计入下面 P1 的九项验收**，是诊断工具而非验收对象
 
 **验收**：
 
@@ -143,6 +145,9 @@ make db-init && make seed && make test-schema
 
 「每个数字可点回原文」在 P2 是 Markdown 中的引用标注 + 附录原文块，
 不需要 Web 界面（[adr/0006](adr/0006-no-frontend-until-p4.md)）。
+P1 起存在的内部诊断界面（[adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)）
+不是这一项验收的核验渠道——它是诊断工具，不出具验收结论；P2 的验收仍然
+只认 Markdown 引用标注 + 附录原文块，人工抽查 30 个数字。
 
 ## P3 传导与辩论（第 12–16 周）
 
@@ -170,7 +175,8 @@ make db-init && make seed && make test-schema
 
 ## P4 产品化（第 17–20 周）
 
-- [ ] Web 简报（阅读、追问、溯源点击定位到页面/bbox）
+- [ ] Web 简报（面向用户，阅读、追问、溯源点击定位到页面/bbox；与 P1 的
+      内部诊断界面不是同一样东西，见 [adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)）
 - [ ] Excel 导出（保留公式）
 - [ ] 用户上传 → 解析 → 私有空间检索（先解决 `TEXTIN_ALLOW_PRIVATE` 闸门，见 adr/0008）
 - [ ] RLS 策略与私有隔离测试

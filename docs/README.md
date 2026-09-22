@@ -33,7 +33,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | [11-sdlc.md](11-sdlc.md) | **怎么交付**：生命周期规范、工作流分解、依赖与并行、变更控制 | 所有人，排期时必读 |
 | [12-dev-flow.md](12-dev-flow.md) | **按什么顺序**：00–09 串成一条主线，每环节的验收标准与**当前进度快照** | 所有人，第一次上手必读 |
 | [glossary.md](glossary.md) | 术语表 | 所有人 |
-| [adr/](adr/README.md) | 架构决策记录（8 篇） | 所有人 |
+| [adr/](adr/README.md) | 架构决策记录（10 篇） | 所有人 |
 | [superpowers/plans/](superpowers/plans/) | 每阶段一份可执行的 TDD 逐步计划 | 执行者 |
 
 ## 与项目简报的章节映射
@@ -55,7 +55,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | §10 仓库结构建议 | `01-architecture.md` §5 |
 | §11 工程约定 | `/CLAUDE.md` §3 + `11-sdlc.md` §2（DoR/DoD）、§6（变更控制） |
 | §12 开放问题 | `adr/0001`–`adr/0007`（全部已决策） |
-| —（简报之外的后续决策） | `adr/0008` 文档解析供应商 |
+| —（简报之外的后续决策） | `adr/0008` 文档解析供应商、`adr/0009` 向量召回、`adr/0010` 内部诊断 Web 界面 |
 | §13 术语表 | `glossary.md` |
 
 ## 对简报的四处修正
@@ -107,6 +107,7 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 | 日期 | 变更 | 影响面 |
 |---|---|---|
 | 2026-09-21 | **路径 B 的解析器由 MinerU 换为合合信息 TextIn xParse**（[adr/0008](adr/0008-textin-xparse-document-parsing.md)）。解析产物（完整响应 JSON + Markdown）落对象存储，`core.document` 增三列，迁移 `007_parse_artifacts.sql` | `01` §1/§4/§5、`02` §5.1、`04` §1、`05` §1–2/§3.3/§7.2/§8、`09` §4.1、`10` P1/P4、`11` W2.2、`CLAUDE.md` §2、P1b Task 6/9/10 |
+| 2026-09-22 | **新增内部只读诊断 Web 界面，P1 起可做**（[adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)），收窄而非取代 ADR-0006；后端只读、仅内网、无账号、硬编码只看公共检索空间，账号/私有上传/对外暴露仍留 P4 | `CLAUDE.md` §2/§4、`00` §5、`01` §4/§5、`10` P1/P2/P4、`11` W8（W8.1 拆为 W8.1a/W8.1b）、`12` ②、`adr/README.md`、`api/__init__.py`、`evals/cli.py` |
 
 `007_parse_artifacts.sql` 已在真实 ParadeDB 上执行验证：迁移 001–007 全序列
 0 error；三个新列确实出现在 `asof.document` 视图中（`CREATE OR REPLACE VIEW`

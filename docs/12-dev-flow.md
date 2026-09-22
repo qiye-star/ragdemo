@@ -92,10 +92,10 @@
 | | |
 |---|---|
 | **治理** | [01-architecture.md](01-architecture.md) §1 分层、§4 部署、§5 包边界 |
-| **工作流** | W0.1 工具链 · W0.2 compose + ParadeDB · W7.4 备份恢复 · W8.1 FastAPI（P4） |
+| **工作流** | W0.1 工具链 · W0.2 compose + ParadeDB · W7.4 备份恢复 · W8.1a 内部诊断接口（P1，adr/0010）· W8.1b FastAPI 对外接口（P4） |
 | **验收** | `make lint`／`make typecheck` 通过；`make up` 后 `pg_isready` 通过，`\dx` 含 `pg_search`、`vector`；底层包不得 import 业务层（有测试守着） |
 | **怎么验** | `make lint && make typecheck && make up` |
-| **状态** | ✅ W0.1／W0.2 完成，ParadeDB 固定版本 `0.25.9-pg18`。<br>⚠️ W7.4：`infra/runbook-backup.md` 与 `make backup`／`make restore` 已就位，但**只验了脚本不变量，没有驱动一次真实恢复**（真跑会覆盖现有库）。<br>❌ W8.1 属 P4 |
+| **状态** | ✅ W0.1／W0.2 完成，ParadeDB 固定版本 `0.25.9-pg18`。<br>⚠️ W7.4：`infra/runbook-backup.md` 与 `make backup`／`make restore` 已就位，但**只验了脚本不变量，没有驱动一次真实恢复**（真跑会覆盖现有库）。<br>❌ W8.1a（P1，内部只读诊断，adr/0010）未开始；W8.1b 仍属 P4 |
 
 ### ③ 02-data-model — 表结构与数据字典
 

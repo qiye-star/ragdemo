@@ -133,7 +133,7 @@
 │                     端口不对公网开放；数据卷独立挂载
 ├── dagster-webserver  Dagster UI（内网 / VPN 访问）
 ├── dagster-daemon     调度与传感器
-├── api                FastAPI（P4 起对外；P1–P3 仅内网 CLI 调用）
+├── api                FastAPI（P1 起：内网只读诊断接口，adr/0010；P4 起对外产品接口）
 ├── worker             LangGraph Agent 执行器
 ├── egress-proxy       出网代理：域名白名单 + 凭据注入 + 调用日志
 └── minio              原始 PDF、用户上传件、解析产物（JSON + Markdown）对象存储
@@ -183,8 +183,8 @@ ragdemo/
         tools/              # Agent 工具外壳层
         templates/          # 简报 / 周报 / 对标模板与渲染
         audit/              # tool_call_log、哈希链
-        api/                # Web 后端（P4 起）
-  web/                      # 前端（P4 起）
+        api/                # Web 后端：P1 内网只读诊断接口（adr/0010），P4 起对外产品接口
+  web/                      # 前端：P1 内部诊断界面静态资源（adr/0010），P4 起面向用户产品前端
   evals/                    # 三套评测集与脚本
   docs/                     # 本文档集
   tests/
