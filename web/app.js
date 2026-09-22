@@ -1,11 +1,9 @@
 // 路由入口：读 hash → 同步 as_of 条 → 渲染当前视图。
 //
-// 视图注册表目前只有一个占位视图——先把外壳（横幅常驻、as_of 条常驻、
-// 三态渲染）跑通再做真正的视图，是刻意的顺序：如果先做视图，as_of 的
-// 强制性会被"临时先给个 now() 方便调试"腐蚀掉，而那个临时 hack 一定
-// 会留下来。真正的视图在后续任务里逐个接入 BY_ID。
+// 导航是数据驱动的（从 VIEWS 生成，不是 index.html 里写死的 <a> 列表）：
+// 加一个新视图只需要在下面的 import 列表和 VIEWS 数组里各加一行。
 
-import { readRoute, bindAsOfBar, syncAsOfBar } from './lib/state.js';
+import { readRoute, bindAsOfBar, syncAsOfBar, hashFor } from './lib/state.js';
 import { asOfBlockedCard, errorCard, loading } from './lib/status.js';
 import { el } from './lib/dom.js';
 import * as docs from './views/docs.js';
@@ -25,7 +23,11 @@ const PLACEHOLDER = {
   },
 };
 
-const BY_ID = new Map([docs, layout, blocks, quality, tiers, isolation].map((v) => [v.id, v]));
+const VIEWS = [docs, layout, blocks, quality, tiers, isolation];
+const BY_ID = new Map(VIEWS.map((v) => [v.id, v]));
+
+const nav = document.getElementById('nav');
+for (const v of VIEWS) nav.append(el('a', { 'data-view': v.id }, v.title));
 
 const mount = document.getElementById('view');
 let inflight = null;
@@ -37,11 +39,11 @@ async function render() {
   const view = BY_ID.get(route.view) ?? PLACEHOLDER;
 
   syncAsOfBar(route, inflight.signal);
-  for (const a of document.querySelectorAll('#tabs a')) {
+  for (const a of nav.querySelectorAll('a')) {
     a.classList.toggle('active', a.dataset.view === view.id);
-    // 每次渲染都把当前 as_of 写回每个 tab 的 href——否则点标签页会静默
+    // 每次渲染都把当前 as_of 写回每个导航项的 href——否则切视图会静默
     // 丢掉已经选好的时点，用户不得不重新选一遍。
-    a.href = route.asOf ? `#/${a.dataset.view}?as_of=${encodeURIComponent(route.asOf)}` : `#/${a.dataset.view}`;
+    a.href = hashFor(a.dataset.view, {});
   }
   document.title = `${view.title} · ${route.asOf || '未选时点'} · 内部诊断工具（非产品界面）`;
 

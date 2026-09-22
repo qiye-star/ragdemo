@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=1180">
+<meta name="viewport" content="width=1100">
 <!-- default-src 'none' 让「不依赖 CDN」从约定变成浏览器层面做不到违反；
      form-action 'none' 让这个页面结构上无法向任何地方提交表单（ADR-0010 推翻条件 1）。
      这个页面本身也没有一个 <form> 元素——两者互为印证，不是各写各的。 -->
@@ -29,16 +29,12 @@
   <span id="asof-hint" class="dim" aria-live="polite"></span>
 </header>
 
-<nav id="tabs" aria-label="视图">
-  <a href="#/docs" data-view="docs">文档</a>
-  <a href="#/layout" data-view="layout">版面还原</a>
-  <a href="#/blocks" data-view="blocks">块树</a>
-  <a href="#/quality" data-view="quality">质量门禁</a>
-  <a href="#/tiers" data-view="tiers">分档与预算</a>
-  <a href="#/isolation" data-view="isolation">权限隔离</a>
-</nav>
-
-<main id="view"></main>
+<!-- 导航链接由 app.js 从视图注册表生成——这里不写死任何 <a>，
+     加一个新视图只需要在 app.js 的 VIEWS 列表里加一行 import。 -->
+<div id="shell">
+  <nav id="nav" aria-label="视图"></nav>
+  <main id="view"></main>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>

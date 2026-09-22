@@ -5,7 +5,7 @@
 import { getJSON } from '../lib/api.js';
 import { el } from '../lib/dom.js';
 import { emptyCard } from '../lib/status.js';
-import { navigateTo } from '../lib/state.js';
+import { viewLink } from '../lib/state.js';
 
 export const id = 'docs';
 export const title = '文档';
@@ -20,14 +20,14 @@ function warningBadges(warnings) {
 }
 
 function row(doc) {
-  const tr = el(
+  return el(
     'tr',
     { class: 'doc-row' },
     el('td', { class: 'num' }, String(doc.doc_id)),
     el(
       'td',
       {},
-      el('a', { href: `#/layout?doc=${doc.doc_id}`, title: '查看版面还原' }, doc.title),
+      viewLink('layout', { doc: doc.doc_id, page: 1 }, doc.title),
       warningBadges(doc.parse_warnings)
     ),
     el('td', {}, doc.doc_type),
@@ -35,18 +35,15 @@ function row(doc) {
     el('td', {}, (doc.publish_at || '').slice(0, 10)),
     el('td', { class: 'num' }, doc.page_count == null ? '—' : String(doc.page_count)),
     el('td', { class: 'mono' }, doc.parse_engine ?? '—'),
-    el('td', { class: 'num' }, `${doc.leaf_count}/${doc.block_count}`),
+    // 全站第一个也是唯一一个块树入口——此前「叶子/总块数」是纯文本，
+    // 块树视图只能靠手敲 hash 到达。
+    el('td', { class: 'num' }, viewLink('blocks', { doc: doc.doc_id }, `${doc.leaf_count}/${doc.block_count}`)),
     el(
       'td',
       { class: 'num' },
       doc.parse_confidence == null ? 'NULL（未评分）' : doc.parse_confidence.toFixed(4)
     )
   );
-  tr.querySelector('a').addEventListener('click', (e) => {
-    e.preventDefault();
-    navigateTo('layout', { doc: doc.doc_id, page: 1 });
-  });
-  return tr;
 }
 
 export async function render(ctx) {

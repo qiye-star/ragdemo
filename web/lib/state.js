@@ -3,6 +3,7 @@
 // 警告的那种"静默得出错误结论"的来源。链接可分享、可复现、后退键有效。
 
 import { getJSON } from './api.js';
+import { el } from './dom.js';
 
 export function readRoute() {
   const raw = location.hash.replace(/^#\/?/, '');
@@ -18,15 +19,44 @@ export function setAsOf(iso) {
   location.hash = `#/${r.view}?${r.params}`;
 }
 
-/** 切视图时把 as_of（与其余共享参数）带过去，而不是丢光重新开始。 */
-export function navigateTo(view, extraParams) {
-  const r = readRoute();
-  const params = new URLSearchParams();
-  if (r.asOf) params.set('as_of', r.asOf);
-  for (const [k, v] of Object.entries(extraParams ?? {})) {
-    if (v != null && v !== '') params.set(k, String(v));
+/**
+ * 全仓库**唯一**允许拼 hash 的地方。as_of 始终带上；没显式给的参数一律丢弃。
+ *
+ * 不做隐式继承是刻意的：当前 URL 里的 `doc=3` 继承进 `#/tiers` 只会得到一个
+ * 无意义的参数。要带什么，调用点自己写明。
+ */
+export function hashFor(view, params) {
+  const p = new URLSearchParams();
+  const { asOf } = readRoute();
+  if (asOf) p.set('as_of', asOf);
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v != null && v !== '') p.set(k, String(v));
   }
-  location.hash = `#/${view}?${params}`;
+  const qs = p.toString();
+  return qs ? `#/${view}?${qs}` : `#/${view}`;
+}
+
+/** 切视图时把 as_of（与显式给出的参数）带过去，而不是丢光重新开始。 */
+export function navigateTo(view, extraParams) {
+  location.hash = hashFor(view, extraParams);
+}
+
+/**
+ * 视图内的跳转链接。href 与点击行为由同一处产出——**只挂 click handler 是
+ * 修不好这件事的**：中键、Ctrl/Cmd+点击、"复制链接地址"、状态栏预览走的都是
+ * href 本身，handler 根本不参与。历史上 docs.js 就是只挂了 handler，
+ * 于是新标签页打开的链接全都丢了时点、落进阻断卡。
+ */
+export function viewLink(view, params, ...children) {
+  const a = el('a', { href: hashFor(view, params) }, ...children);
+  a.addEventListener('click', (e) => {
+    // 带修饰键或非左键时交还给浏览器去开新标签页——href 已经带了 as_of，
+    // 不需要也不应该拦截。
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigateTo(view, params);
+  });
+  return a;
 }
 
 function toUtcIso(localValue) {

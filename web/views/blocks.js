@@ -8,6 +8,7 @@ import { el, clear } from '../lib/dom.js';
 import { emptyCard } from '../lib/status.js';
 import { svgEl } from '../lib/svg.js';
 import { overlapLen, sanitizeTable } from '../lib/fmt.js';
+import { viewLink } from '../lib/state.js';
 
 export const id = 'blocks';
 export const title = '块树';
@@ -176,10 +177,10 @@ export async function render(ctx) {
   if (!docId) {
     return el(
       'section',
-      { class: 'card' },
+      { class: 'card card-blocked' },
       el('h2', {}, '未选择文档'),
       el('p', {}, '从 '),
-      el('a', { href: '#/docs' }, '文档列表'),
+      viewLink('docs', {}, '文档列表'),
       el('p', { class: 'dim' }, ' 里点一篇文档进入块树。')
     );
   }

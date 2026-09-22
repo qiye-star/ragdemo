@@ -43,6 +43,7 @@
   --gap: 8px;
   --banner-h: 30px;
   --asof-h: 46px;
+  --nav-w: 170px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -78,7 +79,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.6 var(--font-sans);
-  min-width: 1100px;
+  min-width: 960px;
 }
 
 #banner {
@@ -157,33 +158,46 @@ body {
   font-size: 12.5px;
 }
 
-#tabs {
+/* 两栏外壳：横幅与 as_of 条仍然全宽吸顶（在 #shell 之外，DOM 结构不变），
+   #shell 只是它们下面的内容区。#nav 与 main#view 都不设 overflow——
+   任何一个祖先元素上出现 overflow，都会让 main#view 里 .grid-table th 的
+   position:sticky 相对那个滚动容器定位，而不是相对视口，症状与直接改
+   --banner-h/--asof-h 一模一样，且更难查。 */
+#shell {
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
+}
+
+#nav {
+  position: sticky;
+  top: calc(var(--banner-h) + var(--asof-h));
+  align-self: start;
+  height: calc(100vh - var(--banner-h) - var(--asof-h));
   display: flex;
+  flex-direction: column;
   gap: 2px;
-  padding: 6px 12px 0;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
   background: var(--bg);
 }
 
-#tabs a {
-  padding: 6px 12px;
+#nav a {
+  padding: 6px 10px;
   color: var(--text-dim);
   text-decoration: none;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--radius) var(--radius) 0 0;
+  border-radius: var(--radius);
   font-size: 13px;
 }
 
-#tabs a.active {
+#nav a.active {
   color: var(--text);
   background: var(--surface);
-  border-color: var(--border);
-  margin-bottom: -1px;
+  border: 1px solid var(--border);
   font-weight: 600;
 }
 
 main#view {
+  min-width: 0;
   padding: 16px;
 }
 
@@ -207,7 +221,51 @@ main#view {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 16px 18px;
+}
+
+/* 720px 上限只对短文本卡片正确（长文本行宽超过它就难读），不该是全局
+   约束——分档/隔离视图那种表格密集的卡片被它挤到只能纵向堆叠，是
+   tiers.js/isolation.js 拥挤的根因。改成按需 opt-in。 */
+.card-blocked,
+.card-empty,
+.card-error {
   max-width: 720px;
+}
+
+/* 多卡片并排——分档与预算、权限隔离用它替代过去的纵向单列堆叠。 */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.span-2 {
+  grid-column: 1 / -1;
+}
+
+/* 权限隔离顶部状态条：只展示接口已经算好的标志位计数，不合成任何论断句。 */
+.stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  min-width: 150px;
+  background: var(--surface);
+}
+
+.stat-label {
+  font-size: 12px;
+}
+
+.stat-value {
+  font-size: 20px;
 }
 
 .card h2 {
@@ -538,7 +596,7 @@ main#view {
     position: static;
   }
 
-  #tabs,
+  #nav,
   #asof-apply,
   button {
     display: none;
@@ -592,8 +650,12 @@ main#view {
   font-size: 12.5px;
 }
 
-.table-scroll td,
-.table-scroll th {
+/* :not(.grid-table) 是刻意的：这条边框规则是为 sanitizeTable() 产出的
+   供应商表格（table_html）准备的。.grid-table 自己有边框规则
+   （border-collapse + 单侧 border-bottom），直接把它也塞进 .table-scroll
+   会双重描边。 */
+.table-scroll table:not(.grid-table) td,
+.table-scroll table:not(.grid-table) th {
   border: 1px solid var(--border);
   padding: 3px 6px;
 }

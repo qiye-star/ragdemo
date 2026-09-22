@@ -9,7 +9,7 @@ import { getJSON } from '../lib/api.js';
 import { el, clear } from '../lib/dom.js';
 import { emptyCard } from '../lib/status.js';
 import { svgEl, svgText, area, overlaps } from '../lib/svg.js';
-import { navigateTo } from '../lib/state.js';
+import { viewLink } from '../lib/state.js';
 
 export const id = 'layout';
 export const title = '版面还原';
@@ -21,10 +21,10 @@ const TYPE_LABEL = { paragraph: '段落', table: '表格', figure: '图' };
 function noDocSelectedCard() {
   const card = el(
     'section',
-    { class: 'card' },
+    { class: 'card card-blocked' },
     el('h2', {}, '未选择文档'),
     el('p', {}, '从 '),
-    el('a', { href: '#/docs' }, '文档列表'),
+    viewLink('docs', {}, '文档列表'),
     el('p', { class: 'dim' }, ' 里点一篇文档进入版面还原。')
   );
   return card;
@@ -75,23 +75,18 @@ function renderPage(pageBlocks, ratio) {
   return svg;
 }
 
-function pageNav(pageBlockCounts, pageCount, currentPage, docId, asOf) {
+function pageNav(pageBlockCounts, pageCount, currentPage, docId, ratioKey) {
   const total = pageCount ?? Math.max(0, ...pageBlockCounts.map((p) => p.page ?? 0));
   const byPage = new Map(pageBlockCounts.filter((p) => p.page != null).map((p) => [p.page, p.blocks]));
   const nav = el('div', { class: 'page-nav' });
   for (let p = 1; p <= total; p++) {
     const count = byPage.get(p) ?? 0;
-    const a = el(
-      'a',
-      { href: `#/layout?doc=${docId}&page=${p}${asOf ? `&as_of=${encodeURIComponent(asOf)}` : ''}`, class: p === currentPage ? 'chip chip-active' : 'chip' },
-      `p.${p} (${count})`
-    );
+    // ratio 一并带上——viewLink 只带显式给出的参数，此前手拼 href 时
+    // 漏了它，翻页会把用户选的长宽比悄悄弹回默认值。
+    const a = viewLink('layout', { doc: docId, page: p, ratio: ratioKey }, `p.${p} (${count})`);
+    a.className = p === currentPage ? 'chip chip-active' : 'chip';
     // 0 块的页也列出来并标数字——空页是解析漏页的信号，藏起来等于把
     // 信号删了。
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      navigateTo('layout', { doc: docId, page: p });
-    });
     nav.append(a);
   }
   return nav;
@@ -138,7 +133,7 @@ export async function render(ctx) {
     )
   );
 
-  container.append(pageNav(doc.page_block_counts, doc.page_count, page, docId, ctx.asOf));
+  container.append(pageNav(doc.page_block_counts, doc.page_count, page, docId, ratioKey));
 
   const withBbox = layout.blocks.filter((b) => b.bbox != null);
   const malformed = layout.blocks.filter((b) => b.bbox_malformed);

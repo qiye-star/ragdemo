@@ -4,6 +4,7 @@
 import { getJSON } from '../lib/api.js';
 import { el, clear } from '../lib/dom.js';
 import { barChart } from '../lib/chart.js';
+import { viewLink } from '../lib/state.js';
 
 export const id = 'tiers';
 export const title = '分档与预算';
@@ -173,7 +174,14 @@ export async function render(ctx) {
       el(
         'ul',
         {},
-        detail.documents.map((d) => el('li', {}, `#${d.doc_id} ${d.title}（${d.source}, ${d.publish_at.slice(0, 10)}）`))
+        detail.documents.map((d) =>
+          el(
+            'li',
+            {},
+            viewLink('layout', { doc: d.doc_id, page: 1 }, `#${d.doc_id} ${d.title}`),
+            `（${d.source}, ${d.publish_at.slice(0, 10)}）`
+          )
+        )
       )
     );
   });
