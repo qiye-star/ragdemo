@@ -6,18 +6,21 @@
 // 会留下来。真正的视图在后续任务里逐个接入 BY_ID。
 
 import { readRoute, bindAsOfBar, syncAsOfBar } from './lib/state.js';
-import { asOfBlockedCard } from './lib/status.js';
+import { asOfBlockedCard, errorCard, loading } from './lib/status.js';
 import { el } from './lib/dom.js';
+import * as docs from './views/docs.js';
 
+// 尚未接入的视图占位——route.view 落在这几个 key 上时用它兜底，
+// 不是错误状态，只是"这个视图还没做"。
 const PLACEHOLDER = {
-  id: 'docs',
+  id: 'placeholder',
   title: '诊断界面',
   async render() {
     return el('p', { class: 'dim' }, '视图正在接入中……');
   },
 };
 
-const BY_ID = new Map([PLACEHOLDER].map((v) => [v.id, v]));
+const BY_ID = new Map([docs].map((v) => [v.id, v]));
 
 const mount = document.getElementById('view');
 let inflight = null;
@@ -31,6 +34,9 @@ async function render() {
   syncAsOfBar(route);
   for (const a of document.querySelectorAll('#tabs a')) {
     a.classList.toggle('active', a.dataset.view === view.id);
+    // 每次渲染都把当前 as_of 写回每个 tab 的 href——否则点标签页会静默
+    // 丢掉已经选好的时点，用户不得不重新选一遍。
+    a.href = route.asOf ? `#/${a.dataset.view}?as_of=${encodeURIComponent(route.asOf)}` : `#/${a.dataset.view}`;
   }
   document.title = `${view.title} · ${route.asOf || '未选时点'} · 内部诊断工具（非产品界面）`;
 
@@ -42,12 +48,13 @@ async function render() {
     return;
   }
 
+  mount.replaceChildren(loading());
   try {
     const node = await view.render({ ...route, signal: inflight.signal });
     mount.replaceChildren(node);
   } catch (e) {
     if (e.name === 'AbortError') return;
-    throw e;
+    mount.replaceChildren(errorCard(e, render));
   }
 }
 

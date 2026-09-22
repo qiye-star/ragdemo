@@ -59,4 +59,14 @@ export function bindAsOfBar(onApply) {
 export function syncAsOfBar(route) {
   const echo = document.getElementById('asof-echo');
   echo.textContent = route.asOf || '未选择';
+
+  // 直接带 as_of 打开一个深链（书签、刷新页面、从别的视图跳转过来）时，
+  // 输入框也要跟着回填，不能只更新回显文字——否则用户会看到"已应用"
+  // 但输入框却是空的，误以为状态没生效。往返关系与 bindAsOfBar 里
+  // toUtcIso 的编码方式对称：这里只是把 Z/时区偏移剥掉，取前 19 个字符。
+  const input = document.getElementById('asof-input');
+  if (route.asOf && document.activeElement !== input) {
+    const local = route.asOf.replace(/([+-]\d{2}:\d{2}|Z)$/, '').slice(0, 19);
+    input.value = local;
+  }
 }
