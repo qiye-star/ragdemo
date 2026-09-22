@@ -99,6 +99,57 @@ def test_stats_are_populated_for_every_stage(
 
 
 @pytest.mark.db
+def test_trace_defaults_to_none(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
+    """trace 是纯加法——不传这个参数时，行为必须和加它之前完全一致。"""
+    result = _service(corpus).search(RetrievalRequest(query="收入", as_of=as_of_2024))
+    assert result.trace is None
+
+
+@pytest.mark.db
+def test_trace_ranks_agree_with_the_non_traced_result(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """trace=True 不该改变检索本身的行为，只是把已经算出来的中间结果带出来——
+    两次调用（一次要 trace 一次不要）最终返回的证据顺序必须一致，且
+    trace.final_order 必须就是 outcome.order 本身，与 result.blocks 的
+    block_id 顺序吻合（expand_to_evidence 不改变 order 的相对顺序，只做
+    父子块展开与去重）。
+    """
+    req = RetrievalRequest(query="收入", as_of=as_of_2024)
+    svc = _service(corpus)
+    plain = svc.search(req)
+    traced = svc.search(req, trace=True)
+
+    assert [b.block_id for b in plain.blocks] == [b.block_id for b in traced.blocks]
+    assert traced.trace is not None
+    assert traced.trace.embedder_model == "mock-1024"
+    assert traced.trace.reranker_model == "mock-reranker"
+    assert traced.trace.rerank_attempted is True
+
+    # 每个阶段的候选列表按 rank 升序排列，从 1 开始连续编号。
+    for stage in (traced.trace.bm25, traced.trace.vec, traced.trace.fused, traced.trace.rerank):
+        assert [s.rank for s in stage] == list(range(1, len(stage) + 1))
+
+    # final_order 就是重排/截断后的最终顺序，rerank 阶段的候选集合恰好是
+    # 这个顺序的来源——两者的 block_id 集合必须完全一致。
+    assert traced.trace.final_order == [s.block_id for s in traced.trace.rerank]
+
+
+@pytest.mark.db
+def test_trace_marks_rerank_not_attempted_when_disabled(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    result = _service(corpus).search(
+        RetrievalRequest(
+            query="收入", as_of=as_of_2024, config=RetrievalConfig(rerank_enabled=False)
+        ),
+        trace=True,
+    )
+    assert result.trace is not None
+    assert result.trace.rerank_attempted is False
+
+
+@pytest.mark.db
 def test_future_document_never_appears(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     result = _service(corpus).search(RetrievalRequest(query="采购合同 8.5 亿元", as_of=as_of_2024))
     assert all(b.doc_id != 2 for b in result.blocks)

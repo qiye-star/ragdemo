@@ -26,7 +26,13 @@ from ragdemo.retrieval.fusion import FusedHit, weighted_rrf
 from ragdemo.retrieval.lexical import bm25_search
 from ragdemo.retrieval.rerank import Reranker, RerankOutcome, rerank_or_degrade
 from ragdemo.retrieval.rewrite import expand_synonyms
-from ragdemo.retrieval.types import RetrievalRequest, RetrievalResult, RetrievalStats
+from ragdemo.retrieval.types import (
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievalStats,
+    RetrievalTrace,
+    StageRank,
+)
 from ragdemo.retrieval.vector import apply_scan_settings, vector_search
 from ragdemo.retrieval.vector_index import (
     ChromaVectorIndex,
@@ -72,8 +78,14 @@ class RetrievalService:
         self.synonyms = dict(synonyms or {})
         self.index = index
 
-    def search(self, req: RetrievalRequest) -> RetrievalResult:
-        """过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开，返回证据与统计。"""
+    def search(self, req: RetrievalRequest, *, trace: bool = False) -> RetrievalResult:
+        """过滤 → 双路召回 → 加权 RRF → 重排 → 父子块展开，返回证据与统计。
+
+        `trace=False`（默认）时行为与加这个参数之前完全一致——纯加法，不
+        影响任何既有调用方。`trace=True` 时额外把四个阶段各自的候选排名
+        塞进 `RetrievalResult.trace`，供检索诊断视图做「20 行 × 6 列」的
+        并排比较（ADR-0010）。
+        """
         cfg = req.config
         run_id = uuid.uuid4().hex
         started = time.perf_counter()
@@ -167,7 +179,27 @@ class RetrievalService:
                 "stats": stats,
             },
         )
-        return RetrievalResult(blocks=blocks, stats=stats)
+
+        result_trace: RetrievalTrace | None = None
+        if trace:
+            rerank_attempted = cfg.rerank_enabled and bool(fused)
+            result_trace = RetrievalTrace(
+                bm25=[StageRank(h.block_id, h.rank, h.raw_score) for h in bm25],
+                vec=[StageRank(h.block_id, h.rank, h.raw_score) for h in vec],
+                # weighted_rrf()/_merge() 都按 (-score, block_id) 排过序，
+                # 列表位置即排名，不用另外排一次。
+                fused=[StageRank(f.block_id, i + 1, f.score) for i, f in enumerate(fused)],
+                rerank=[
+                    StageRank(block_id, i + 1, outcome.scores[block_id])
+                    for i, block_id in enumerate(outcome.order)
+                ],
+                final_order=list(outcome.order),
+                embedder_model=self.embedder.model,
+                reranker_model=self.reranker.model,
+                rerank_attempted=rerank_attempted,
+            )
+
+        return RetrievalResult(blocks=blocks, stats=stats, trace=result_trace)
 
 
 def _with_query(req: RetrievalRequest, query: str) -> RetrievalRequest:

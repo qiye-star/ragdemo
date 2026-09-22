@@ -85,6 +85,37 @@ class RetrievalStats:
 
 
 @dataclass(frozen=True)
+class StageRank:
+    """某个阶段候选列表里的一行——排名从 1 开始，与该阶段自己的分数并存。"""
+
+    block_id: int
+    rank: int
+    score: float
+
+
+@dataclass(frozen=True)
+class RetrievalTrace:
+    """四个阶段各自的候选排名，供诊断界面并排比较用（ADR-0010 立项的另一半
+    理由：判断融合排名合不合理，需要同一查询下 BM25/向量/融合/重排四段排名
+    并排看）。
+
+    纯加法：`RetrievalResult.trace` 默认 `None`，`search()` 默认不产出它——
+    这个字段之所以要存在，是因为 `bm25`/`vec`/`fused`/`outcome.scores` 在
+    `service.py::search()` 里原本只是执行完就丢弃的局部变量。
+    """
+
+    bm25: list[StageRank]
+    vec: list[StageRank]
+    fused: list[StageRank]
+    rerank: list[StageRank]
+    final_order: list[int]
+    embedder_model: str
+    reranker_model: str
+    rerank_attempted: bool
+
+
+@dataclass(frozen=True)
 class RetrievalResult:
     blocks: list[EvidenceBlock]
     stats: RetrievalStats
+    trace: RetrievalTrace | None = None
