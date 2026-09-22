@@ -74,8 +74,18 @@ SettingsDep = Annotated[ApiSettings, Depends(get_settings)]
 
 def get_conn(
     settings: SettingsDep,
+    as_of: AsOf,
 ) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
     """每请求一个连接。`autocommit=True` + 三个连接级 GUC：
+
+    签名里的 `as_of` 参数不在函数体内使用，只是为了让 `get_conn` 显式
+    依赖 `require_as_of`——两者若是路由函数的两个平级依赖（都直接声明在
+    路由签名上），FastAPI 会各自独立求值，`as_of` 校验失败并不会阻止
+    `get_conn` 的连接逻辑照常执行（实测验证过：完全不传 as_of 时，
+    响应曾经是 503 db_unavailable 而不是 422 as_of_required——数据库
+    连接抢先在校验失败之前就被尝试了）。把 `as_of` 声明成 `get_conn`
+    自身的参数，强制它成为 `get_conn` 的前置依赖：FastAPI 对某个依赖
+    的调用一定发生在它自己声明的子依赖全部成功解析之后。
 
     - `timezone=UTC`：timestamptz 回到 Python 时统一是 UTC aware，JSON
       输出不随服务器 TimeZone 漂移。
