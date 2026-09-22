@@ -14,7 +14,15 @@ RAGDEMO_DSN       ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGD
 RAGDEMO_ADMIN_DSN ?= postgresql://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:$(RAGDEMO_DB_PORT)/postgres
 export POSTGRES_PASSWORD RAGDEMO_DB_PORT RAGDEMO_DSN RAGDEMO_ADMIN_DSN
 
-.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 accept-p1 clean dagster backup restore eval-retrieval
+# 诊断接口（adr/0010）。只绑回环，端口避开 5433(PG)/8001(chroma)/
+# 8080-8081(egress-proxy)/3000(dagster)。**不给 RAGDEMO_API_DSN 设默认
+# 值**——默认值里必然带口令；缺它时 ragdemo serve 会显式报错指路，
+# 不会替你猜一个。
+RAGDEMO_API_HOST ?= 127.0.0.1
+RAGDEMO_API_PORT ?= 8088
+export RAGDEMO_API_HOST RAGDEMO_API_PORT
+
+.PHONY: install up down lint typecheck test db-init seed test-schema accept-p0 accept-p1 clean dagster backup restore eval-retrieval serve seed-isolation-demo clear-isolation-demo
 
 install:
 	uv sync --all-packages
@@ -67,6 +75,19 @@ clean:
 
 dagster:
 	uv run dagster dev -m ragdemo.ingest.definitions
+
+# 内网只读诊断接口（adr/0010）。需要 RAGDEMO_API_DSN（生产形态）或
+# RAGDEMO_API_ALLOW_PRIVILEGED_DSN=1（开发逃生口，见 .env.example）之一。
+serve:
+	uv run ragdemo serve --host $(RAGDEMO_API_HOST) --port $(RAGDEMO_API_PORT)
+
+# 权限隔离演示种子：公共对照 + 租户私有 + 用户 A/B 私有，供诊断界面的
+# 隔离探针矩阵有数据可看。只在回环地址的数据库上生效。
+seed-isolation-demo:
+	uv run ragdemo db seed-isolation-demo --yes
+
+clear-isolation-demo:
+	uv run ragdemo db clear-isolation-demo --yes
 
 # 备份 PG 与 Chroma 到同一时间戳的一对快照，见 infra/runbook-backup.md。
 backup:

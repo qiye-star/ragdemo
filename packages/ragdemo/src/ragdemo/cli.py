@@ -38,6 +38,38 @@ def main() -> None:
 main.add_command(eval_group)
 main.add_command(docs_group)
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+@main.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True, help="监听地址")
+@click.option("--port", default=8088, show_default=True, type=int, help="监听端口")
+def serve(host: str, port: int) -> None:
+    """启动内网只读诊断接口（adr/0010）。只有 GET，没有写接口。
+
+    只绑回环/内网是 ADR-0010 的硬约束，不是可选项——非回环地址需要显式
+    打开 RAGDEMO_API_ALLOW_LAN 才放行，默认直接拒绝启动，而不是静默
+    监听一个可能对外暴露的地址。
+    """
+    if host not in _LOOPBACK_HOSTS and not os.environ.get("RAGDEMO_API_ALLOW_LAN"):
+        raise click.ClickException(
+            f"--host {host} 不是回环地址；ADR-0010 要求只绑回环/内网。"
+            "确需内网监听请设置环境变量 RAGDEMO_API_ALLOW_LAN=1。"
+        )
+    # 惰性 import：fastapi/uvicorn 的完整依赖图只有 serve 用得到，
+    # 其余每一条 CLI 命令（db migrate/docs ingest/eval run 等）都不该
+    # 为了这一条命令多背这份启动开销。
+    import uvicorn
+
+    from ragdemo.api.app import create_app
+    from ragdemo.api.settings import SettingsError, from_env
+
+    try:
+        settings = from_env()
+    except SettingsError as exc:
+        raise click.ClickException(str(exc)) from None
+    uvicorn.run(create_app(settings), host=host, port=port, log_config=None)
+
 
 @main.group()
 def db() -> None:
@@ -50,6 +82,58 @@ def db_migrate() -> None:
     with psycopg.connect(_dsn()) as conn:
         applied = migrate(conn, MIGRATIONS_DIR)
     click.echo(f"已执行 {len(applied)} 条迁移: {applied}" if applied else "无待执行迁移")
+
+
+@db.command("grant-api-read")
+@click.option("--user", "user", required=True, help="要创建/更新的登录用户名")
+def db_grant_api_read(user: str) -> None:
+    """建一个被 GRANT app_diag 的登录用户，供诊断接口的 RAGDEMO_API_DSN 使用。
+
+    口令只从环境变量 RAGDEMO_API_DB_PASSWORD 读——不做 --password 选项：
+    命令行参数会原样进 shell history 和 `ps`/任务管理器的进程列表。
+
+    幂等：用户已存在就 ALTER 口令 + 补 GRANT，不存在就 CREATE。角色名与
+    用户名走 psycopg.sql.Identifier（防止用户名里混进分号之类的东西），
+    口令走 sql.Literal（CREATE/ALTER USER ... PASSWORD 不支持 %s 占位符，
+    但 Literal 会正确转义引号）。
+
+    警告：`log_statement = 'all'` 的库上，CREATE/ALTER USER ... PASSWORD
+    会把明文口令写进 PostgreSQL 服务器日志。这条命令面向开发/内网库；
+    生产库请改用 psql 的 \\password（客户端侧加密后发送，不经过这条日志）。
+    """
+    from psycopg import sql
+
+    password = os.environ.get("RAGDEMO_API_DB_PASSWORD", "")
+    if not password:
+        raise click.ClickException("环境变量 RAGDEMO_API_DB_PASSWORD 未设置（参见 .env.example）")
+
+    dsn = _dsn()
+    with psycopg.connect(dsn) as conn:
+        (exists,) = conn.execute(
+            "SELECT count(*) FROM pg_roles WHERE rolname = %s", (user,)
+        ).fetchone()  # type: ignore[misc]
+        if exists:
+            conn.execute(
+                sql.SQL("ALTER USER {} PASSWORD {}").format(
+                    sql.Identifier(user), sql.Literal(password)
+                )
+            )
+        else:
+            conn.execute(
+                sql.SQL("CREATE USER {} PASSWORD {}").format(
+                    sql.Identifier(user), sql.Literal(password)
+                )
+            )
+        conn.execute(sql.SQL("GRANT app_diag TO {}").format(sql.Identifier(user)))
+        conn.commit()
+
+    # 口令绝不回显——只打印一条不含口令的连接串模板，运维自己把口令拼进
+    # RAGDEMO_API_DSN。
+    scheme = dsn.split("://", 1)[0] if "://" in dsn else "postgresql"
+    click.echo(f"已{'更新' if exists else '创建'} {user!r} 并授予 app_diag。")
+    click.echo(
+        f"RAGDEMO_API_DSN={scheme}://{user}:<口令>@<host>:<port>/<dbname>（自行按实际环境填写）"
+    )
 
 
 @db.command("seed")
