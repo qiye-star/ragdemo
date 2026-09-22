@@ -14,6 +14,7 @@ from ragdemo.evals.cli import eval_group
 from ragdemo.ingest.cli import docs_group
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo.quality.replay import replay_and_check
+from ragdemo.seed.isolation_demo import AlreadySeeded, clear_isolation_demo, seed_isolation_demo
 from ragdemo.seed.loader import load_all
 from ragdemo_core.db.invariants import check_point_in_time_leaks, check_schema_invariants
 from ragdemo_core.db.migrate import migrate
@@ -114,3 +115,36 @@ def db_replay_check(partition_date_str: str | None) -> None:
     if mismatches:
         sys.exit(1)
     click.echo("重放全部一致")
+
+
+@db.command("seed-isolation-demo")
+@click.option("--yes", is_flag=True, default=False, help="真正写库；不传则只 dry run")
+@click.option("--force", is_flag=True, default=False, help="已有演示数据时先清空再重新写入")
+def db_seed_isolation_demo(yes: bool, force: bool) -> None:
+    """插入权限隔离演示种子：公共对照 + 租户私有 + 用户 A/B 私有各一份文档，
+    供诊断界面的隔离探针矩阵（adr/0010）有真实数据可看。只在回环地址的
+    数据库上生效——拒绝把合成的"用户私有材料"写进共享/远程库。"""
+    dsn = _dsn()
+    if not yes:
+        click.echo("[dry run] 不传 --yes 不会真正写库。将插入 4 份合成文档，各带 1 个块")
+        return
+    with psycopg.connect(dsn) as conn:
+        try:
+            doc_ids = seed_isolation_demo(conn, dsn=dsn, force=force)
+        except AlreadySeeded as exc:
+            raise click.ClickException(str(exc)) from None
+    for key, doc_id in doc_ids.items():
+        click.echo(f"{key}: doc_id={doc_id}")
+
+
+@db.command("clear-isolation-demo")
+@click.option("--yes", is_flag=True, default=False, help="真正删除；不传则只 dry run")
+def db_clear_isolation_demo(yes: bool) -> None:
+    """物理删除全部隔离演示种子数据（`source = 'isolation-demo'` 的文档与块）。"""
+    dsn = _dsn()
+    if not yes:
+        click.echo("[dry run] 不传 --yes 不会真正删除")
+        return
+    with psycopg.connect(dsn) as conn:
+        clear_isolation_demo(conn, dsn=dsn)
+    click.echo("已清空隔离演示种子数据")
