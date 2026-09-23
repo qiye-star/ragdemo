@@ -47,22 +47,54 @@ const COLUMNS = [
   },
 ];
 
+// 只读导入指引——诊断界面本身没有、也不会有上传接口（ADR-0010：GET-only，
+// 界面出现任何写操作即触发推翻条件）。真正导入文档走既有 CLI，这里只是
+// 把命令抄给操作者看，不调用任何接口。
+function importGuide() {
+  return el(
+    'details',
+    { class: 'card' },
+    el('summary', {}, '如何导入新文档'),
+    el(
+      'p',
+      { class: 'dim' },
+      '本界面只读，没有上传入口。导入新文档走命令行：'
+    ),
+    el(
+      'pre',
+      { class: 'mono' },
+      'ragdemo docs ingest --manifest <manifest.jsonl 路径> --entity-ref <如 688041.SH> --yes --parser textin'
+    ),
+    el(
+      'p',
+      { class: 'dim' },
+      '默认是 dry-run，加 --yes 才会真正调用解析器并写库；--max-pages 可以限制单次解析的页数。'
+    )
+  );
+}
+
 export async function render(ctx) {
   const body = await getJSON('/api/documents', {}, { asOf: ctx.asOf, signal: ctx.signal });
 
   if (body.documents.length === 0) {
-    return emptyCard({
-      what: '文档',
-      predicate:
-        `as_of = ${ctx.asOf}\n` +
-        '谓词: known_at <= as_of AND (superseded_at IS NULL OR superseded_at > as_of)\n' +
-        '      AND owner_tenant IS NULL AND owner_user IS NULL',
-    });
+    return el(
+      'div',
+      {},
+      importGuide(),
+      emptyCard({
+        what: '文档',
+        predicate:
+          `as_of = ${ctx.asOf}\n` +
+          '谓词: known_at <= as_of AND (superseded_at IS NULL OR superseded_at > as_of)\n' +
+          '      AND owner_tenant IS NULL AND owner_user IS NULL',
+      })
+    );
   }
 
   return el(
     'div',
     { class: 'table-wrap' },
+    importGuide(),
     el('p', { class: 'dim' }, `${body.documents.length} 份文档（as_of = ${body.as_of}）`),
     dataTable({ columns: COLUMNS, rows: body.documents })
   );
