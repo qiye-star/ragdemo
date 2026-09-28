@@ -1,53 +1,59 @@
 """WindFundamentalsAdapter 通过全部适配器契约。
 
-用一个按问句"现场作答"的假网关：它从问句里读出季度区间，只返回那些季度、披露日期
+用一个按问句"现场作答"的假网关：它从问句里读出报告期，只返回那些期别、披露日期
 取季末后 40 天——这样"回填两年前的分区时 known_at 仍在历史区间"这条契约是真在
-检验适配器的取数区间，而不是在回放一份固定的夹具。
+检验适配器的取数区间，而不是在回放一份固定的夹具。为了核对单季度，问句会把区间
+向前补到第一年一季度，多出的期别不入库。
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ragdemo.adapters.base import Adapter, RawResponse
 from ragdemo.adapters.mcp_gateway import ToolSpec
 from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
-from ragdemo.adapters.wind import WIND_FIELDS, WindFundamentalsAdapter, quarter_ends_back
+from ragdemo.adapters.wind import WIND_FIELDS, WindFundamentalsAdapter
 from tests.contracts.adapter_contract import AdapterContract
 
-_RANGE = re.compile(r"(\d{4})年([1-4])季末到(\d{4})年([1-4])季末")
+_PERIODS = re.compile(r"报告期([\d、]+)的")
 
 
 def _answer(question: str) -> dict[str, Any]:
-    y0, q0, y1, q1 = (int(g) for g in _RANGE.search(question).groups())  # type: ignore[union-attr]
-    last = date(y1, (q1 * 3), 30 if q1 in (2, 3) else 31)
-    count = (y1 - y0) * 4 + (q1 - q0) + 1
-    ends = quarter_ends_back(last, count)
+    """按问句列出的报告期作答：累计值 = 季度序号，单季度值恒为 1，两者自洽。"""
+    match = _PERIODS.search(question)
+    assert match is not None, question
+    ends = [datetime.strptime(d, "%Y%m%d").date() for d in match.group(1).split("、")]
+    flows = [f for f in WIND_FIELDS.values() if f.flow]
+    stocks = [f for f in WIND_FIELDS.values() if not f.flow]
     columns = [
         {"name": "Wind代码", "type": "string"},
         {"name": "证券简称", "type": "string"},
         {"name": "日期", "type": "string"},
-        {"name": "每季定期报告实际披露日期", "type": "date"},
+        {"name": "每期定期报告实际披露日期", "type": "date"},
         {"name": "记账本位币", "type": "string"},
-        *(
-            {"name": f"每季的{names.names[0]}", "type": "number", "unit": "亿元"}
-            for names in WIND_FIELDS.values()
-        ),
+        *({"name": f"每期{f.names[0]}", "type": "number", "unit": "亿元"} for f in flows),
+        *({"name": f"每期单季度{f.names[0]}", "type": "number", "unit": "亿元"} for f in flows),
+        *({"name": f"每期{f.names[0]}", "type": "number", "unit": "亿元"} for f in stocks),
     ]
-    rows = [
-        [
-            "688041.SH",
-            "海光信息",
-            f"Q{(e.month - 1) // 3 + 1} FY{e.year}",
-            (e + timedelta(days=40)).isoformat(),
-            "CNY",
-            *([1.0] * len(WIND_FIELDS)),
-        ]
-        for e in ends
-    ]
+    rows = []
+    for e in ends:
+        quarter = (e.month - 1) // 3 + 1
+        rows.append(
+            [
+                "688041.SH",
+                "海光信息",
+                f"Q{quarter} FY{e.year}",
+                (e + timedelta(days=40)).strftime("%Y%m%d"),
+                "CNY",
+                *([float(quarter)] * len(flows)),
+                *([1.0] * len(flows)),
+                *([1.0] * len(stocks)),
+            ]
+        )
     return {"data": {"data": [{"columns": columns, "rows": rows}]}, "error": None}
 
 

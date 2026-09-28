@@ -12,6 +12,7 @@ import psycopg
 
 from ragdemo.evals.cli import eval_group
 from ragdemo.ingest.cli import docs_group
+from ragdemo.ingest.facts_cli import facts_group
 from ragdemo.metrics.cli import metrics_group
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo.quality.replay import replay_and_check
@@ -38,6 +39,7 @@ def main() -> None:
 
 main.add_command(eval_group)
 main.add_command(docs_group)
+main.add_command(facts_group)
 main.add_command(metrics_group)
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})

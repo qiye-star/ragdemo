@@ -11,12 +11,19 @@ import csv
 import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import psycopg
 
-from ragdemo.metrics.definitions import METRIC_BASELINE_KNOWN_AT, MetricSpec, publish_metric
+from ragdemo.metrics.definitions import (
+    METRIC_BASELINE_KNOWN_AT,
+    MetricSpec,
+    SourceMapSpec,
+    publish_metric,
+    publish_source_map,
+)
 from ragdemo.seed.taxonomy import DEFAULT_TAXONOMY_PATH, Taxonomy, load_taxonomy
 
 ENTITY_ID_RE = re.compile(r"^[A-Z]{2}\.[A-Za-z0-9._-]{1,32}$")
@@ -232,6 +239,30 @@ _METRIC_CSV_COLUMNS = (
 )
 
 
+def load_source_maps(conn: Connection, csv_path: Path) -> int:
+    """供应商字段映射经口径版本化入口写入（迁移 018）：版本 1 取固定基线时刻。
+    幂等——已存在且内容相同的行不产生新版本，可以对已经种过数据的库重复执行。"""
+    rows = _read(csv_path)
+    with conn.transaction():
+        for row in rows:
+            publish_source_map(
+                conn,
+                SourceMapSpec(
+                    metric_id=row["metric_id"],
+                    provider=row["provider"],
+                    provider_field=row["provider_field"],
+                    priority=int(row["priority"] or 100),
+                    scale_factor=Decimal(row["scale_factor"] or "1"),
+                    notes=row["notes"] or None,
+                ),
+                author="seed",
+                known_at=METRIC_BASELINE_KNOWN_AT,
+                source=SEED_SOURCE,
+                ingest_run_id="seed",
+            )
+    return len(rows)
+
+
 def load_relations(conn: Connection, csv_path: Path) -> int:
     rows = _read(csv_path)
     with conn.transaction():
@@ -296,6 +327,7 @@ _LOADERS: list[tuple[str, str, Callable[[Connection, Path], int]]] = [
     ("entity.csv", "core.entity", load_entities),
     ("entity_alias.csv", "core.entity_alias", load_aliases),
     ("node_metric.csv", "core.node_metric", load_metrics),
+    ("metric_source_map.csv", "core.metric_source_map", load_source_maps),
     ("entity_relation.csv", "core.entity_relation", load_relations),
     ("propagation_rule.csv", "core.propagation_rule", load_propagation_rules),
 ]

@@ -1,0 +1,9 @@
+metric_id,provider,provider_field,priority,scale_factor,notes
+revenue_total,wind,营业收入,100,1,Wind get_stock_fundamentals；适配器已按列单位换算为元
+net_profit_attributable,wind,归母净利润,100,1,Wind 列名写作"归母净利润"
+rd_expense,wind,研发费用,100,1,
+operating_cash_flow,wind,经营活动产生的现金流量净额,100,1,
+inventory,wind,存货,100,1,期末时点值
+contract_liability,wind,合同负债,100,1,期末时点值；Wind 常以百万元返回
+prepayment,wind,预付款项,100,1,期末时点值
+capex,wind,购建固定资产、无形资产和其他长期资产支付的现金,100,1,资本开支取现金流量表该科目

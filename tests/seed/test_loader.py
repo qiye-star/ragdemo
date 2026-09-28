@@ -184,3 +184,21 @@ def test_seeded_metrics_get_a_baseline_version_visible_at_any_as_of(
         found = metric_as_of(db, str(metric_id), as_of=datetime(2015, 6, 1, tzinfo=UTC))
         assert found is not None, metric_id
         assert found.version == 1 and found.known_at == METRIC_BASELINE_KNOWN_AT
+
+
+@pytest.mark.db
+def test_wind_source_maps_are_seeded_and_reapplying_is_a_no_op(
+    db: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    from ragdemo.seed.loader import load_metrics, load_source_maps
+
+    load_metrics(db, Path("db/seed/node_metric.csv"))
+    assert load_source_maps(db, Path("db/seed/metric_source_map.csv")) == 8
+    load_source_maps(db, Path("db/seed/metric_source_map.csv"))
+    versions = db.execute("SELECT count(*) FROM core.metric_source_map_version").fetchone()
+    current = db.execute(
+        "SELECT metric_id FROM core.metric_source_map WHERE provider = 'wind'"
+        " AND provider_field = '归母净利润'"
+    ).fetchone()
+    assert versions is not None and versions[0] == 8, "重复导入不产生新版本"
+    assert current is not None and current[0] == "net_profit_attributable"
