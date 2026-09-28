@@ -56,12 +56,13 @@ def _raw(
     *,
     fields: tuple[str, ...] = EIGHT_FIELDS,
     quarter_ends: tuple[date, ...] = (),
+    windcode: str = "688041.SH",
 ) -> RawResponse:
     return RawResponse(
         provider="wind",
         endpoint="get_stock_fundamentals",
         params={
-            "windcode": "688041.SH",
+            "windcode": windcode,
             "fields": list(fields),
             "quarter_ends": [d.isoformat() for d in quarter_ends],
             "question": "q",
@@ -160,6 +161,17 @@ def test_missing_requested_field_is_rejected() -> None:
         _records(payload)
 
 
+def test_column_names_with_underscores_and_duplicate_suffixes_are_normalised() -> None:
+    """实测长电科技：'购建固定资产_无形资产和其他长期资产支付的现金'；重名列还会带 `_2`。"""
+    payload = _payload("fundamentals_long_688041.json")
+    columns = payload["data"]["data"][0]["columns"]
+    capex = "购建固定资产、无形资产和其他长期资产支付的现金"
+    columns[_column(payload, capex)]["name"] = "每期购建固定资产_无形资产和其他长期资产支付的现金"
+    columns[_column(payload, "存货")]["name"] = "每期存货_2"
+    records = _records(payload)
+    assert (capex, "2024Q2") in records and ("存货", "2024Q2") in records
+
+
 def test_unrecognised_numeric_column_is_rejected() -> None:
     payload = _payload("fundamentals_long_688041.json")
     table = payload["data"]["data"][0]
@@ -227,6 +239,21 @@ def test_cumulative_column_is_identified_by_arithmetic_not_by_its_name() -> None
     assert records[("营业收入", "2024FY")].value == float(Decimal("91.6215") * Decimal(10**8))
     capex = records[("购建固定资产、无形资产和其他长期资产支付的现金", "2024Q2")]
     assert capex.value == float(Decimal("4.9925") * Decimal(10**8))
+
+
+def test_response_split_into_two_long_tables_is_joined_on_period() -> None:
+    """真实响应（浪潮信息）：累计一张表、单季度一张表，按 (Wind代码, 日期) 拼起来再核对。"""
+    records = _records(_payload("fundamentals_two_tables_000977.json"), windcode="000977.SZ")
+    assert records[("营业收入", "2023Q2")].value == float(Decimal("247.976") * Decimal(10**8))
+    assert records[("存货", "2023Q1")].value == float(Decimal("175.5058") * Decimal(10**8))
+    assert len({p for _, p in records}) == 14
+
+
+def test_split_tables_with_different_periods_are_rejected() -> None:
+    payload = _payload("fundamentals_two_tables_000977.json")
+    payload["data"]["data"][1]["rows"].pop()
+    with pytest.raises(WindResponseRejected, match="期别不一致"):
+        _records(payload, windcode="000977.SZ")
 
 
 def test_column_labelled_single_quarter_that_adds_up_as_cumulative_is_rejected() -> None:
@@ -315,7 +342,7 @@ def test_question_lists_report_dates_and_asks_cumulative_single_quarter_and_disc
     q = build_question("688041.SH", [date(2024, 9, 30), date(2024, 12, 31)], ("营业收入", "存货"))
     assert q == (
         "688041.SH 报告期20240331、20240630、20240930、20241231的营业收入、单季度营业收入、存货，"
-        "以及各报告期定期报告实际披露日期"
+        "以及各报告期定期报告实际披露日期，按报告期逐期列示"
     )
 
 

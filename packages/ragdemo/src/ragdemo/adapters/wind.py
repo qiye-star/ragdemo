@@ -93,6 +93,13 @@ UNIT_TO_YUAN: Mapping[str, Decimal] = {
 _PERIOD_LABEL = re.compile(r"^Q([1-4]) FY(\d{4})$")
 _QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 _META_PREFIXES = ("Wind代码", "证券简称", "日期", "记账本位币")
+_DUPLICATE_SUFFIX = re.compile(r"_\d+$")
+
+
+def _normalised(name: str) -> str:
+    """列名比对前的归一：去掉 Wind 给重名列加的 `_2` 后缀；`_` 当作 `、`
+    （实测长电科技的列名把"购建固定资产、无形资产…"写成"购建固定资产_无形资产…"）。"""
+    return _DUPLICATE_SUFFIX.sub("", name).replace("_", "、")
 
 
 def quarter_ends_back(on: date, count: int) -> list[date]:
@@ -124,12 +131,16 @@ def full_years(quarter_ends: Sequence[date]) -> list[date]:
 
 
 def build_question(windcode: str, quarter_ends: Sequence[date], fields: Sequence[str]) -> str:
-    """固定模板：列出每个报告期，流量科目同时要累计值与单季度值，再加披露日期。"""
+    """固定模板：列出每个报告期，流量科目同时要累计值与单季度值，再加披露日期。
+    结尾的"按报告期逐期列示"不是客套：不加它时沪电股份会回一张期别写在列名里的宽表。"""
     periods = "、".join(d.strftime("%Y%m%d") for d in full_years(quarter_ends))
     flows = [WIND_FIELDS[f].question for f in fields if WIND_FIELDS[f].flow]
     stocks = [WIND_FIELDS[f].question for f in fields if not WIND_FIELDS[f].flow]
     items = [*flows, *(f"{SINGLE_QUARTER}{q}" for q in flows), *stocks]
-    return f"{windcode} 报告期{periods}的{'、'.join(items)}，以及各报告期定期报告实际披露日期"
+    return (
+        f"{windcode} 报告期{periods}的{'、'.join(items)}，以及各报告期定期报告实际披露日期，"
+        "按报告期逐期列示"
+    )
 
 
 def _period_of(label: object) -> tuple[str, date, int, int]:
@@ -229,7 +240,7 @@ class WindFundamentalsAdapter:
         windcode = str(raw.params["windcode"])
         wanted = [str(f) for f in raw.params.get("fields", self._fields)]
         requested = {date.fromisoformat(str(d)) for d in raw.params.get("quarter_ends", [])}
-        table = _single_table(raw.payload)
+        table = _long_table(raw.payload)
         names = [str(c.get("name", "")) for c in table["columns"]]
         if "日期" not in names:
             raise WindResponseRejected("响应不是逐期长表（缺少'日期'列），整份拒绝")
@@ -309,7 +320,12 @@ class WindFundamentalsAdapter:
             if i == disclosure[0] or name.startswith(_META_PREFIXES) or col.get("type") != "number":
                 continue
             key = next(
-                (k for k in wanted if any(name.endswith(n) for n in WIND_FIELDS[k].names)), None
+                (
+                    k
+                    for k in wanted
+                    if any(_normalised(name).endswith(n) for n in WIND_FIELDS[k].names)
+                ),
+                None,
             )
             if key is None:
                 raise WindResponseRejected(f"响应里有没问过的数值列 {name!r}")
@@ -387,15 +403,50 @@ def _yuan(row: Sequence[Any] | None, column: _Column, what: str) -> Decimal | No
         raise WindResponseRejected(f"{what} 的值 {cell!r} 不是数字") from None
 
 
-def _single_table(payload: Any) -> dict[str, Any]:  # noqa: ANN401
+def _long_table(payload: Any) -> dict[str, Any]:  # noqa: ANN401
+    """取出响应里的逐期长表。Wind 有时把同一批期别拆成几张长表（实测浪潮信息：累计一张、
+    单季度一张）；它们按 (Wind代码, 日期) 对齐拼成一张——前提是每张表都是长表、期别集合
+    完全一致，否则整份拒绝。"""
     if not isinstance(payload, Mapping) or payload.get("error"):
         error = payload.get("error") if isinstance(payload, Mapping) else payload
         raise WindResponseRejected(f"Wind 返回错误或空响应：{error!r}")
     data = payload.get("data")
     tables = data.get("data") if isinstance(data, Mapping) else None
-    if not isinstance(tables, list) or len(tables) != 1:
-        raise WindResponseRejected(f"期望恰好一张表，实际 {tables!r:.200}")
-    table = tables[0]
-    if not isinstance(table, Mapping) or "columns" not in table or "rows" not in table:
-        raise WindResponseRejected("表缺少 columns / rows")
-    return dict(table)
+    if not isinstance(tables, list) or not tables:
+        raise WindResponseRejected(f"响应里没有表：{tables!r:.200}")
+    for table in tables:
+        if not isinstance(table, Mapping) or "columns" not in table or "rows" not in table:
+            raise WindResponseRejected("表缺少 columns / rows")
+    if len(tables) == 1:
+        return dict(tables[0])
+    return _join_on_period(tables)
+
+
+_KEY_COLUMNS = ("Wind代码", "证券简称", "日期")
+
+
+def _join_on_period(tables: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    keyed: list[tuple[list[int], dict[tuple[str, str], Sequence[Any]]]] = []
+    for table in tables:
+        names = [str(c.get("name", "")) for c in table["columns"]]
+        if not all(k in names for k in ("Wind代码", "日期")):
+            raise WindResponseRejected("多张表里有一张不是逐期长表（缺少'Wind代码'或'日期'列）")
+        code, when = names.index("Wind代码"), names.index("日期")
+        rows = {(str(r[code]), str(r[when])): r for r in table["rows"]}
+        if len(rows) != len(table["rows"]):
+            raise WindResponseRejected("同一张表里有重复的 (Wind代码, 日期)")
+        keep = [i for i, n in enumerate(names) if n not in _KEY_COLUMNS]
+        keyed.append((keep, rows))
+    periods = set(keyed[0][1])
+    if any(set(rows) != periods for _, rows in keyed[1:]):
+        raise WindResponseRejected("多张表的期别不一致，无法对齐")
+    columns: list[Any] = [{"name": n, "type": "string"} for n in _KEY_COLUMNS]
+    for table, (keep, _) in zip(tables, keyed, strict=True):
+        columns.extend(table["columns"][i] for i in keep)
+    joined = []
+    for windcode, label in sorted(periods):
+        row: list[Any] = [windcode, None, label]
+        for keep, rows in keyed:
+            row.extend(rows[(windcode, label)][i] for i in keep)
+        joined.append(row)
+    return {"columns": columns, "rows": joined}
