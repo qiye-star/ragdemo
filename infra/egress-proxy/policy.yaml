@@ -26,6 +26,8 @@ allowlist:
     inject_credential: null
   - host: static.cninfo.com.cn   # 公告 PDF 下载（adr/0013）
     inject_credential: null
+  - host: www1.hkexnews.hk       # 港交所披露易：港股公告全文（公告双源接入计划 Task 7）
+    inject_credential: null      # 官方指定披露平台，无需鉴权
   - host: api.textin.com            # 文档解析（adr/0008）
     inject_credential: [TEXTIN_APP_ID, TEXTIN_SECRET_CODE]
     inject_as: header               # x-ti-app-id / x-ti-secret-code

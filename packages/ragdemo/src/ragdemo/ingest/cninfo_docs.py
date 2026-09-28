@@ -14,7 +14,7 @@ CLI 自己构造指向 `www.cninfo.com.cn` / `static.cninfo.com.cn` 的真实客
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -31,7 +31,7 @@ from ragdemo.ingest.assets_docs import (
     record_parse_snapshots,
 )
 from ragdemo.ingest.documents import DocumentWriter, DocumentWriteResult
-from ragdemo.ingest.parse_policy import ParseTier, parse_tier
+from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, LayerReport, ParseTier, parse_tier
 from ragdemo.ingest.snapshot import record_blob_snapshot, record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
@@ -131,25 +131,6 @@ def ingest_cninfo_announcements(
 
 # --- run_cninfo_layer：目录 + 选择性下载 + 按策略解析（公告双源接入计划 Task 4）------
 
-# dry run 时没有真实 PDF 可读页数，按档位给经验估算（页数取该档位常见公告的量级）。
-_ESTIMATED_PAGES: dict[ParseTier, int] = {
-    ParseTier.FIRST: 12,
-    ParseTier.SECOND: 180,
-    ParseTier.NONE: 5,
-}
-
-
-@dataclass
-class CninfoReport:
-    listed: int = 0
-    indexed: int = 0
-    downloaded: int = 0
-    parsed_docs: int = 0
-    parsed_pages: int = 0
-    stored_unparsed: int = 0
-    skipped_budget: int = 0
-    estimated_pages: dict[ParseTier, int] = field(default_factory=dict)
-
 
 @dataclass(frozen=True)
 class CninfoLayerDeps:
@@ -173,7 +154,7 @@ def run_cninfo_layer(
     download: bool,
     ingest_run_id: str,
     dry_run: bool,
-) -> CninfoReport:
+) -> LayerReport:
     """巨潮层：列目录，按 `download` 决定要不要下载 PDF，按 `tiers` 决定下载下来的
     PDF 要不要送去解析。
 
@@ -189,7 +170,7 @@ def run_cninfo_layer(
 
     `dry_run=True`：只列目录，不下载、不写库，页数按档位经验值估算。
     """
-    report = CninfoReport()
+    report = LayerReport()
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
     refs: dict[str, AnnouncementRef] = {}
     for raw in deps.adapter.fetch(ctx, stock_code=stock_code, since=since, until=until):
@@ -203,7 +184,7 @@ def run_cninfo_layer(
         for ref in refs.values():
             tier = parse_tier(ref.title)
             report.estimated_pages[tier] = (
-                report.estimated_pages.get(tier, 0) + _ESTIMATED_PAGES[tier]
+                report.estimated_pages.get(tier, 0) + ESTIMATED_PAGES[tier]
             )
         return report
 

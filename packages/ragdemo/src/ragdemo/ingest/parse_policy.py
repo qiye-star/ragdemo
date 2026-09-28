@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -39,3 +40,27 @@ def parse_tier(title: str) -> ParseTier:
     if _FIRST_TIER.search(base):
         return ParseTier.FIRST
     return ParseTier.NONE
+
+
+@dataclass
+class LayerReport:
+    """一个公告全文层（巨潮/披露易/EDGAR，公告双源接入计划 Task 4/7/8）一次运行的结果。
+    共享同一个形状：目录 + 选择性下载 + 按 `parse_tier` 分批解析的编排完全一样，
+    只是取数适配器不同。"""
+
+    listed: int = 0
+    indexed: int = 0
+    downloaded: int = 0
+    parsed_docs: int = 0
+    parsed_pages: int = 0
+    stored_unparsed: int = 0
+    skipped_budget: int = 0
+    estimated_pages: dict[ParseTier, int] = field(default_factory=dict)
+
+
+# dry run 时没有真实 PDF 可读页数，按档位给经验估算（页数取该档位常见公告的量级）。
+ESTIMATED_PAGES: dict[ParseTier, int] = {
+    ParseTier.FIRST: 12,
+    ParseTier.SECOND: 180,
+    ParseTier.NONE: 5,
+}
