@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -88,3 +92,41 @@ def record_snapshot(
     snapshot_id = save_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=blob)
     conn.commit()
     return snapshot_id
+
+
+def record_blob_snapshot(
+    conn: psycopg.Connection,
+    *,
+    provider: str,
+    endpoint: str,
+    params: Mapping[str, Any],
+    response_ref: str,
+    ingest_run_id: str,
+    http_status: int = 200,
+    fetched_at: datetime | None = None,
+    cost_cents: Decimal | None = None,
+) -> int:
+    """原始响应本身已经在对象存储里（EDGAR 全文字节、TextIn 解析 JSON）时用它：
+    快照行只记 `response_ref` 指向那份字节，不在 jsonb 里重复存一遍。立即提交，
+    理由同 record_snapshot。
+
+    `cost_cents` 未知就传 None——记成 0 会被成本汇总当成免费调用。
+    """
+    row = conn.execute(
+        "INSERT INTO core.provider_snapshot (provider, endpoint, params, response,"
+        " response_ref, http_status, ingest_run_id, cost_cents, fetched_at) "
+        "VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s) RETURNING snapshot_id",
+        (
+            provider,
+            endpoint,
+            Jsonb(strip_secrets(params)),
+            response_ref,
+            http_status,
+            ingest_run_id,
+            cost_cents,
+            fetched_at or datetime.now(UTC),
+        ),
+    ).fetchone()
+    assert row is not None
+    conn.commit()
+    return int(row[0])

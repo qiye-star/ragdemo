@@ -25,6 +25,7 @@ Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import psycopg
 from dagster import AssetExecutionContext, ResourceParam, asset
@@ -38,6 +39,7 @@ from ragdemo.embed.batch import EmbedStats, embed_pending_blocks
 from ragdemo.ingest.assets import DAILY
 from ragdemo.ingest.documents import DocumentWriter, ParseArtifacts
 from ragdemo.ingest.partitions import partition_window
+from ragdemo.ingest.snapshot import record_blob_snapshot, record_snapshot
 from ragdemo.parse.chunker import chunk_document
 from ragdemo.parse.confidence import table_looks_closed
 from ragdemo.parse.config import ChunkConfig
@@ -87,6 +89,9 @@ class PreparedDocument:
     # 公共可见）。带在这里，doc_blocks_loaded 才转得出去给
     # DocumentWriter.write_document(owner_user=...)。
     owner_user: str | None = None
+    # 这一次真的向供应商发起解析、被计费的页数；缓存命中与路径 A 都是 0。
+    # record_parse_snapshots 靠它判断"有没有一次需要留底的供应商调用"。
+    billed_pages: int = 0
 
 
 def prepare_documents(
@@ -193,8 +198,9 @@ def prepare_documents(
         except PrivateDocumentEgressBlocked:
             raise  # 闸门不能被静默吞掉
 
-        if not result.from_cache:
-            budget.charge(result.page_count)
+        billed = 0 if result.from_cache else result.page_count
+        if billed:
+            budget.charge(billed)
         prepared.append(
             PreparedDocument(
                 replace(doc, blocks=list(result.blocks), page_count=result.page_count),
@@ -205,9 +211,57 @@ def prepare_documents(
                     warnings=list(result.warnings),
                 ),
                 owner_user=owner_user,
+                billed_pages=billed,
             )
         )
     return prepared
+
+
+TEXTIN_PROVIDER = "textin"
+TEXTIN_ENDPOINT = "pdf_to_markdown"
+
+
+def record_parse_snapshots(
+    conn: psycopg.Connection,
+    prepared: Sequence[PreparedDocument],
+    *,
+    ingest_run_id: str,
+    cost_per_page_cny: Decimal | None,
+) -> list[int]:
+    """给每一次真实的供应商解析调用留一条 provider_snapshot（CLAUDE.md §1.5）。
+
+    原始响应（xParse JSON）已经由 TextInParser 落在 blob 里（`json_ref`），
+    快照只记引用。缓存命中、路径 A、解析失败都没有产生新的供应商调用，不留快照。
+    `cost_cents` = 计费页数 × 单价；单价未配置时记 NULL 而不是 0。
+    返回新写入的 snapshot_id 列表。
+    """
+    ids: list[int] = []
+    for item in prepared:
+        artifacts = item.artifacts
+        if item.billed_pages <= 0 or artifacts is None or artifacts.json_ref is None:
+            continue
+        cost = (
+            None
+            if cost_per_page_cny is None
+            else Decimal(item.billed_pages) * cost_per_page_cny * 100
+        )
+        ids.append(
+            record_blob_snapshot(
+                conn,
+                provider=TEXTIN_PROVIDER,
+                endpoint=TEXTIN_ENDPOINT,
+                params={
+                    "engine": artifacts.engine,
+                    "content_hash": item.doc.content_hash,
+                    "provider_doc_id": item.doc.provider_doc_id,
+                    "billed_pages": item.billed_pages,
+                },
+                response_ref=artifacts.json_ref,
+                ingest_run_id=ingest_run_id,
+                cost_cents=cost,
+            )
+        )
+    return ids
 
 
 @asset(partitions_def=DAILY, group_name="documents")
@@ -215,16 +269,18 @@ def doc_normalized(
     context: AssetExecutionContext,
     announcements: ResourceParam[AnnouncementProvider],
     conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
 ) -> list[NormalizedDocument]:
     partition = date.fromisoformat(context.partition_key)
     fetch_ctx = FetchContext(
         ingest_run_id=context.op_execution_context.run_id, partition_date=partition
     )
     since, until = partition_window(context)
-    docs = [
-        announcements.normalize(raw)
-        for raw in announcements.list_documents(fetch_ctx, since=since, until=until)
-    ]
+    # 每份公告的原始响应先落 provider_snapshot 再归一化（CLAUDE.md §1.5）。
+    docs: list[NormalizedDocument] = []
+    for raw in announcements.list_documents(fetch_ctx, since=since, until=until):
+        snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id, blob=blob)
+        docs.append(replace(announcements.normalize(raw), snapshot_id=snapshot_id))
     # 阶段 F：把"应到"这个数字落一份到 quality_metric，供
     # quality/checks.py::ingest_reconciliation_check 读回比对。不经 Dagster
     # 的资产间依赖（额外 additional_ins + IdentityPartitionMapping 在真实
@@ -292,6 +348,12 @@ def doc_prepared(
     """
     budget = PageBudget(MAX_PAGES_PER_PREPARE_RUN)
     prepared = prepare_documents(doc_normalized, parser, blob, budget, owner_user=None)
+    record_parse_snapshots(
+        conn,
+        prepared,
+        ingest_run_id=context.op_execution_context.run_id,
+        cost_per_page_cny=load_config().textin_cost_per_page_cny,
+    )
 
     processed_ids = {p.doc.provider_doc_id for p in prepared}
     missing_ids = [
@@ -445,7 +507,7 @@ def tier_c_reparse(
     since, until = partition_window(context)
     rows = conn.execute(
         "SELECT doc_id, doc_type, raw_ref, entity_id, parse_confidence, title, period,"
-        " publish_at, language, source, source_url, is_correction"
+        " publish_at, language, source, source_url, is_correction, snapshot_id"
         "  FROM core.document"
         " WHERE publish_at > %s AND publish_at <= %s"
         "   AND superseded_at IS NULL AND raw_ref IS NOT NULL",
@@ -474,6 +536,7 @@ def tier_c_reparse(
         source,
         source_url,
         is_correction,
+        source_snapshot_id,
     ) in rows:
         table_closure, has_numeric = _table_closure_for_document(conn, doc_id)
         policy = load_active_policy(conn, doc_type, now)
@@ -525,6 +588,8 @@ def tier_c_reparse(
             supersedes_provider_doc_id=None,
             page_count=result.page_count,
             blocks=result.blocks,
+            # 重解析不改变这份文档的来源：沿用原文档指向的那次原始响应。
+            snapshot_id=source_snapshot_id,
         )
         chunks = build_tree(chunk_document(new_doc, chunk_cfg)) if new_doc.blocks else []
         descriptions = {
@@ -552,6 +617,19 @@ def tier_c_reparse(
             supersedes_doc_id=doc_id,
             artifacts=artifacts,
             chunking_version=chunk_cfg.version,
+        )
+        # 这一次高精度解析本身也是一次计费的供应商调用，同样留底。
+        record_parse_snapshots(
+            conn,
+            [
+                PreparedDocument(
+                    new_doc,
+                    artifacts,
+                    billed_pages=0 if result.from_cache else result.page_count,
+                )
+            ],
+            ingest_run_id=run_id,
+            cost_per_page_cny=cost_per_page,
         )
         record_c_tier_pages(conn, doc_type=doc_type, pages=result.page_count, at=now)
         reparsed += 1

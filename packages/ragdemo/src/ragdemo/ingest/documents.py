@@ -394,9 +394,9 @@ class DocumentWriter:
             " is_correction, supersedes_doc_id, parse_engine, page_count, owner_user,"
             " valid_from, known_at, source_ref, ingest_run_id,"
             " parse_json_ref, parse_md_ref, parse_warnings, can_show_raw, time_precision,"
-            " parse_confidence) "
+            " parse_confidence, snapshot_id) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s, 0),%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-            "%s,%s,%s,%s,%s,%s) "
+            "%s,%s,%s,%s,%s,%s,%s) "
             "RETURNING doc_id",
             (
                 entity_id,
@@ -425,6 +425,7 @@ class DocumentWriter:
                 self.can_show_raw,
                 self.time_precision,
                 parse_confidence,
+                doc.snapshot_id,
             ),
         ).fetchone()
         assert row is not None

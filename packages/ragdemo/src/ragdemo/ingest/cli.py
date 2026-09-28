@@ -23,11 +23,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -35,15 +33,20 @@ import click
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
-from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
-from ragdemo.adapters.local_manifest import ManifestError, count_pdf_pages, load_documents
+from ragdemo.adapters.local_manifest import (
+    ManifestError,
+    count_pdf_pages,
+    load_documents_with_raw,
+)
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.ingest.assets_docs import prepare_documents
+from ragdemo.ingest.assets_docs import prepare_documents, record_parse_snapshots
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
+from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
+from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import DescriptionRejected, MockTableDescriber, TableDescriber
@@ -249,10 +252,13 @@ def docs_ingest(
     max_pages = max_pages_opt if max_pages_opt is not None else cfg.textin_max_pages_per_run
 
     try:
-        docs = load_documents(manifest_path, blob, entity_ref=entity_ref, select_title=select_title)
+        pairs = load_documents_with_raw(
+            manifest_path, blob, entity_ref=entity_ref, select_title=select_title
+        )
     except ManifestError as exc:
         raise click.ClickException(str(exc)) from exc
 
+    docs = [doc for _, doc in pairs]
     if not docs:
         raise click.ClickException("manifest 里没有匹配的公告，检查 --select-title / --manifest")
 
@@ -281,7 +287,22 @@ def docs_ingest(
     failures = 0
     with psycopg.connect(_dsn()) as conn:
         writer = DocumentWriter(conn, ingest_run_id="cli:docs-ingest", source=source_name)
+        # 每条 manifest 记录先落 provider_snapshot 再解析（CLAUDE.md §1.5）；
+        # dry run 不走到这里，不写库。
+        docs = [
+            replace(
+                doc,
+                snapshot_id=record_snapshot(conn, raw, ingest_run_id="cli:docs-ingest", blob=blob),
+            )
+            for raw, doc in pairs
+        ]
         prepared = prepare_documents(docs, parser, blob, budget, owner_user=None)
+        record_parse_snapshots(
+            conn,
+            prepared,
+            ingest_run_id="cli:docs-ingest",
+            cost_per_page_cny=cfg.textin_cost_per_page_cny,
+        )
         for item in prepared:
             chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer
@@ -339,7 +360,7 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
     with psycopg.connect(_dsn()) as conn:
         row = conn.execute(
             "SELECT raw_ref, doc_type, title, period, publish_at, language, source_url,"
-            " content_hash, is_correction, source_ref, source"
+            " content_hash, is_correction, source_ref, source, snapshot_id"
             " FROM core.document WHERE doc_id = %s",
             (doc_id,),
         ).fetchone()
@@ -357,6 +378,7 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
             is_correction,
             source_ref,
             source_label,
+            snapshot_id,
         ) = row
         if raw_ref is None:
             raise click.ClickException(
@@ -392,6 +414,8 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
             supersedes_provider_doc_id=None,
             page_count=result.page_count,
             blocks=result.blocks,
+            # 重切不产生新的原始响应，沿用原文档的快照。
+            snapshot_id=snapshot_id,
         )
         chunks, descriptions, violations = build_chunks_and_descriptions(doc, chunk_cfg, describer)
         if violations:
@@ -482,18 +506,14 @@ def docs_ingest_edgar(
         default_headers={"User-Agent": user_agent},
     )
     adapter = EdgarAdapter(client=submissions_client)
-    ctx = FetchContext(ingest_run_id="cli:docs-ingest-edgar", partition_date=date.today())
-    refs = [ref for raw in adapter.fetch(ctx, cik=cik) for ref in adapter.parse_filings(raw)]
 
     if not yes:
+        refs = list_filings(adapter, cik=cik, ingest_run_id="cli:docs-ingest-edgar")
         click.echo(f"[dry run] CIK {cik} 命中 {len(refs)} 份申报（{sorted(TRACKED_FORMS)}）")
         for ref in refs:
             click.echo(f"  - {ref.form_type} {ref.accession} {ref.document_url}")
         click.echo("[dry run] 未发起任何全文抓取，--yes 才会真正取全文并写库")
         return
-
-    if limit is not None:
-        refs = refs[:limit]
 
     cfg = _load_config()
     blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
@@ -506,27 +526,16 @@ def docs_ingest_edgar(
     )
 
     with psycopg.connect(_dsn()) as conn:
-        writer = DocumentWriter(conn, ingest_run_id="cli:docs-ingest-edgar", source=source)
-        for ref in refs:
-            body = adapter.fetch_full_text(ref, archives_client)
-            blob_key = f"edgar/{ref.cik}/{ref.accession}/{ref.primary_document}"
-            blob.put(blob_key, body)
-            doc = NormalizedDocument(
-                provider_doc_id=ref.accession,
-                entity_ref=str(cik),
-                doc_type=ref.form_type,
-                title=f"{ref.form_type} {ref.accession}",
-                period=None,
-                publish_at=ref.acceptance_datetime,
-                language="en",
-                source_url=ref.document_url,
-                raw_bytes_ref=blob_key,
-                content_hash=hashlib.sha256(body).hexdigest(),
-                is_correction=False,
-                supersedes_provider_doc_id=None,
-                page_count=None,
-                blocks=[],
-            )
-            result = writer.write_document(doc, [], {})
+        results = ingest_edgar_filings(
+            conn,
+            adapter=adapter,
+            archives_client=archives_client,
+            blob=blob,
+            cik=cik,
+            source=source,
+            limit=limit,
+            ingest_run_id="cli:docs-ingest-edgar",
+        )
+        for ref, result in results:
             status = "跳过(已存在)" if result.skipped else "写入"
             click.echo(f"{status} doc_id={result.doc_id} {ref.form_type} {ref.accession}")

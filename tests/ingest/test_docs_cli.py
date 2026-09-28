@@ -464,10 +464,18 @@ def test_docs_rechunk_reuses_cached_parse_with_zero_api_calls(
     )
     assert ingested.exit_code == 0, ingested.output
 
-    (doc_id, parse_engine) = conn.execute(
-        "SELECT doc_id, parse_engine FROM core.document"
+    (doc_id, parse_engine, snapshot_id) = conn.execute(
+        "SELECT doc_id, parse_engine, snapshot_id FROM core.document"
     ).fetchone()  # type: ignore[misc]
     assert parse_engine.startswith("textin:")
+    # 本地 manifest 的原始记录也要落 provider_snapshot（CLAUDE.md §1.5），
+    # 并能回放出这份文档的来源 ID 与原始文件位置。
+    assert snapshot_id is not None
+    (response,) = conn.execute(
+        "SELECT response FROM core.provider_snapshot WHERE snapshot_id = %s", (snapshot_id,)
+    ).fetchone()  # type: ignore[misc]
+    assert response["source_id"] == "1000000000"
+    assert response["raw_bytes_ref"].startswith("raw/")
 
     rechunked = CliRunner().invoke(
         main,
@@ -487,12 +495,13 @@ def test_docs_rechunk_reuses_cached_parse_with_zero_api_calls(
     assert "重新切块完成" in rechunked.output
 
     rows = conn.execute(
-        "SELECT doc_id, superseded_at FROM core.document ORDER BY doc_id"
+        "SELECT doc_id, superseded_at, snapshot_id FROM core.document ORDER BY doc_id"
     ).fetchall()
     assert len(rows) == 2  # 旧版本仍在，只是被标记为已取代
     assert rows[0][0] == doc_id
     assert rows[0][1] is not None  # 旧行的 superseded_at 已经写上
     assert rows[1][1] is None  # 新行仍然是活跃版本
+    assert rows[1][2] == snapshot_id  # 重切不产生新的原始响应，沿用原来的快照
 
 
 @pytest.mark.db

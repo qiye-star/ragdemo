@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import psycopg
 import pytest
 from dagster import build_asset_context
 
+from ragdemo.adapters.announcements import NormalizedDocument
 from ragdemo.adapters.base import FactRecord, FetchContext, RawResponse
+from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.adapters.mock.facts import MockFactAdapter
 from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
 from ragdemo.adapters.tushare import PriceRow, TushareAdapter
@@ -27,8 +31,14 @@ from ragdemo.ingest.assets import (
     price_daily_loaded,
     price_normalized,
 )
+from ragdemo.ingest.assets_docs import doc_normalized, prepare_documents, record_parse_snapshots
+from ragdemo.ingest.documents import DocumentWriter
 from ragdemo.ingest.snapshot import MAX_INLINE_PAYLOAD_BYTES
 from ragdemo.ingest.writer import PointInTimeWriter
+from ragdemo.parse.chunker import chunk_document
+from ragdemo.parse.config import ChunkConfig
+from ragdemo.parse.textin import PageBudget, TextInParser
+from ragdemo.parse.tree import build_tree
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
@@ -233,3 +243,119 @@ def test_oversized_response_is_stored_in_blob_and_replayable(
     assert inline is not None and inline[0] is True and inline[1] is not None
     replayed = list(adapter.parse(_snapshot_as_raw(conn, snapshot_id, blob)))
     assert len(replayed) == len(rows)
+
+
+# --- 公告文档 --------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_every_announcement_document_points_at_a_replayable_snapshot(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    provider = MockAnnouncementProvider()
+    ctx = build_asset_context(partition_key=PARTITION)
+    docs = cast(list[NormalizedDocument], doc_normalized(ctx, provider, conn, blob))
+    assert docs and all(d.snapshot_id is not None for d in docs)
+
+    writer = DocumentWriter(conn, ingest_run_id="r1", source=provider.provider)
+    cfg = ChunkConfig()
+    for doc in docs:
+        chunks = build_tree(chunk_document(doc, cfg))
+        desc = {c.ordinal: "表格描述" for c in chunks if c.block_type == "table"}
+        writer.write_document(doc, chunks, desc)
+
+    rows = conn.execute(
+        "SELECT source_ref, content_hash, snapshot_id FROM core.document"
+    ).fetchall()
+    assert rows and all(r[2] is not None for r in rows), "每份文档都必须带 snapshot_id"
+    for provider_doc_id, content_hash, snapshot_id in rows:
+        replayed = provider.normalize(_snapshot_as_raw(conn, cast(int, snapshot_id), blob))
+        assert replayed.provider_doc_id == provider_doc_id
+        assert replayed.content_hash == content_hash
+
+
+# --- TextIn 解析调用 -------------------------------------------------------------
+
+
+def _path_b_doc(blob: LocalBlobStore) -> NormalizedDocument:
+    blob.put("raw/doc-0.pdf", b"%PDF-1.4 fake content 0")
+    return NormalizedDocument(
+        provider_doc_id="PATH-B-0",
+        entity_ref="688256.SH",
+        doc_type="annual_report",
+        title="路径 B 文档",
+        period="2024",
+        publish_at=datetime(2024, 10, 28, 18, 32, tzinfo=UTC),
+        language="zh",
+        source_url=None,
+        raw_bytes_ref="raw/doc-0.pdf",
+        content_hash="path-b-0",
+        is_correction=False,
+        supersedes_provider_doc_id=None,
+        page_count=None,
+        blocks=[],
+    )
+
+
+@pytest.mark.db
+def test_fresh_textin_parse_is_snapshotted_with_cost_and_cache_hits_are_not(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    payload = json.loads(Path("tests/fixtures/xparse/annual_report.json").read_text("utf-8"))
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=payload)
+
+    parser = TextInParser("http://proxy.invalid", blob, transport=httpx.MockTransport(handler))
+    doc = _path_b_doc(blob)
+
+    prepared = prepare_documents([doc], parser, blob, PageBudget(10_000), owner_user=None)
+    ids = record_parse_snapshots(
+        conn, prepared, ingest_run_id="r1", cost_per_page_cny=Decimal("0.05")
+    )
+    assert len(ids) == 1 and len(calls) == 1
+
+    row = conn.execute(
+        "SELECT provider, response, response_ref, cost_cents FROM core.provider_snapshot"
+        " WHERE snapshot_id = %s",
+        (ids[0],),
+    ).fetchone()
+    assert row is not None
+    provider, response, response_ref, cost_cents = row
+    artifacts = prepared[0].artifacts
+    assert artifacts is not None
+    assert provider == "textin"
+    assert response is None, "解析原始 JSON 已在 blob 里，快照只记引用，不重复存"
+    assert response_ref == artifacts.json_ref
+    assert json.loads(blob.get(cast(str, response_ref))) == payload
+    pages = prepared[0].doc.page_count
+    assert pages and Decimal(cast(Decimal, cost_cents)) == Decimal(pages) * 5  # 0.05 元 = 5 分
+
+    # 第二次命中缓存：没有新的供应商调用，也就没有新的快照
+    again = prepare_documents([doc], parser, blob, PageBudget(10_000), owner_user=None)
+    assert record_parse_snapshots(conn, again, ingest_run_id="r2", cost_per_page_cny=None) == []
+    assert len(calls) == 1
+
+
+@pytest.mark.db
+def test_parse_cost_is_null_when_price_is_not_configured(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    payload = json.loads(Path("tests/fixtures/xparse/annual_report.json").read_text("utf-8"))
+    parser = TextInParser(
+        "http://proxy.invalid",
+        blob,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)),
+    )
+    prepared = prepare_documents(
+        [_path_b_doc(blob)], parser, blob, PageBudget(10_000), owner_user=None
+    )
+    (snapshot_id,) = record_parse_snapshots(
+        conn, prepared, ingest_run_id="r1", cost_per_page_cny=None
+    )
+    row = conn.execute(
+        "SELECT cost_cents FROM core.provider_snapshot WHERE snapshot_id = %s", (snapshot_id,)
+    ).fetchone()
+    assert row is not None and row[0] is None, "单价未知就记 NULL，不能记 0——0 会被当成免费"

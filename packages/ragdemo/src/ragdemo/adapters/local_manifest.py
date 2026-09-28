@@ -32,12 +32,13 @@ import json
 import re
 import zlib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.adapters.base import RawResponse
 from ragdemo_core.blob import BlobStore
 
 # 供应商只给日期不给时间的公告，按当日 23:59:59 本地时区取 known_at
@@ -241,6 +242,54 @@ def to_normalized_document(
     )
 
 
+MANIFEST_ENDPOINT = "local_manifest"
+
+
+def manifest_raw_response(
+    manifest_path: Path, entry: ManifestEntry, doc: NormalizedDocument
+) -> RawResponse:
+    """把一行 manifest 包装成"原始响应"，供取数方写 provider_snapshot。
+
+    本地 manifest 不是一次供应商接口调用，但它就是这份文档进入系统时的原始
+    来源记录：谁发布的、原始 URL、文件哈希、原始披露时间字符串。PDF 字节已经在
+    blob 里（`raw_bytes_ref`），这里只记它的位置，不重复存字节。
+    `fetched_at` 取读入本地文件的这一刻——manifest 没有记录下载时间。
+    """
+    return RawResponse(
+        provider=entry.source,
+        endpoint=MANIFEST_ENDPOINT,
+        params={"manifest": manifest_path.name, "source_id": entry.source_id},
+        payload={**asdict(entry), "raw_bytes_ref": doc.raw_bytes_ref},
+        http_status=200,  # 本地文件读取成功；沿用 200 表达"成功取得"
+        fetched_at=datetime.now(UTC),
+    )
+
+
+def load_documents_with_raw(
+    manifest_path: Path,
+    blob: BlobStore,
+    *,
+    entity_ref: str,
+    select_title: str | None = None,
+) -> list[tuple[RawResponse, NormalizedDocument]]:
+    """加载 manifest，过滤，逐条校验并放进 blob，返回（原始记录, 文档）对。
+
+    只保留 `kind == "announcement"`——研报（`kind == "research"`）著作权归
+    发布券商所有，`docs/rawdata/688041-hygon/README.md` 明确写了不得对外
+    分发；这条过滤没有开关，不是一个可选策略。
+    """
+    pairs: list[tuple[RawResponse, NormalizedDocument]] = []
+    for entry in iter_manifest_entries(manifest_path):
+        if entry.kind != _ONLY_KIND:
+            continue
+        if select_title and select_title not in entry.title:
+            continue
+        data = load_local_bytes(manifest_path, entry)
+        doc = to_normalized_document(entry, data, blob, entity_ref=entity_ref)
+        pairs.append((manifest_raw_response(manifest_path, entry, doc), doc))
+    return pairs
+
+
 def load_documents(
     manifest_path: Path,
     blob: BlobStore,
@@ -248,18 +297,8 @@ def load_documents(
     entity_ref: str,
     select_title: str | None = None,
 ) -> list[NormalizedDocument]:
-    """加载 manifest，过滤，逐条校验并放进 blob，返回 `NormalizedDocument` 列表。
-
-    只保留 `kind == "announcement"`——研报（`kind == "research"`）著作权归
-    发布券商所有，`docs/rawdata/688041-hygon/README.md` 明确写了不得对外
-    分发；这条过滤没有开关，不是一个可选策略。
-    """
-    docs: list[NormalizedDocument] = []
-    for entry in iter_manifest_entries(manifest_path):
-        if entry.kind != _ONLY_KIND:
-            continue
-        if select_title and select_title not in entry.title:
-            continue
-        data = load_local_bytes(manifest_path, entry)
-        docs.append(to_normalized_document(entry, data, blob, entity_ref=entity_ref))
-    return docs
+    """只要文档、不写快照的场景（dry run）用这个；真正入库走 load_documents_with_raw。"""
+    pairs = load_documents_with_raw(
+        manifest_path, blob, entity_ref=entity_ref, select_title=select_title
+    )
+    return [doc for _, doc in pairs]

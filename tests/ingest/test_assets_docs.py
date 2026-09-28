@@ -49,7 +49,11 @@ def _xparse_payload() -> dict[str, Any]:
     return cast("dict[str, Any]", json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8")))
 
 
-def _normalized(ctx: Any, conn: psycopg.Connection) -> list[NormalizedDocument]:  # noqa: ANN401
+def _normalized(
+    ctx: Any,  # noqa: ANN401
+    conn: psycopg.Connection,
+    blob: LocalBlobStore,
+) -> list[NormalizedDocument]:
     """`doc_normalized` 是 `@asset` 装饰的函数：Dagster 的 `AssetsDefinition.__call__`
     对直接调用一律标注返回 `object`（不看被装饰函数的真实签名，见
     `dagster._core.definitions.assets.definition.assets_definition.AssetsDefinition.__call__`）。
@@ -58,8 +62,11 @@ def _normalized(ctx: Any, conn: psycopg.Connection) -> list[NormalizedDocument]:
     顶层导出里，没有必要为一个测试内部小工具去引用它的私有模块路径。
 
     `conn` 是阶段 F 加的参数：`doc_normalized` 把"应到"落一行
-    `quality_metric.fetched_count`，供 `ingest_reconciliation_check` 读回。"""
-    return cast("list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider(), conn))
+    `quality_metric.fetched_count`，供 `ingest_reconciliation_check` 读回。
+    `blob` 供原始响应超过内联上限时落对象存储（`record_snapshot`）。"""
+    return cast(
+        "list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider(), conn, blob)
+    )
 
 
 def _path_b_docs(blob: LocalBlobStore, *, count: int = 1) -> list[NormalizedDocument]:
@@ -120,7 +127,7 @@ def conn(temp_db: str) -> psycopg.Connection:
 @pytest.mark.db
 def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = _normalized(ctx, conn)
+    docs = _normalized(ctx, conn, LocalBlobStore(tmp_path))
     prepared = prepare_documents(
         docs, MockDocumentParser(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
     )
@@ -143,7 +150,7 @@ def test_pipeline_produces_searchable_blocks(conn: psycopg.Connection, tmp_path:
 @pytest.mark.db
 def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = _normalized(ctx, conn)
+    docs = _normalized(ctx, conn, LocalBlobStore(tmp_path))
     blob = LocalBlobStore(tmp_path)
     prepared = prepare_documents(
         docs, MockDocumentParser(), blob, PageBudget(1000), owner_user=None
@@ -201,7 +208,7 @@ def test_path_a_documents_are_not_re_parsed(conn: psycopg.Connection, tmp_path: 
             raise AssertionError("路径 A 的文档不应该被解析")
 
     ctx = build_asset_context(partition_key="2024-10-28")
-    docs = [d for d in _normalized(ctx, conn) if d.blocks]
+    docs = [d for d in _normalized(ctx, conn, LocalBlobStore(tmp_path)) if d.blocks]
     prepared = prepare_documents(
         docs, Exploding(), LocalBlobStore(tmp_path), PageBudget(1000), owner_user=None
     )

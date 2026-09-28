@@ -54,6 +54,9 @@ class NormalizedDocument:
     supersedes_provider_doc_id: str | None
     page_count: int | None
     blocks: Sequence[NormalizedBlock]
+    # 这份文档出自的原始响应（core.provider_snapshot）。normalize() 不知道它——
+    # 快照由取数方在归一化之前写入，再盖到结果上。
+    snapshot_id: int | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.publish_at, "publish_at")
