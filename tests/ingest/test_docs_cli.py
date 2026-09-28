@@ -18,6 +18,7 @@ from click.testing import CliRunner, Result
 from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
 from ragdemo.adapters.local_manifest import CST
 from ragdemo.cli import main
+from ragdemo.ingest import assets_docs
 from ragdemo.ingest import cli as docs_cli
 from ragdemo.parse.chunker import Chunk
 from ragdemo.parse.config import ChunkConfig
@@ -93,7 +94,9 @@ def test_describe_tables_downgrades_rejection_instead_of_raising() -> None:
         bbox=None,
         is_leaf=True,
     )
-    descriptions, rejections = docs_cli.describe_tables([chunk], MockTableDescriber(), title="标题")
+    descriptions, rejections = assets_docs.describe_tables(
+        [chunk], MockTableDescriber(), title="标题"
+    )
     assert 5 not in descriptions
     assert 5 in rejections
     assert "评级" in rejections[5] or "违禁词" in rejections[5]
@@ -102,7 +105,7 @@ def test_describe_tables_downgrades_rejection_instead_of_raising() -> None:
 def test_format_violations_names_the_block_and_the_reason() -> None:
     violations = ["块 5: 表格块缺少 content_desc"]
     rejections = {5: "描述含违禁词: (买入|卖出|...|评级|...)"}
-    formatted = docs_cli.format_violations(violations, rejections)
+    formatted = assets_docs.format_violations(violations, rejections)
     assert len(formatted) == 1
     assert "块 5" in formatted[0]
     assert "描述生成被拒绝" in formatted[0]

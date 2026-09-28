@@ -24,7 +24,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -45,14 +44,17 @@ from ragdemo.adapters.local_manifest import (
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.ingest.assets_docs import prepare_documents, record_parse_snapshots
+from ragdemo.ingest.assets_docs import (
+    build_chunks_and_descriptions,
+    prepare_documents,
+    record_parse_snapshots,
+)
 from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
 from ragdemo.ingest.snapshot import record_snapshot
-from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.config import ChunkConfig
-from ragdemo.parse.describe import DescriptionRejected, MockTableDescriber, TableDescriber
+from ragdemo.parse.describe import MockTableDescriber, TableDescriber
 from ragdemo.parse.textin import (
     XPARSE_PARAMS,
     DocumentParser,
@@ -62,12 +64,8 @@ from ragdemo.parse.textin import (
     artifact_keys,
     param_fingerprint,
 )
-from ragdemo.parse.tree import build_tree
-from ragdemo.parse.validate import validate_chunks
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo_core.blob import BlobStore, LocalBlobStore
-
-_MISSING_DESC_RE = re.compile(r"^块 (\d+): 表格块缺少 content_desc$")
 
 
 def _dsn() -> str:
@@ -90,68 +88,6 @@ def docs_group() -> None:
 
 
 # --- 公共编排：dry run 与真实入库共用，两条路径必须看见同一套判断 -------------
-
-
-def describe_tables(
-    chunks: list[Chunk], describer: TableDescriber, *, title: str
-) -> tuple[dict[int, str], dict[int, str]]:
-    """对每个表格块调用一次 `describer.describe()`。
-
-    **这是"content_desc 陷阱"真正的修复点。** `MockTableDescriber` 从真实
-    年报的表头列名里直接拼描述；真实财报里"说明"（备注列）、"预计负债"
-    （会计科目）这类合法列名会撞上 `describe.py::validate_description` 的
-    解读词/违禁词过滤而被拒绝（代码注释里写着已经为这两个词patch 过两次）。
-    `ingest/assets_docs.py::doc_blocks_loaded` 对这个异常没有任何保护——
-    `DescriptionRejected` 会直接从字典推导式里冒出来，炸穿整个 run，而且
-    异常信息不会提到是哪个块、哪份文档。这里把它降级成"这个块没有
-    content_desc"（不放进 `descriptions`），交给 `validate_chunks` 给出
-    统一、按块号定位的违规文案，同时把拒绝原因单独记下来（第二个返回值），
-    配合 `format_violations` 说清楚"哪个块、为什么"。
-    """
-    descriptions: dict[int, str] = {}
-    rejections: dict[int, str] = {}
-    for chunk in chunks:
-        if chunk.block_type != "table":
-            continue
-        try:
-            descriptions[chunk.ordinal] = describer.describe(
-                chunk.content, title=title, section_path=chunk.section_path
-            )
-        except DescriptionRejected as exc:
-            rejections[chunk.ordinal] = str(exc)
-    return descriptions, rejections
-
-
-def format_violations(violations: list[str], rejections: dict[int, str]) -> list[str]:
-    """把 `validate_chunks` 里"缺少 content_desc"的违规行接上具体的拒绝原因。"""
-    formatted: list[str] = []
-    for violation in violations:
-        match = _MISSING_DESC_RE.match(violation)
-        if match is not None and int(match.group(1)) in rejections:
-            reason = rejections[int(match.group(1))]
-            formatted.append(f"{violation}（描述生成被拒绝：{reason}）")
-        else:
-            formatted.append(violation)
-    return formatted
-
-
-def build_chunks_and_descriptions(
-    doc: NormalizedDocument, cfg: ChunkConfig, describer: TableDescriber
-) -> tuple[list[Chunk], dict[int, str], list[str]]:
-    """`chunk_document` → `build_tree` → 表格描述 → `validate_chunks` 的公共编排。
-
-    真正写库（`docs ingest --yes`）与 dry run 的 content_desc 预检共用这一段
-    ——两条路径必须看到完全一致的违规判断，不能各写一份，否则会出现
-    "dry run 说没问题，真正跑起来却回滚"的漂移。没有块（还没解析，或解析
-    被判定为永久失败/预算耗尽之外的空文档）时直接返回空结果，与
-    `ingest/assets_docs.py::doc_blocks_loaded` 原有行为一致。
-    """
-    if not doc.blocks:
-        return [], {}, []
-    chunks = build_tree(chunk_document(doc, cfg))
-    descriptions, rejections = describe_tables(chunks, describer, title=doc.title)
-    violations = format_violations(validate_chunks(doc, chunks, descriptions), rejections)
-    return chunks, descriptions, violations
 
 
 # --- dry run -----------------------------------------------------------------
