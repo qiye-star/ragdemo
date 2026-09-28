@@ -52,6 +52,8 @@ from ragdemo.ingest.assets_docs import (
 from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
+from ragdemo.ingest.parse_pending import run_parse_pending
+from ragdemo.ingest.parse_policy import ParseTier
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber, TableDescriber
@@ -596,3 +598,103 @@ def docs_ingest_cninfo(
         for ref, result in results:
             status = "跳过(已存在)" if result.skipped else "写入"
             click.echo(f"{status} doc_id={result.doc_id} {ref.publish_at.date()} {ref.title}")
+
+
+# --- docs parse-pending（公告双源接入计划 Task 10）---------------------------
+
+
+@docs_group.command("parse-pending")
+@click.option(
+    "--entity-ref",
+    default=None,
+    help="只处理这一家实体（core.entity 任一代码列，如 688041.SH / 1045810）；"
+    "不传则处理全部实体——"
+    "扩大解析范围到更多试点时先用这个参数控制影响面。",
+)
+@click.option(
+    "--tier",
+    "tier_names",
+    multiple=True,
+    type=click.Choice([t.value for t in ParseTier]),
+    default=("first",),
+    help="只解析这些档位（可重复传多次）；不传则只处理 ParseTier.FIRST。",
+)
+@click.option("--max-pages", "max_pages_opt", type=int, default=None, help="本次 run 的页数预算")
+@click.option("--yes", is_flag=True, default=False, help="真正调用解析器并写库；不传则只 dry run")
+@click.option(
+    "--parser",
+    "parser_kind",
+    type=click.Choice(["textin", "mock"]),
+    default="textin",
+    help="mock 用于离线开发与测试，完全不发网络请求",
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def docs_parse_pending(
+    entity_ref: str | None,
+    tier_names: tuple[str, ...],
+    max_pages_opt: int | None,
+    yes: bool,
+    parser_kind: str,
+    blob_root_opt: Path | None,
+) -> None:
+    """解析已经在库里、有原文却还没有块的文档（cninfo/hkexnews/edgar 三个来源）。
+
+    不重新抓取任何东西——`docs announcements` 只对试点实体下载全文，且默认只请求
+    `ParseTier.FIRST` 档；决定要给某个实体补全文解析、或者扩大解析范围到更多档位/
+    更多实体时，跑这个命令。默认 dry run：只报选中了多少份、按档位汇总的真实页数
+    （能读到 PDF 时）或经验估算（读不到时），不发起任何解析调用。
+    """
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    tiers = frozenset(ParseTier(name) for name in tier_names)
+    max_pages = max_pages_opt if max_pages_opt is not None else cfg.textin_max_pages_per_run
+
+    with psycopg.connect(_dsn()) as conn:
+        if not yes:
+            report = run_parse_pending(
+                conn,
+                parser=MockDocumentParser(),
+                blob=blob,
+                entity_ref=entity_ref,
+                tiers=tiers,
+                budget=PageBudget(max_pages),
+                ingest_run_id="cli:docs-parse-pending",
+                dry_run=True,
+            )
+            click.echo(f"[dry run] 选中 {report.selected} 份待解析文档")
+            for tier, pages in sorted(report.estimated_pages.items()):
+                click.echo(f"  - {tier.value}: {pages} 页")
+            click.echo("[dry run] 未发起任何解析调用，--yes 才会真正解析并写库")
+            return
+
+        parser: DocumentParser
+        if parser_kind == "mock":
+            parser = MockDocumentParser()
+        else:
+            base_url = cfg.require_textin_base_url()
+            parser = TextInParser(base_url, blob, allow_private=cfg.textin_allow_private)
+
+        if parser_kind == "textin":
+            try:
+                budget_status = ensure_budget(
+                    conn, now=datetime.now(UTC), cap_cny=cfg.monthly_budget_cny
+                )
+            except BudgetExceeded as exc:
+                raise click.ClickException(str(exc)) from None
+            click.echo(f"[预算] {budget_status.describe()}")
+
+        report = run_parse_pending(
+            conn,
+            parser=parser,
+            blob=blob,
+            entity_ref=entity_ref,
+            tiers=tiers,
+            budget=PageBudget(max_pages),
+            ingest_run_id="cli:docs-parse-pending",
+            dry_run=False,
+        )
+        click.echo(
+            f"选中 {report.selected}，重解析 {report.reparsed}"
+            f"（{report.parsed_pages} 页），无块 {report.stored_unparsed}，"
+            f"预算跳过 {report.skipped_budget}"
+        )
