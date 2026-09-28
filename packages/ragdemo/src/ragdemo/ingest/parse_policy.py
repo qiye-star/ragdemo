@@ -1,0 +1,41 @@
+"""解析档位判定（公告双源接入计划 Task 4）：一个纯函数，输入归一化后的标题，
+输出这份公告值不值得花钱解析、解析到哪一批。
+
+规则来自负责人 2026-09-28 的决定（D2）：先只对季报、年报/半年报摘要、业绩预告、
+业绩快报解析（`ParseTier.FIRST`）；年报/半年报全文体量大，作为第二批
+（`ParseTier.SECOND`）；其余公告只存 PDF、不解析（`ParseTier.NONE`）。
+"""
+
+from __future__ import annotations
+
+import re
+from enum import StrEnum
+
+
+class ParseTier(StrEnum):
+    FIRST = "first"  # 季报、年报/半年报摘要、业绩预告、业绩快报
+    SECOND = "second"  # 年报/半年报全文
+    NONE = "none"  # 其余：只存 PDF，不解析
+
+
+# 一律不解析：英文版本（中文切块/表格描述规则对英文标题不成立）、已取消的事项。
+_NEVER_PARSE = re.compile(r"英文版|English|取消.*(公告|事项)|提示性公告")
+
+# 更正/修订公告：标题在原文档名后面又加了一段说明（"的更正公告"、"(修订版)"……），
+# 先把这段剥掉，按被更正的原文档判定档位——更正一份年报全文，档位还是第二批，
+# 不会因为多了"更正"两个字就被误判成不解析。剥不掉就用原标题继续判断。
+_CORRECTION_SUFFIX = re.compile(r"(的)?(更正|修订)(公告|版|说明)?[)）]?$")
+
+_FIRST_TIER = re.compile(r"第[一三]季度报告$|(半)?年度报告摘要$|业绩预告|业绩快报")
+_SECOND_TIER = re.compile(r"(半)?年度报告$")
+
+
+def parse_tier(title: str) -> ParseTier:
+    if _NEVER_PARSE.search(title):
+        return ParseTier.NONE
+    base = _CORRECTION_SUFFIX.sub("", title).rstrip("(（")
+    if _SECOND_TIER.search(base):
+        return ParseTier.SECOND
+    if _FIRST_TIER.search(base):
+        return ParseTier.FIRST
+    return ParseTier.NONE

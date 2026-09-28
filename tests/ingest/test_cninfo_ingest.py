@@ -18,7 +18,15 @@ import pytest
 
 from ragdemo.adapters.cninfo import CninfoAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
-from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
+from ragdemo.ingest.announcement_index import IndexWriter
+from ragdemo.ingest.cninfo_docs import (
+    CninfoLayerDeps,
+    ingest_cninfo_announcements,
+    list_announcements,
+    run_cninfo_layer,
+)
+from ragdemo.ingest.parse_policy import ParseTier
+from ragdemo.parse.textin import MockDocumentParser, PageBudget
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
@@ -205,3 +213,215 @@ def test_limit_caps_how_many_documents_get_written(
         ingest_run_id="t",
     )
     assert len(written) == 1
+
+
+# --- run_cninfo_layer：目录 + 选择性下载 + 按策略解析（公告双源接入计划 Task 4）------
+
+ANNOUNCEMENT_QUARTERLY = {
+    "secCode": "688041",
+    "orgId": "9900048365",
+    "announcementId": "1224906300",
+    "announcementTitle": "海光信息技术股份有限公司2025年第三季度报告",
+    "announcementTime": 1767024000000,
+    "adjunctUrl": "finalpage/2025-12-30/1224906300.PDF",
+    "adjunctType": "PDF",
+}
+
+
+def _query_client_with(*rows: dict[str, object]) -> HttpClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "topSearch" in request.url.path:
+            return httpx.Response(200, json=TOPSEARCH_688041)
+        body = dict(httpx.QueryParams(request.content.decode()))
+        if body["column"] == "sse":
+            return httpx.Response(200, json={"announcements": [], "totalpages": 0})
+        return httpx.Response(200, json={"announcements": list(rows), "totalpages": 1})
+
+    return HttpClient(
+        "cninfo",
+        "https://www.cninfo.com.cn",
+        policy=RetryPolicy(max_attempts=1, backoff_base_s=0),
+        bucket=TokenBucket(rate_per_minute=6000),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _deps(
+    query_client: HttpClient, static_calls: list[str], blob: LocalBlobStore
+) -> CninfoLayerDeps:
+    return CninfoLayerDeps(
+        adapter=CninfoAdapter(query_client),
+        static_client=_static_client(static_calls),
+        parser=MockDocumentParser(),
+        blob=blob,
+    )
+
+
+def _index(conn: psycopg.Connection) -> IndexWriter:
+    return IndexWriter(conn, ingest_run_id="t", now=lambda: datetime.now(UTC))
+
+
+@pytest.mark.db
+def test_download_false_indexes_everything_but_downloads_nothing(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    since, until = _window()
+    report = run_cninfo_layer(
+        conn,
+        deps=_deps(
+            _query_client_with(ANNOUNCEMENT_A, ANNOUNCEMENT_QUARTERLY),
+            calls,
+            LocalBlobStore(tmp_path),
+        ),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=False,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    conn.commit()
+    assert report.listed == 2 and report.indexed == 2
+    assert report.downloaded == 0 and calls == []
+    rows = conn.execute(
+        "SELECT has_full_text FROM core.announcement_index WHERE superseded_at IS NULL"
+    ).fetchall()
+    assert rows == [(False,), (False,)]
+
+
+@pytest.mark.db
+def test_every_announcement_is_indexed_and_downloaded_but_only_first_tier_is_parsed(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    since, until = _window()
+    report = run_cninfo_layer(
+        conn,
+        deps=_deps(
+            _query_client_with(ANNOUNCEMENT_A, ANNOUNCEMENT_QUARTERLY),
+            calls,
+            LocalBlobStore(tmp_path),
+        ),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=True,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    conn.commit()
+    assert report.listed == 2 and report.indexed == 2 and report.downloaded == 2
+    assert report.parsed_docs == 1 and report.stored_unparsed == 1
+
+    parsed = conn.execute(
+        "SELECT d.title, count(b.block_id) FROM core.document d"
+        " LEFT JOIN core.doc_block b USING (doc_id) WHERE d.source = 'cninfo'"
+        " GROUP BY d.doc_id, d.title ORDER BY d.title"
+    ).fetchall()
+    by_title = dict(parsed)
+    assert by_title[ANNOUNCEMENT_QUARTERLY["announcementTitle"]] == 3  # 季报被解析，有块
+    assert by_title[ANNOUNCEMENT_A["announcementTitle"]] == 0  # 决议公告未命中首批档，无块
+
+    linked = conn.execute(
+        "SELECT count(*) FROM core.announcement_index WHERE doc_id IS NOT NULL"
+    ).fetchone()
+    assert linked == (2,), "两份公告都下载并落库成了 core.document，目录行都要挂上 doc_id"
+
+
+@pytest.mark.db
+def test_budget_exhaustion_stores_the_rest_unparsed_not_dropped(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    second_quarterly = {
+        **ANNOUNCEMENT_QUARTERLY,
+        "announcementId": "1224906301",
+        "announcementTitle": "海光信息技术股份有限公司2025年第一季度报告",
+        "adjunctUrl": "finalpage/2025-12-30/1224906301.PDF",
+    }
+    since, until = _window()
+    report = run_cninfo_layer(
+        conn,
+        deps=_deps(
+            _query_client_with(ANNOUNCEMENT_QUARTERLY, second_quarterly),
+            [],
+            LocalBlobStore(tmp_path),
+        ),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=2),  # MockDocumentParser 每份计 2 页，只够解析一份
+        download=True,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    conn.commit()
+    assert report.parsed_docs == 1 and report.skipped_budget == 1
+    docs = conn.execute("SELECT count(*) FROM core.document WHERE source = 'cninfo'").fetchone()
+    assert docs == (2,), "预算耗尽的那份仍要落一行没有块的 document，不能凭空丢失"
+
+
+@pytest.mark.db
+def test_dry_run_downloads_nothing_and_estimates_pages(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    since, until = _window()
+    report = run_cninfo_layer(
+        conn,
+        deps=_deps(
+            _query_client_with(ANNOUNCEMENT_A, ANNOUNCEMENT_QUARTERLY),
+            calls,
+            LocalBlobStore(tmp_path),
+        ),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=True,
+        ingest_run_id="t",
+        dry_run=True,
+    )
+    assert report.listed == 2 and report.downloaded == 0 and calls == []
+    assert sum(report.estimated_pages.values()) > 0
+    assert conn.execute("SELECT count(*) FROM core.document").fetchone() == (0,)
+    assert conn.execute("SELECT count(*) FROM core.announcement_index").fetchone() == (0,)
+
+
+@pytest.mark.db
+def test_index_row_links_the_document(conn: psycopg.Connection, tmp_path: Path) -> None:
+    since, until = _window()
+    run_cninfo_layer(
+        conn,
+        deps=_deps(_query_client_with(ANNOUNCEMENT_QUARTERLY), [], LocalBlobStore(tmp_path)),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=True,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT i.doc_id, d.doc_id FROM core.announcement_index i"
+        " JOIN core.document d ON d.doc_id = i.doc_id"
+    ).fetchone()
+    assert row is not None and row[0] == row[1]

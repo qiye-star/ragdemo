@@ -15,6 +15,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "openpyxl>=3.1",
+    # 本地读 PDF 页数（公告双源接入计划 Task 4：解析前先知道真实页数，用于费用估算
+    # 与 PageBudget 判定），不解析内容，不依赖任何外部服务。
+    "pypdf>=5.0",
 ]
 
 [project.scripts]
