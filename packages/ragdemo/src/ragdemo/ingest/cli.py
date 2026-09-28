@@ -443,7 +443,7 @@ def _edgar_user_agent() -> str:
     if not ua:
         raise click.ClickException(
             "环境变量 EDGAR_USER_AGENT 未设置。SEC 的公平访问政策要求每个请求带"
-            "能联系到人的 User-Agent（形如 \"组织名 联系邮箱\"），这个值属于部署"
+            '能联系到人的 User-Agent（形如 "组织名 联系邮箱"），这个值属于部署'
             "配置（谁在运营这次抓取），不该由代码编造一个假联系方式。"
         )
     return ua

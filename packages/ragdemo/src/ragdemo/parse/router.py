@@ -149,9 +149,14 @@ def check_monthly_budget(
     """月度预算闸门。`cost_per_page_cny` 是必填参数，没有默认值——C 档的
     真实单价是商务定价，不该在代码里编一个数字，调用方从部署配置读（环境
     变量或类似机制），传不了就不该调用这个函数假装算出了一个准数。"""
-    spent = Decimal(monthly_pages_spent(
-        conn, doc_type=doc_type, month_start=month_start, month_end=month_end
-    )) * cost_per_page_cny
+    spent = (
+        Decimal(
+            monthly_pages_spent(
+                conn, doc_type=doc_type, month_start=month_start, month_end=month_end
+            )
+        )
+        * cost_per_page_cny
+    )
     additional = Decimal(pages_about_to_spend) * cost_per_page_cny
     return BudgetDecision(
         allowed=(spent + additional) <= policy.monthly_cap_cny,

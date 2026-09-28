@@ -63,20 +63,32 @@ def _seed_diverse_pool(conn: psycopg.Connection) -> None:
     block_id = 1
     for i in range(10):
         _seed_block(
-            conn, block_id=block_id, doc_id=100 + i, entity_id="CN.A",
-            doc_type="quarterly", parse_engine="textin:1+fp1",
+            conn,
+            block_id=block_id,
+            doc_id=100 + i,
+            entity_id="CN.A",
+            doc_type="quarterly",
+            parse_engine="textin:1+fp1",
         )
         block_id += 1
     for i in range(2):
         _seed_block(
-            conn, block_id=block_id, doc_id=200 + i, entity_id="CN.A",
-            doc_type="announcement", parse_engine="textin:1+fp1",
+            conn,
+            block_id=block_id,
+            doc_id=200 + i,
+            entity_id="CN.A",
+            doc_type="announcement",
+            parse_engine="textin:1+fp1",
         )
         block_id += 1
     for i in range(8):
         _seed_block(
-            conn, block_id=block_id, doc_id=300 + i, entity_id="CN.B",
-            doc_type="quarterly", parse_engine="mock:1",
+            conn,
+            block_id=block_id,
+            doc_id=300 + i,
+            entity_id="CN.B",
+            doc_type="quarterly",
+            parse_engine="mock:1",
         )
         block_id += 1
 
@@ -133,11 +145,19 @@ def test_engine_fingerprint_does_not_fragment_the_stratum(conn: psycopg.Connecti
     """分层键取引擎族（冒号前半段），不取带参数指纹的完整字符串——否则
     同一个 doc_type/entity 下换一次 xParse 参数版本就会被拆成新的一层。"""
     _seed_block(
-        conn, block_id=1, doc_id=1, entity_id="CN.A", doc_type="quarterly",
+        conn,
+        block_id=1,
+        doc_id=1,
+        entity_id="CN.A",
+        doc_type="quarterly",
         parse_engine="textin:1+aaa",
     )
     _seed_block(
-        conn, block_id=2, doc_id=2, entity_id="CN.A", doc_type="quarterly",
+        conn,
+        block_id=2,
+        doc_id=2,
+        entity_id="CN.A",
+        doc_type="quarterly",
         parse_engine="textin:2+bbb",
     )
 
@@ -149,7 +169,11 @@ def test_engine_fingerprint_does_not_fragment_the_stratum(conn: psycopg.Connecti
 @pytest.mark.db
 def test_superseded_documents_are_excluded_from_the_pool(conn: psycopg.Connection) -> None:
     _seed_block(
-        conn, block_id=1, doc_id=1, entity_id="CN.A", doc_type="quarterly",
+        conn,
+        block_id=1,
+        doc_id=1,
+        entity_id="CN.A",
+        doc_type="quarterly",
         parse_engine="textin:1+aaa",
     )
     conn.execute("UPDATE core.document SET superseded_at = now() WHERE doc_id = 1")

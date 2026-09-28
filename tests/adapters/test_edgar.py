@@ -134,9 +134,7 @@ def test_fetch_full_text_requests_the_documents_own_path_with_a_user_agent() -> 
 
     assert body == b"<html>10-Q body</html>"
     assert len(seen) == 1
-    assert seen[0].url.path == (
-        "/Archives/edgar/data/1045810/000104581024000316/nvda-20241027.htm"
-    )
+    assert seen[0].url.path == ("/Archives/edgar/data/1045810/000104581024000316/nvda-20241027.htm")
     assert seen[0].headers["user-agent"] == "ragdemo research contact@example.invalid"
 
 

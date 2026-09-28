@@ -170,7 +170,10 @@ def run(suite: str, gate: bool) -> None:
 @click.option("--seed", type=int, default=DEFAULT_SEED, help="固定种子，保证同一种子两次抽中同一批")
 @click.option("--min-per-stratum", type=int, default=DEFAULT_MIN_PER_STRATUM)
 @click.option(
-    "--out", "out_path", type=click.Path(path_type=Path), required=True,
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    required=True,
     help="输出 CSV 路径，如 evals/retrieval/candidates.csv",
 )
 def sample(n: int, seed: int, min_per_stratum: int, out_path: Path) -> None:
@@ -191,7 +194,10 @@ def sample(n: int, seed: int, min_per_stratum: int, out_path: Path) -> None:
     "--as-of", "as_of_raw", required=True, help="ISO 8601 带时区，如 2024-08-01T00:00+08:00"
 )
 @click.option(
-    "--out", "out_path", type=click.Path(path_type=Path), required=True,
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    required=True,
     help="快照输出路径，如 evals/retrieval/2026-10-freeze.json",
 )
 def freeze(as_of_raw: str, out_path: Path) -> None:

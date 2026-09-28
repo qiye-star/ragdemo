@@ -134,13 +134,29 @@ def write_candidates_csv(path: Path, candidates: Sequence[SampleCandidate]) -> N
     with p.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
-            ["block_id", "doc_id", "entity_id", "doc_type", "parse_engine", "section_path",
-             "page", "content_preview"]
+            [
+                "block_id",
+                "doc_id",
+                "entity_id",
+                "doc_type",
+                "parse_engine",
+                "section_path",
+                "page",
+                "content_preview",
+            ]
         )
         for c in candidates:
             writer.writerow(
-                [c.block_id, c.doc_id, c.entity_id or "", c.doc_type, c.parse_engine,
-                 c.section_path, c.page if c.page is not None else "", c.content_preview]
+                [
+                    c.block_id,
+                    c.doc_id,
+                    c.entity_id or "",
+                    c.doc_type,
+                    c.parse_engine,
+                    c.section_path,
+                    c.page if c.page is not None else "",
+                    c.content_preview,
+                ]
             )
 
 

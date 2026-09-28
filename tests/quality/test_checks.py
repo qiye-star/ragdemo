@@ -13,7 +13,12 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from dagster import AssetCheckSeverity, build_op_context
+from dagster import (
+    AssetCheckResult,
+    AssetChecksDefinition,
+    AssetCheckSeverity,
+    build_op_context,
+)
 from dagster._core.execution.context.invocation import DirectAssetCheckExecutionContext
 
 from ragdemo.quality.checks import (
@@ -59,6 +64,15 @@ def _check_ctx() -> DirectAssetCheckExecutionContext:
     "Cannot provide resources in both context and kwargs"。"""
     op_ctx = build_op_context(partition_key=PARTITION_KEY)
     return DirectAssetCheckExecutionContext(op_execution_context=op_ctx)
+
+
+def _run(check: AssetChecksDefinition, conn: psycopg.Connection) -> AssetCheckResult:
+    """直接调用 `@asset_check` 函数。Dagster 把 `AssetChecksDefinition.__call__`
+    的返回类型标成 `object`，这里断言它确实是 `AssetCheckResult`——既收窄类型，
+    也防止检查函数哪天改成 yield 多个结果时测试还在对着单个对象断言。"""
+    result = check(_check_ctx(), conn)
+    assert isinstance(result, AssetCheckResult)
+    return result
 
 
 def _seed_document(conn: psycopg.Connection, *, doc_id: int, content_hash: str) -> None:
@@ -119,7 +133,7 @@ def test_parse_success_rate_passes_when_every_document_has_blocks(
     _seed_block(conn, doc_id=1, ordinal=0)
     conn.commit()
 
-    result = parse_success_rate_check(_check_ctx(), conn)
+    result = _run(parse_success_rate_check, conn)
     assert result.passed is True
 
     (value, passed) = conn.execute(
@@ -140,13 +154,13 @@ def test_parse_success_rate_fails_when_a_document_has_zero_blocks(
     _seed_document(conn, doc_id=2, content_hash="h2")  # 解析失败：没有块
     conn.commit()
 
-    result = parse_success_rate_check(_check_ctx(), conn)
+    result = _run(parse_success_rate_check, conn)
     assert result.passed is False  # 1/2 = 0.5 < 0.98
 
 
 @pytest.mark.db
 def test_parse_success_rate_vacuously_passes_with_no_documents(conn: psycopg.Connection) -> None:
-    result = parse_success_rate_check(_check_ctx(), conn)
+    result = _run(parse_success_rate_check, conn)
     assert result.passed is True
 
 
@@ -165,7 +179,7 @@ def test_table_closure_rate_fails_on_an_unclosed_table(conn: psycopg.Connection)
     )
     conn.commit()
 
-    result = table_closure_rate_check(_check_ctx(), conn)
+    result = _run(table_closure_rate_check, conn)
     assert result.passed is False
 
 
@@ -176,7 +190,7 @@ def test_table_closure_rate_passes_with_no_tables(conn: psycopg.Connection) -> N
     _seed_block(conn, doc_id=1, ordinal=0, block_type="paragraph")
     conn.commit()
 
-    result = table_closure_rate_check(_check_ctx(), conn)
+    result = _run(table_closure_rate_check, conn)
     assert result.passed is True
 
 
@@ -190,7 +204,7 @@ def test_parse_confidence_p50_fails_when_median_is_low(conn: psycopg.Connection)
     _seed_block(conn, doc_id=1, ordinal=1, parse_confidence=0.4)
     conn.commit()
 
-    result = parse_confidence_p50_check(_check_ctx(), conn)
+    result = _run(parse_confidence_p50_check, conn)
     assert result.passed is False
 
 
@@ -202,7 +216,7 @@ def test_parse_confidence_p50_passes_with_no_scored_blocks(conn: psycopg.Connect
     _seed_block(conn, doc_id=1, ordinal=0, parse_confidence=None)
     conn.commit()
 
-    result = parse_confidence_p50_check(_check_ctx(), conn)
+    result = _run(parse_confidence_p50_check, conn)
     assert result.passed is True
     (value,) = conn.execute(
         "SELECT value FROM quality.quality_metric WHERE metric = 'parse_confidence_p50'"
@@ -221,7 +235,7 @@ def test_orphan_block_check_fails_on_a_leaf_paragraph_without_a_parent(
     _seed_block(conn, doc_id=1, ordinal=0, is_leaf=True, parent_block_id=None)
     conn.commit()
 
-    result = orphan_block_check(_check_ctx(), conn)
+    result = _run(orphan_block_check, conn)
     assert result.passed is False
 
 
@@ -234,7 +248,7 @@ def test_orphan_block_check_allows_a_leaf_table_without_a_parent(
     _seed_block(conn, doc_id=1, ordinal=0, block_type="table", is_leaf=True, parent_block_id=None)
     conn.commit()
 
-    result = orphan_block_check(_check_ctx(), conn)
+    result = _run(orphan_block_check, conn)
     assert result.passed is True
 
 
@@ -246,7 +260,7 @@ def test_orphan_block_check_fails_on_a_parent_block_with_no_children(
     _seed_block(conn, doc_id=1, ordinal=0, is_leaf=False)
     conn.commit()
 
-    result = orphan_block_check(_check_ctx(), conn)
+    result = _run(orphan_block_check, conn)
     assert result.passed is False
 
 
@@ -259,7 +273,7 @@ def test_orphan_block_check_passes_for_a_well_formed_parent_child_pair(
     _seed_block(conn, doc_id=1, ordinal=1, is_leaf=True, parent_block_id=parent_id)
     conn.commit()
 
-    result = orphan_block_check(_check_ctx(), conn)
+    result = _run(orphan_block_check, conn)
     assert result.passed is True
 
 
@@ -276,7 +290,7 @@ def test_leaf_length_compliance_fails_when_most_leaves_are_too_short(
     _seed_block(conn, doc_id=1, ordinal=2, char_len=5)  # 太短
     conn.commit()
 
-    result = leaf_length_compliance_check(_check_ctx(), conn)
+    result = _run(leaf_length_compliance_check, conn)
     assert result.passed is False  # 1/3 ≈ 0.33 < 0.9
 
 
@@ -289,7 +303,7 @@ def test_leaf_length_compliance_ignores_tables_and_parents(conn: psycopg.Connect
     _seed_block(conn, doc_id=1, ordinal=2, is_leaf=False, char_len=2000)
     conn.commit()
 
-    result = leaf_length_compliance_check(_check_ctx(), conn)
+    result = _run(leaf_length_compliance_check, conn)
     assert result.passed is True
 
 
@@ -305,7 +319,7 @@ def test_vector_coverage_fails_when_a_leaf_block_has_no_embedding(
     _seed_block(conn, doc_id=1, ordinal=1, embedding=None)
     conn.commit()
 
-    result = vector_coverage_check(_check_ctx(), conn)
+    result = _run(vector_coverage_check, conn)
     assert result.passed is False
 
 
@@ -317,7 +331,7 @@ def test_vector_coverage_passes_when_all_leaves_are_embedded(conn: psycopg.Conne
     _seed_block(conn, doc_id=1, ordinal=1, embedding=vec)
     conn.commit()
 
-    result = vector_coverage_check(_check_ctx(), conn)
+    result = _run(vector_coverage_check, conn)
     assert result.passed is True
 
 
@@ -330,7 +344,7 @@ def test_vector_coverage_ignores_parent_blocks(conn: psycopg.Connection) -> None
     _seed_block(conn, doc_id=1, ordinal=1, is_leaf=False, embedding=None)
     conn.commit()
 
-    result = vector_coverage_check(_check_ctx(), conn)
+    result = _run(vector_coverage_check, conn)
     assert result.passed is True
 
 
@@ -380,7 +394,7 @@ def _seed_fetched_count(conn: psycopg.Connection, count: int) -> None:
 
 
 def _seed_reconcile_document(conn: psycopg.Connection, *, doc_id: int) -> None:
-    """"实到"：一行落进 `core.document`，`source='mock-announcements'`、
+    """ "实到"：一行落进 `core.document`，`source='mock-announcements'`、
     `publish_at` 落在这个分区的 (since, until] 窗口内——与 `_seed_fetched_
     count` 记的"应到"比对的就是这张表这个窗口内的行数，不是任何上游资产的
     Python 返回值。"""
@@ -400,7 +414,7 @@ def test_reconciliation_skips_when_fetched_count_was_never_recorded(
 ) -> None:
     """doc_normalized 还没为这个分区跑过——没有"应到"可比对，不该编造一个
     数字，直接跳过，不是判定失败。"""
-    result = ingest_reconciliation_check(_check_ctx(), conn)
+    result = _run(ingest_reconciliation_check, conn)
 
     assert result.passed is True
 
@@ -411,7 +425,7 @@ def test_reconciliation_passes_with_no_note_when_counts_match(conn: psycopg.Conn
     _seed_reconcile_document(conn, doc_id=1)
     _seed_reconcile_document(conn, doc_id=2)
 
-    result = ingest_reconciliation_check(_check_ctx(), conn)
+    result = _run(ingest_reconciliation_check, conn)
 
     assert result.passed is True
     (note,) = conn.execute(
@@ -430,11 +444,11 @@ def test_reconciliation_passes_with_an_attributed_note_when_a_document_did_not_l
     _seed_fetched_count(conn, 2)
     _seed_reconcile_document(conn, doc_id=1)  # 只有一份真正落库
 
-    result = ingest_reconciliation_check(_check_ctx(), conn)
+    result = _run(ingest_reconciliation_check, conn)
 
     assert result.passed is True
     assert result.metadata is not None
-    assert result.metadata["diff"].value == -1  # type: ignore[union-attr]
+    assert result.metadata["diff"].value == -1
     (note,) = conn.execute(
         "SELECT note FROM quality.quality_metric WHERE metric = 'reconcile_diff'"
     ).fetchone()  # type: ignore[misc]
@@ -472,7 +486,7 @@ def test_ingest_latency_check_warns_but_does_not_block_when_slow(
 ) -> None:
     _seed_document_with_latency(conn, doc_id=1, source="mock-announcements", delay_minutes=30)
 
-    result = ingest_latency_check(_check_ctx(), conn)
+    result = _run(ingest_latency_check, conn)
 
     assert result.passed is False
     assert result.severity == AssetCheckSeverity.WARN
@@ -482,6 +496,6 @@ def test_ingest_latency_check_warns_but_does_not_block_when_slow(
 def test_ingest_latency_check_passes_within_threshold(conn: psycopg.Connection) -> None:
     _seed_document_with_latency(conn, doc_id=1, source="mock-announcements", delay_minutes=5)
 
-    result = ingest_latency_check(_check_ctx(), conn)
+    result = _run(ingest_latency_check, conn)
 
     assert result.passed is True

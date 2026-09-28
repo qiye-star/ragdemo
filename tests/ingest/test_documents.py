@@ -7,7 +7,6 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
 
 import psycopg
 import pytest
@@ -26,7 +25,7 @@ MIGRATIONS = Path("db/migrations")
 CFG = ChunkConfig()
 
 
-def _docs() -> list[object]:
+def _docs() -> list[NormalizedDocument]:
     p = MockAnnouncementProvider()
     ctx = FetchContext(ingest_run_id="t", partition_date=datetime.now(UTC).date())
     return [
@@ -37,8 +36,8 @@ def _docs() -> list[object]:
     ]
 
 
-def _prepare(doc: object) -> tuple[list[Chunk], dict[int, str]]:
-    chunks = build_tree(chunk_document(doc, CFG))  # type: ignore[arg-type]
+def _prepare(doc: NormalizedDocument) -> tuple[list[Chunk], dict[int, str]]:
+    chunks = build_tree(chunk_document(doc, CFG))
     describer = MockTableDescriber()
     descriptions = {
         c.ordinal: describer.describe(c.content, title="t", section_path=c.section_path)
@@ -66,7 +65,7 @@ def writer(temp_db: str) -> DocumentWriter:
 def test_document_and_blocks_are_written(writer: DocumentWriter) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc)
     assert result.doc_id > 0
     assert len(result.block_ids) == len(chunks)
 
@@ -76,7 +75,7 @@ def test_denormalised_columns_match_the_document(writer: DocumentWriter) -> None
     """02 §5.3 的反规范化列必须与 document 完全一致，否则检索过滤会错。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    writer.write_document(doc, chunks, desc)
     (mismatches,) = writer.conn.execute(
         "SELECT count(*) FROM core.doc_block b JOIN core.document d USING (doc_id) "
         " WHERE b.entity_id IS DISTINCT FROM d.entity_id"
@@ -106,7 +105,7 @@ def test_known_at_applies_disclosure_lag(temp_db: str) -> None:
     w = DocumentWriter(conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1))
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    w.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    w.write_document(doc, chunks, desc)
     publish_at, known_at = conn.execute("SELECT publish_at, known_at FROM core.document").fetchone()  # type: ignore[misc]
     assert known_at - publish_at == timedelta(days=1)
 
@@ -115,8 +114,8 @@ def test_known_at_applies_disclosure_lag(temp_db: str) -> None:
 def test_duplicate_content_hash_is_skipped(writer: DocumentWriter) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
-    second = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    writer.write_document(doc, chunks, desc)
+    second = writer.write_document(doc, chunks, desc)
     assert second.skipped is True
     (n,) = writer.conn.execute("SELECT count(*) FROM core.document").fetchone()  # type: ignore[misc]
     assert n == 1
@@ -133,7 +132,7 @@ def test_invalid_metadata_rolls_back_the_whole_document(writer: DocumentWriter) 
     # range(N-1)，validate_chunks 检测不到任何异常。
     broken = [*chunks[1:]]
     with pytest.raises(MetadataInvalid):
-        writer.write_document(doc, broken, desc)  # type: ignore[arg-type]
+        writer.write_document(doc, broken, desc)
     (docs, blocks) = writer.conn.execute(
         "SELECT (SELECT count(*) FROM core.document), (SELECT count(*) FROM core.doc_block)"
     ).fetchone()  # type: ignore[misc]
@@ -145,13 +144,13 @@ def test_reparse_keeps_original_known_at(writer: DocumentWriter) -> None:
     """重解析不改变这份文档在现实中何时可知——改了它就会从历史回测中消失。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    first = writer.write_document(doc, chunks, desc)
     (original_known_at,) = writer.conn.execute(
         "SELECT known_at FROM core.document WHERE doc_id = %s", (first.doc_id,)
     ).fetchone()  # type: ignore[misc]
 
     second = writer.reparse_document(
-        doc,  # type: ignore[arg-type]
+        doc,
         chunks,
         desc,
         supersedes_doc_id=first.doc_id,
@@ -171,8 +170,8 @@ def test_reparse_marks_old_blocks_superseded_but_keeps_them(writer: DocumentWrit
     """旧块必须保留——历史观点的 evidence_blocks 引用着它们。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
-    writer.reparse_document(doc, chunks, desc, supersedes_doc_id=first.doc_id)  # type: ignore[arg-type]
+    first = writer.write_document(doc, chunks, desc)
+    writer.reparse_document(doc, chunks, desc, supersedes_doc_id=first.doc_id)
 
     (old_alive,) = writer.conn.execute(
         "SELECT count(*) FROM core.doc_block WHERE doc_id = %s", (first.doc_id,)
@@ -197,9 +196,9 @@ def test_correction_document_is_routed_as_a_new_version_not_a_fresh_document(
     original, correction = _docs()
     chunks1, desc1 = _prepare(original)
     chunks2, desc2 = _prepare(correction)
-    first = writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
+    first = writer.write_document(original, chunks1, desc1)
 
-    second = writer.write_document(correction, chunks2, desc2)  # type: ignore[arg-type]
+    second = writer.write_document(correction, chunks2, desc2)
 
     assert second.doc_id != first.doc_id
     version_group, supersedes, content_hash = writer.conn.execute(
@@ -233,11 +232,9 @@ def test_correction_uses_the_callers_owner_user_not_the_predecessors(
     chunks1, desc1 = _prepare(original)
     chunks2, desc2 = _prepare(correction)
     # 前序：公共（owner_user=None）
-    writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
+    writer.write_document(original, chunks1, desc1)
 
-    second = writer.write_document(  # type: ignore[arg-type]
-        correction, chunks2, desc2, owner_user="u1"
-    )
+    second = writer.write_document(correction, chunks2, desc2, owner_user="u1")
 
     (owner_user,) = writer.conn.execute(
         "SELECT owner_user FROM core.document WHERE doc_id = %s", (second.doc_id,)
@@ -256,8 +253,8 @@ def test_correction_known_at_uses_its_own_publish_at_not_the_predecessors(
     original, correction = _docs()
     chunks1, desc1 = _prepare(original)
     chunks2, desc2 = _prepare(correction)
-    first = writer.write_document(original, chunks1, desc1)  # type: ignore[arg-type]
-    second = writer.write_document(correction, chunks2, desc2)  # type: ignore[arg-type]
+    first = writer.write_document(original, chunks1, desc1)
+    second = writer.write_document(correction, chunks2, desc2)
 
     (new_known_at,) = writer.conn.execute(
         "SELECT known_at FROM core.document WHERE doc_id = %s", (second.doc_id,)
@@ -266,7 +263,7 @@ def test_correction_known_at_uses_its_own_publish_at_not_the_predecessors(
         "SELECT known_at FROM core.document WHERE doc_id = %s", (first.doc_id,)
     ).fetchone()  # type: ignore[misc]
 
-    assert new_known_at == writer._known_at(correction)  # type: ignore[arg-type]
+    assert new_known_at == writer._known_at(correction)
     assert new_known_at != old_known_at
     assert new_known_at > old_known_at
 
@@ -280,7 +277,7 @@ def test_correction_without_a_findable_predecessor_falls_back_to_a_fresh_documen
     _original, correction = _docs()
     chunks, desc = _prepare(correction)
 
-    result = writer.write_document(correction, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(correction, chunks, desc)
 
     version_group, supersedes = writer.conn.execute(
         "SELECT version_group_id, supersedes_doc_id FROM core.document WHERE doc_id = %s",
@@ -305,7 +302,7 @@ def test_write_document_commits_and_is_visible_from_another_connection(
     未提交的写入）——必须换一个独立连接。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc)
 
     other_conn = psycopg.connect(temp_db)
     try:
@@ -327,9 +324,9 @@ def test_reparse_document_commits_and_is_visible_from_another_connection(
 ) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    first = writer.write_document(doc, chunks, desc)
     second = writer.reparse_document(
-        doc,  # type: ignore[arg-type]
+        doc,
         chunks,
         desc,
         supersedes_doc_id=first.doc_id,
@@ -362,15 +359,15 @@ def test_reingest_after_reparse_returns_the_live_doc_id(writer: DocumentWriter) 
     """
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    first = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    first = writer.write_document(doc, chunks, desc)
     reparsed = writer.reparse_document(
-        doc,  # type: ignore[arg-type]
+        doc,
         chunks,
         desc,
         supersedes_doc_id=first.doc_id,
     )
 
-    again = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    again = writer.write_document(doc, chunks, desc)
 
     assert again.skipped is True
     assert again.doc_id == reparsed.doc_id
@@ -406,7 +403,7 @@ def test_concurrent_first_write_degrades_to_skipped(
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
 
-    content_hash = cast(NormalizedDocument, doc).content_hash
+    content_hash = doc.content_hash
 
     conn_b = psycopg.connect(temp_db)
     writer_b = DocumentWriter(conn_b, ingest_run_id="r2", source="mock-announcements")
@@ -415,7 +412,7 @@ def test_concurrent_first_write_degrades_to_skipped(
     assert writer_b._live_doc_id(content_hash) is None
 
     # conn_a（赢家）完整写入并提交。
-    winner = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    winner = writer.write_document(doc, chunks, desc)
     writer.conn.commit()
     assert winner.skipped is False
 
@@ -433,7 +430,7 @@ def test_concurrent_first_write_degrades_to_skipped(
 
     monkeypatch.setattr(writer_b, "_live_doc_id", _stale_first_check)
 
-    loser = writer_b.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    loser = writer_b.write_document(doc, chunks, desc)
 
     assert loser.skipped is True
     assert loser.doc_id == winner.doc_id
@@ -456,7 +453,7 @@ def test_unresolved_entity_ref_still_writes_and_warns(
     这是数据质量问题，需要有人能看到。
     """
     doc = replace(
-        cast(NormalizedDocument, _docs()[0]),
+        _docs()[0],
         entity_ref="NOT-A-REAL-CODE",
         content_hash="unresolved-entity-hash",
     )
@@ -490,7 +487,7 @@ def test_unresolved_entity_ref_still_writes_and_warns(
 def test_owner_user_is_persisted_on_both_document_and_doc_block(writer: DocumentWriter) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc, owner_user="u1")  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc, owner_user="u1")
 
     (doc_owner,) = writer.conn.execute(
         "SELECT owner_user FROM core.document WHERE doc_id = %s", (result.doc_id,)
@@ -512,7 +509,7 @@ def test_ordinary_public_path_is_unchanged(writer: DocumentWriter) -> None:
     （owner_user 列为 NULL）：这条修复不能悄悄改变既有行为。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc)
 
     (doc_owner,) = writer.conn.execute(
         "SELECT owner_user FROM core.document WHERE doc_id = %s", (result.doc_id,)
@@ -535,10 +532,10 @@ def test_reparse_preserves_the_original_documents_owner(writer: DocumentWriter) 
     与 known_at 的处理方式一致：沿用被取代那份文档的值，不接受调用方传入。"""
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    first = writer.write_document(doc, chunks, desc, owner_user="u1")  # type: ignore[arg-type]
+    first = writer.write_document(doc, chunks, desc, owner_user="u1")
 
     second = writer.reparse_document(
-        doc,  # type: ignore[arg-type]
+        doc,
         chunks,
         desc,
         supersedes_doc_id=first.doc_id,
@@ -570,8 +567,8 @@ def test_private_document_is_invisible_to_other_users_through_rls(
     这套策略预期的位置上——即 Finding 2 修的那条写入路径。）
     """
     docs = _docs()
-    public_doc = cast(NormalizedDocument, docs[0])
-    private_doc = cast(NormalizedDocument, docs[1])
+    public_doc = docs[0]
+    private_doc = docs[1]
     public_chunks, public_desc = _prepare(public_doc)
     private_chunks, private_desc = _prepare(private_doc)
 
@@ -640,7 +637,7 @@ def test_can_show_raw_inherits_from_registry_to_document_and_block(temp_db: str)
 
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    writer.write_document(doc, chunks, desc)
 
     (doc_flag,) = conn.execute("SELECT can_show_raw FROM core.document").fetchone()  # type: ignore[misc]
     assert doc_flag is False
@@ -672,7 +669,7 @@ def test_day_precision_known_at_is_conservative_day_end(temp_db: str) -> None:
 
     doc = _docs()[0]  # publish_at = 2024-10-28T18:32:00+08:00（MockAnnouncementProvider）
     chunks, desc = _prepare(doc)
-    writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    writer.write_document(doc, chunks, desc)
 
     (known_at,) = conn.execute("SELECT known_at FROM core.document").fetchone()  # type: ignore[misc]
     assert known_at != doc.publish_at, "day 精度不该原样相信 publish_at 里的具体时刻"
@@ -719,7 +716,7 @@ def _doc_with_table(table_html: str, *, content_hash: str = "tbl-hash-1") -> Nor
 def test_char_len_and_chunking_version_are_populated(writer: DocumentWriter) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc, chunking_version=CFG.version)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc, chunking_version=CFG.version)
 
     rows = writer.conn.execute(
         "SELECT char_len, chunking_version FROM core.doc_block WHERE block_id = ANY(%s)",
@@ -734,7 +731,7 @@ def test_char_len_and_chunking_version_are_populated(writer: DocumentWriter) -> 
 def test_parse_confidence_is_populated_on_document_and_blocks(writer: DocumentWriter) -> None:
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc)
 
     (doc_confidence,) = writer.conn.execute(
         "SELECT parse_confidence FROM core.document WHERE doc_id = %s", (result.doc_id,)
@@ -757,7 +754,7 @@ def test_parse_confidence_is_populated_on_document_and_blocks(writer: DocumentWr
 def test_table_html_is_written_only_for_table_blocks(writer: DocumentWriter) -> None:
     doc = _doc_with_table("<table><tr><td>1</td><td>2</td></tr></table>")
     chunks, desc = _prepare(doc)
-    result = writer.write_document(doc, chunks, desc)  # type: ignore[arg-type]
+    result = writer.write_document(doc, chunks, desc)
 
     (table_html,) = writer.conn.execute(
         "SELECT table_html FROM core.doc_block WHERE doc_id = %s AND block_type = 'table'",
@@ -784,7 +781,7 @@ def test_rechunk_with_new_chunking_version_keeps_old_blocks_queryable(
     old_cfg = ChunkConfig(leaf_max_chars=300)
     old_chunks = build_tree(chunk_document(doc, old_cfg))
     old_desc = {c.ordinal: "d" for c in old_chunks if c.block_type == "table"}
-    first = writer.write_document(doc, old_chunks, old_desc, chunking_version=old_cfg.version)  # type: ignore[arg-type]
+    first = writer.write_document(doc, old_chunks, old_desc, chunking_version=old_cfg.version)
 
     new_cfg = ChunkConfig(leaf_max_chars=350)
     assert new_cfg.version != old_cfg.version, "前置条件：换了参数指纹应该不同"
@@ -796,7 +793,7 @@ def test_rechunk_with_new_chunking_version_keeps_old_blocks_queryable(
         new_desc,
         supersedes_doc_id=first.doc_id,
         chunking_version=new_cfg.version,
-    )  # type: ignore[arg-type]
+    )
 
     assert second.doc_id != first.doc_id
 

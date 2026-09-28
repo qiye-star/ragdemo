@@ -178,12 +178,8 @@ def test_no_policy_never_triggers() -> None:
 
 @pytest.mark.db
 def test_monthly_pages_spent_sums_within_the_window(conn: psycopg.Connection) -> None:
-    record_c_tier_pages(
-        conn, doc_type="quarterly", pages=10, at=datetime(2026, 1, 5, tzinfo=UTC)
-    )
-    record_c_tier_pages(
-        conn, doc_type="quarterly", pages=20, at=datetime(2026, 1, 20, tzinfo=UTC)
-    )
+    record_c_tier_pages(conn, doc_type="quarterly", pages=10, at=datetime(2026, 1, 5, tzinfo=UTC))
+    record_c_tier_pages(conn, doc_type="quarterly", pages=20, at=datetime(2026, 1, 20, tzinfo=UTC))
     record_c_tier_pages(
         conn, doc_type="quarterly", pages=99, at=datetime(2026, 2, 1, tzinfo=UTC)
     )  # 下个月，不该被计入

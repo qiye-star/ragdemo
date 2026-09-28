@@ -136,9 +136,7 @@ def test_fetch_daily_with_a_stale_watermark_pulls_the_gap_since_the_day_after_it
     """F2：watermark 是"已确认处理到哪天"，区间从它的次日开始，不是它本身——
     否则 watermark 当天的数据会被重复拉一遍。"""
     gateway = MockMcpGateway(responses={"daily": []})
-    ctx = FetchContext(
-        ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241025"
-    )
+    ctx = FetchContext(ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241025")
 
     list(TushareAdapter().fetch_daily(ctx, gateway, ts_code="688256.SH"))
 
@@ -152,9 +150,7 @@ def test_fetch_daily_with_a_watermark_already_covering_this_partition_pulls_noth
     区间为空，不必也不应该再调一次网关，拉取的记录数应显著少于第一次
     （这里是 0）。"""
     gateway = MockMcpGateway(responses={"daily": [{"ts_code": "688256.SH", "close": 1.0}]})
-    ctx = FetchContext(
-        ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241028"
-    )
+    ctx = FetchContext(ingest_run_id="r1", partition_date=date(2024, 10, 28), watermark="20241028")
 
     responses = list(TushareAdapter().fetch_daily(ctx, gateway, ts_code="688256.SH"))
 

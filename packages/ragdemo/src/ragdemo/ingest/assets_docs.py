@@ -235,9 +235,7 @@ def doc_normalized(
     record_metric(
         conn,
         partition,
-        MetricResult(
-            "fetched_count", float(len(docs)), True, source_id=announcements.provider
-        ),
+        MetricResult("fetched_count", float(len(docs)), True, source_id=announcements.provider),
     )
     context.log.info(
         "normalized documents",

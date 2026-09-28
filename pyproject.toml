@@ -8,6 +8,15 @@ members = ["packages/*"]
 [tool.uv.sources]
 ragdemo-core = { workspace = true }
 
+# 显式钉住官方索引。uv 会把"解析时用的索引地址"写进 uv.lock；开发机若在
+# 用户级 uv.toml 里配了国内镜像（default = true），每次 `uv run` 都会把整份
+# uv.lock 的源地址改写成镜像，产生几千行零实质的 diff。项目级配置优先于
+# 用户级配置，钉在这里之后 uv.lock 在所有机器上保持同一份。
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

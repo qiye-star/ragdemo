@@ -18,6 +18,7 @@ from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.embed.batch import EmbedStats
 from ragdemo.embed.mock import MockEmbedder
 from ragdemo.ingest.assets_docs import (
+    PreparedDocument,
     block_embeddings,
     doc_blocks_loaded,
     doc_normalized,
@@ -58,9 +59,7 @@ def _normalized(ctx: Any, conn: psycopg.Connection) -> list[NormalizedDocument]:
 
     `conn` 是阶段 F 加的参数：`doc_normalized` 把"应到"落一行
     `quality_metric.fetched_count`，供 `ingest_reconciliation_check` 读回。"""
-    return cast(
-        "list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider(), conn)
-    )
+    return cast("list[NormalizedDocument]", doc_normalized(ctx, MockAnnouncementProvider(), conn))
 
 
 def _path_b_docs(blob: LocalBlobStore, *, count: int = 1) -> list[NormalizedDocument]:
@@ -349,7 +348,10 @@ def test_doc_prepared_asset_records_the_dropped_document_in_the_retry_queue(
     docs = _path_b_docs(blob, count=3)
     ctx = build_asset_context(partition_key="2024-10-28")
 
-    prepared = doc_prepared(ctx, docs, FlakyOnSecond(), blob, MockAnnouncementProvider(), conn)
+    prepared = cast(
+        "list[PreparedDocument]",
+        doc_prepared(ctx, docs, FlakyOnSecond(), blob, MockAnnouncementProvider(), conn),
+    )
 
     assert [p.doc.provider_doc_id for p in prepared] == ["PATH-B-0", "PATH-B-2"]
     (entry,) = list_retry_queue(conn, source=MockAnnouncementProvider().provider)
@@ -502,9 +504,7 @@ def test_tier_c_reparse_reparses_a_low_confidence_document(
     _seed_document_for_tier_c(conn, blob, doc_id=9003, parse_confidence=0.3)
     ctx = build_asset_context(partition_key="2024-10-28")
     parser = _high_precision_parser(
-        lambda r: httpx.Response(
-            200, json=json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8"))
-        ),
+        lambda r: httpx.Response(200, json=json.loads(XPARSE_FIXTURE.read_text(encoding="utf-8"))),
         tmp_path / "cache",
     )
 

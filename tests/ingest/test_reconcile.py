@@ -156,7 +156,10 @@ def _seed_document(
 def test_latency_passes_within_threshold(conn: psycopg.Connection) -> None:
     publish_at = dt(2024, 10, 28, 10, 0, tzinfo=UTC)
     _seed_document(
-        conn, doc_id=1, source="mock-announcements", publish_at=publish_at,
+        conn,
+        doc_id=1,
+        source="mock-announcements",
+        publish_at=publish_at,
         ingested_at=publish_at + timedelta(minutes=5),
     )
 
@@ -172,7 +175,10 @@ def test_latency_passes_within_threshold(conn: psycopg.Connection) -> None:
 def test_latency_fails_when_p95_exceeds_the_sources_threshold(conn: psycopg.Connection) -> None:
     publish_at = dt(2024, 10, 28, 10, 0, tzinfo=UTC)
     _seed_document(
-        conn, doc_id=1, source="mock-announcements", publish_at=publish_at,
+        conn,
+        doc_id=1,
+        source="mock-announcements",
+        publish_at=publish_at,
         ingested_at=publish_at + timedelta(minutes=30),
     )
 
@@ -190,7 +196,10 @@ def test_latency_with_no_threshold_always_passes_but_still_records(
     """EDGAR 这类日频源：记录延迟但不设阻断阈值——一刀切会让它永远红着。"""
     publish_at = dt(2024, 10, 28, 10, 0, tzinfo=UTC)
     _seed_document(
-        conn, doc_id=1, source="edgar", publish_at=publish_at,
+        conn,
+        doc_id=1,
+        source="edgar",
+        publish_at=publish_at,
         ingested_at=publish_at + timedelta(hours=20),
     )
 
