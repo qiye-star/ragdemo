@@ -1,0 +1,16 @@
+seq,trigger_event,trigger_nodes,affected_nodes,curation_note
+1,hyperscaler_capex_guidance_up,公有云,光模块|交换机,
+2,hyperscaler_capex_guidance_up,公有云,云端训练芯片|云端推理芯片|定制ASIC,
+3,advanced_packaging_expansion,先进封装,云端训练芯片|云端推理芯片|定制ASIC,
+4,hbm_price_up,HBM,云端训练芯片|云端推理芯片|定制ASIC,成本端利空
+5,hbm_price_up,HBM,HBM,受益方为存储厂商
+6,export_control_tightening,晶圆制造设备|云端训练芯片,云端训练芯片,受益方为中国 AI 芯片厂商（环节粒度区分不了国别）
+7,export_control_tightening,晶圆制造设备,晶圆制造设备|光刻设备|量测检测设备,受益方为中国设备厂商（环节粒度区分不了国别）
+8,packaging_equipment_export_control,封装设备,HBM|先进封装,受影响方为中国存储与封测厂商
+9,rack_power_density_up,AI服务器,液冷散热|服务器电源,
+10,dc_power_queue_longer,IDC,IDC|算力租赁|公有云,
+11,inference_share_up,通用大模型,云端推理芯片|定制ASIC|云端训练芯片,结构性影响：推理专用芯片受益、训练芯片相对受损，方向记 0
+12,open_model_parity,通用大模型,算力租赁|公有云|AI办公|AI编程|智能客服,
+13,ai_incident_regulation,通用大模型,通用大模型|公有云|AI服务器|云端训练芯片,原文受影响环节为"全链"，取核心环节
+14,inference_cost_down,云端推理芯片|通用大模型,AI办公|AI编程|智能客服,
+15,gov_procurement_mandate,云端训练芯片,云端训练芯片|算力租赁,受益方为国产 AI 芯片与国内算力（环节粒度区分不了国别）

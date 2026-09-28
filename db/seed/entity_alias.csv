@@ -72,3 +72,458 @@ SK海力士,KR.000660,short,manual:seed,high
 海力士,KR.000660,short,manual:seed,medium
 SK hynix,KR.000660,en,manual:seed,high
 hynix,KR.000660,en,manual:seed,medium
+中芯国际集成电路制造有限公司,CN.688981,full,manual:curation,high
+中芯国际,CN.688981,short,manual:curation,high
+SMIC,CN.688981,en,manual:curation,high
+688981.SH,CN.688981,ticker,manual:curation,high
+0981.HK,CN.688981,ticker,docs/csv:01,high
+华虹半导体有限公司,CN.688347,full,manual:curation,high
+华虹半导体,CN.688347,short,manual:curation,high
+Hua Hong Semiconductor,CN.688347,en,manual:curation,high
+688347.SH,CN.688347,ticker,manual:curation,high
+1347.HK,CN.688347,ticker,docs/csv:01,high
+中科寒武纪科技股份有限公司,CN.688256,full,manual:curation,high
+寒武纪科技股份有限公司,CN.688256,full,docs/csv:01,high
+海光信息技术股份有限公司,CN.688041,full,manual:curation,high
+Hygon Information Technology,CN.688041,en,manual:curation,high
+北方华创科技集团股份有限公司,CN.002371,full,manual:curation,high
+北方华创,CN.002371,short,manual:curation,high
+NAURA,CN.002371,en,manual:curation,high
+002371.SZ,CN.002371,ticker,manual:curation,high
+中微半导体设备(上海)股份有限公司,CN.688012,full,manual:curation,high
+中微公司,CN.688012,short,manual:curation,high
+AMEC,CN.688012,en,manual:curation,high
+688012.SH,CN.688012,ticker,manual:curation,high
+拓荆科技股份有限公司,CN.688072,full,manual:curation,high
+拓荆科技,CN.688072,short,manual:curation,high
+Piotech,CN.688072,en,manual:curation,high
+688072.SH,CN.688072,ticker,manual:curation,high
+盛美半导体设备(上海)股份有限公司,CN.688082,full,manual:curation,high
+盛美上海,CN.688082,short,manual:curation,high
+ACM Research (Shanghai),CN.688082,en,manual:curation,high
+688082.SH,CN.688082,ticker,manual:curation,high
+华海清科股份有限公司,CN.688120,full,manual:curation,high
+华海清科,CN.688120,short,manual:curation,high
+Hwatsing,CN.688120,en,manual:curation,high
+688120.SH,CN.688120,ticker,manual:curation,high
+沈阳芯源微电子设备股份有限公司,CN.688037,full,manual:curation,high
+芯源微,CN.688037,short,manual:curation,high
+KINGSEMI,CN.688037,en,manual:curation,high
+688037.SH,CN.688037,ticker,manual:curation,high
+至纯科技股份有限公司,CN.603690,full,manual:curation,high
+至纯科技,CN.603690,short,manual:curation,high
+PNC Process Systems,CN.603690,en,manual:curation,high
+603690.SH,CN.603690,ticker,manual:curation,high
+万业企业股份有限公司,CN.600641,full,manual:curation,high
+万业企业,CN.600641,short,manual:curation,high
+Shanghai Wanye Enterprises,CN.600641,en,manual:curation,high
+600641.SH,CN.600641,ticker,manual:curation,high
+武汉精测电子集团股份有限公司,CN.300567,full,manual:curation,high
+精测电子,CN.300567,short,manual:curation,high
+Wuhan Jingce Electronic,CN.300567,en,manual:curation,high
+300567.SZ,CN.300567,ticker,manual:curation,high
+北京华大九天科技股份有限公司,CN.301269,full,manual:curation,high
+华大九天,CN.301269,short,manual:curation,high
+Empyrean Technology,CN.301269,en,manual:curation,high
+301269.SZ,CN.301269,ticker,manual:curation,high
+概伦电子股份有限公司,CN.688206,full,manual:curation,high
+概伦电子,CN.688206,short,manual:curation,high
+Primarius,CN.688206,en,manual:curation,high
+688206.SH,CN.688206,ticker,manual:curation,high
+广立微电子股份有限公司,CN.301095,full,manual:curation,high
+广立微,CN.301095,short,manual:curation,high
+Semitronix,CN.301095,en,manual:curation,high
+301095.SZ,CN.301095,ticker,manual:curation,high
+上海硅产业集团股份有限公司,CN.688126,full,manual:curation,high
+沪硅产业,CN.688126,short,manual:curation,high
+NSIG,CN.688126,en,manual:curation,high
+688126.SH,CN.688126,ticker,manual:curation,high
+杭州立昂微电子股份有限公司,CN.605358,full,manual:curation,high
+立昂微,CN.605358,short,manual:curation,high
+Hangzhou Lion Microelectronics,CN.605358,en,manual:curation,high
+605358.SH,CN.605358,ticker,manual:curation,high
+湖北鼎龙控股股份有限公司,CN.300054,full,manual:curation,high
+鼎龙股份,CN.300054,short,manual:curation,high
+Hubei Dinglong,CN.300054,en,manual:curation,high
+300054.SZ,CN.300054,ticker,manual:curation,high
+安集微电子科技(上海)股份有限公司,CN.688019,full,manual:curation,high
+安集科技,CN.688019,short,manual:curation,high
+Anji Microelectronics,CN.688019,en,manual:curation,high
+688019.SH,CN.688019,ticker,manual:curation,high
+江苏雅克科技股份有限公司,CN.002409,full,manual:curation,high
+雅克科技,CN.002409,short,manual:curation,high
+Jiangsu Yoke Technology,CN.002409,en,manual:curation,high
+002409.SZ,CN.002409,ticker,manual:curation,high
+江苏南大光电材料股份有限公司,CN.300346,full,manual:curation,high
+南大光电,CN.300346,short,manual:curation,high
+Jiangsu Nata Opto-electronic,CN.300346,en,manual:curation,high
+300346.SZ,CN.300346,ticker,manual:curation,high
+宁波江丰电子材料股份有限公司,CN.300666,full,manual:curation,high
+江丰电子,CN.300666,short,manual:curation,high
+Konfoong Materials,CN.300666,en,manual:curation,high
+300666.SZ,CN.300666,ticker,manual:curation,high
+沈阳富创精密设备股份有限公司,CN.688409,full,manual:curation,high
+富创精密,CN.688409,short,manual:curation,high
+Fortune Precision,CN.688409,en,manual:curation,high
+688409.SH,CN.688409,ticker,manual:curation,high
+江苏长电科技股份有限公司,CN.600584,full,manual:curation,high
+通富微电子股份有限公司,CN.002156,full,manual:curation,high
+天水华天科技股份有限公司,CN.002185,full,manual:curation,high
+华天科技,CN.002185,short,manual:curation,high
+Tianshui Huatian,CN.002185,en,manual:curation,high
+002185.SZ,CN.002185,ticker,manual:curation,high
+甬矽电子(宁波)股份有限公司,CN.688362,full,manual:curation,high
+甬矽电子,CN.688362,short,manual:curation,high
+Forehope Electronic,CN.688362,en,manual:curation,high
+688362.SH,CN.688362,ticker,manual:curation,high
+浪潮电子信息产业股份有限公司,CN.000977,full,manual:curation,high
+Inspur Electronic Information,CN.000977,en,manual:curation,high
+曙光信息产业股份有限公司,CN.603019,full,manual:curation,high
+中科曙光信息产业股份有限公司,CN.603019,full,docs/csv:01,high
+紫光股份有限公司,CN.000938,full,manual:curation,high
+Unisplendour,CN.000938,en,manual:curation,high
+富士康工业互联网股份有限公司,CN.601138,full,manual:curation,high
+工业富联,CN.601138,short,manual:curation,high
+Foxconn Industrial Internet,CN.601138,en,manual:curation,high
+601138.SH,CN.601138,ticker,manual:curation,high
+中际旭创股份有限公司,CN.300308,full,manual:curation,high
+成都新易盛通信技术股份有限公司,CN.300502,full,manual:curation,high
+新易盛,CN.300502,short,manual:curation,high
+Eoptolink,CN.300502,en,manual:curation,high
+300502.SZ,CN.300502,ticker,manual:curation,high
+苏州天孚通信技术股份有限公司,CN.300394,full,manual:curation,high
+天孚通信,CN.300394,short,manual:curation,high
+TFC Communication,CN.300394,en,manual:curation,high
+300394.SZ,CN.300394,ticker,manual:curation,high
+武汉光迅科技股份有限公司,CN.002281,full,manual:curation,high
+光迅科技,CN.002281,short,manual:curation,high
+Accelink,CN.002281,en,manual:curation,high
+002281.SZ,CN.002281,ticker,manual:curation,high
+陕西源杰半导体科技股份有限公司,CN.688498,full,manual:curation,high
+源杰科技,CN.688498,short,manual:curation,high
+Yuanjie Semiconductor,CN.688498,en,manual:curation,high
+688498.SH,CN.688498,ticker,manual:curation,high
+深圳市英维克科技股份有限公司,CN.002837,full,manual:curation,high
+广东申菱环境系统股份有限公司,CN.301018,full,manual:curation,high
+申菱环境,CN.301018,short,manual:curation,high
+Guangdong Shenling Environmental,CN.301018,en,manual:curation,high
+301018.SZ,CN.301018,ticker,manual:curation,high
+广州高澜节能技术股份有限公司,CN.300499,full,manual:curation,high
+高澜股份,CN.300499,short,manual:curation,high
+Guangzhou Goaland,CN.300499,en,manual:curation,high
+300499.SZ,CN.300499,ticker,manual:curation,high
+深圳麦格米特电气股份有限公司,CN.002851,full,manual:curation,high
+麦格米特,CN.002851,short,manual:curation,high
+Megmeet,CN.002851,en,manual:curation,high
+002851.SZ,CN.002851,ticker,manual:curation,high
+厦门科华数据股份有限公司,CN.002335,full,manual:curation,high
+科华数据,CN.002335,short,manual:curation,high
+Kehua Data,CN.002335,en,manual:curation,high
+002335.SZ,CN.002335,ticker,manual:curation,high
+深圳欧陆通电子股份有限公司,CN.300870,full,manual:curation,high
+欧陆通,CN.300870,short,manual:curation,high
+Shenzhen Honor Electronic,CN.300870,en,manual:curation,high
+300870.SZ,CN.300870,ticker,manual:curation,high
+优刻得科技股份有限公司,CN.688158,full,manual:curation,high
+优刻得,CN.688158,short,manual:curation,high
+UCloud,CN.688158,en,manual:curation,high
+688158.SH,CN.688158,ticker,manual:curation,high
+北京首都在线科技股份有限公司,CN.300846,full,manual:curation,high
+首都在线,CN.300846,short,manual:curation,high
+Capitalonline,CN.300846,en,manual:curation,high
+300846.SZ,CN.300846,ticker,manual:curation,high
+润泽智算科技集团股份有限公司,CN.300442,full,manual:curation,high
+润泽科技,CN.300442,short,manual:curation,high
+Range Intelligent Computing,CN.300442,en,manual:curation,high
+300442.SZ,CN.300442,ticker,manual:curation,high
+科大讯飞股份有限公司,CN.002230,full,manual:curation,high
+科大讯飞,CN.002230,short,manual:curation,high
+iFlytek,CN.002230,en,manual:curation,high
+002230.SZ,CN.002230,ticker,manual:curation,high
+杭州海康威视数字技术股份有限公司,CN.002415,full,manual:curation,high
+海康威视,CN.002415,short,manual:curation,high
+Hikvision,CN.002415,en,manual:curation,high
+002415.SZ,CN.002415,ticker,manual:curation,high
+恒生电子股份有限公司,CN.600570,full,manual:curation,high
+恒生电子,CN.600570,short,manual:curation,high
+Hundsun,CN.600570,en,manual:curation,high
+600570.SH,CN.600570,ticker,manual:curation,high
+商汤集团股份有限公司,HK.0020,full,manual:curation,high
+商汤科技,HK.0020,short,manual:curation,high
+SenseTime,HK.0020,en,manual:curation,high
+0020.HK,HK.0020,ticker,manual:curation,high
+地平线机器人技术控股有限公司,HK.9660,full,manual:curation,high
+地平线,HK.9660,short,manual:curation,high
+Horizon Robotics,HK.9660,en,manual:curation,high
+9660.HK,HK.9660,ticker,manual:curation,high
+黑芝麻智能国际控股有限公司,HK.2533,full,manual:curation,high
+黑芝麻智能,HK.2533,short,manual:curation,high
+Black Sesame Technologies,HK.2533,en,manual:curation,high
+2533.HK,HK.2533,ticker,manual:curation,high
+联想集团有限公司,HK.0992,full,manual:curation,high
+联想集团,HK.0992,short,manual:curation,high
+Lenovo Group,HK.0992,en,manual:curation,high
+0992.HK,HK.0992,ticker,manual:curation,high
+阿里巴巴集团控股有限公司,HK.9988,full,manual:curation,high
+阿里巴巴,HK.9988,short,manual:curation,high
+Alibaba Group,HK.9988,en,manual:curation,high
+9988.HK,HK.9988,ticker,manual:curation,high
+BABA,HK.9988,ticker,docs/csv:01,high
+腾讯控股有限公司,HK.0700,full,manual:curation,high
+腾讯,HK.0700,short,manual:curation,high
+Tencent,HK.0700,en,manual:curation,high
+0700.HK,HK.0700,ticker,manual:curation,high
+百度集团股份有限公司,HK.9888,full,manual:curation,high
+百度,HK.9888,short,manual:curation,high
+Baidu,HK.9888,en,manual:curation,high
+9888.HK,HK.9888,ticker,manual:curation,high
+BIDU,HK.9888,ticker,docs/csv:01,high
+优必选科技股份有限公司,HK.9880,full,manual:curation,high
+优必选,HK.9880,short,manual:curation,high
+UBTech Robotics,HK.9880,en,manual:curation,high
+9880.HK,HK.9880,ticker,manual:curation,high
+金山云控股有限公司,HK.3896,full,manual:curation,high
+金山云,HK.3896,short,manual:curation,high
+Kingsoft Cloud,HK.3896,en,manual:curation,high
+3896.HK,HK.3896,ticker,manual:curation,high
+KC,HK.3896,ticker,docs/csv:01,high
+北京海天瑞声科技股份有限公司,CN.688787,full,manual:curation,high
+海天瑞声,CN.688787,short,manual:curation,high
+SpeechOcean,CN.688787,en,manual:curation,high
+688787.SH,CN.688787,ticker,manual:curation,high
+NVIDIA Corporation,US.NVDA,full,manual:curation,high
+NVDA.O,US.NVDA,ticker,manual:curation,high
+Advanced Micro Devices Inc.,US.AMD,full,manual:curation,high
+AMD.O,US.AMD,ticker,manual:curation,high
+Intel Corporation,US.INTC,full,manual:curation,high
+INTC.O,US.INTC,ticker,manual:curation,high
+Broadcom Inc.,US.AVGO,full,manual:curation,high
+博通,US.AVGO,short,manual:curation,high
+Broadcom,US.AVGO,en,manual:curation,high
+AVGO.O,US.AVGO,ticker,manual:curation,high
+AVGO,US.AVGO,ticker,docs/csv:01,high
+Marvell Technology Inc.,US.MRVL,full,manual:curation,high
+迈威尔科技,US.MRVL,short,manual:curation,high
+Marvell Technology,US.MRVL,en,manual:curation,high
+MRVL.O,US.MRVL,ticker,manual:curation,high
+MRVL,US.MRVL,ticker,docs/csv:01,high
+Micron Technology Inc.,US.MU,full,manual:curation,high
+美光科技,US.MU,short,manual:curation,high
+Micron Technology,US.MU,en,manual:curation,high
+MU.O,US.MU,ticker,manual:curation,high
+MU,US.MU,ticker,docs/csv:01,high
+Applied Materials Inc.,US.AMAT,full,manual:curation,high
+应用材料,US.AMAT,short,manual:curation,high
+Applied Materials,US.AMAT,en,manual:curation,high
+AMAT.O,US.AMAT,ticker,manual:curation,high
+AMAT,US.AMAT,ticker,docs/csv:01,high
+Lam Research Corporation,US.LRCX,full,manual:curation,high
+泛林集团,US.LRCX,short,manual:curation,high
+Lam Research,US.LRCX,en,manual:curation,high
+LRCX.O,US.LRCX,ticker,manual:curation,high
+LRCX,US.LRCX,ticker,docs/csv:01,high
+KLA Corporation,US.KLAC,full,manual:curation,high
+科磊,US.KLAC,short,manual:curation,high
+KLA,US.KLAC,en,manual:curation,high
+KLAC.O,US.KLAC,ticker,manual:curation,high
+KLAC,US.KLAC,ticker,docs/csv:01,high
+Synopsys Inc.,US.SNPS,full,manual:curation,high
+新思科技,US.SNPS,short,manual:curation,high
+Synopsys,US.SNPS,en,manual:curation,high
+SNPS.O,US.SNPS,ticker,manual:curation,high
+SNPS,US.SNPS,ticker,docs/csv:01,high
+Cadence Design Systems Inc.,US.CDNS,full,manual:curation,high
+铿腾电子,US.CDNS,short,manual:curation,high
+Cadence Design Systems,US.CDNS,en,manual:curation,high
+CDNS.O,US.CDNS,ticker,manual:curation,high
+CDNS,US.CDNS,ticker,docs/csv:01,high
+Microsoft Corporation,US.MSFT,full,manual:curation,high
+微软,US.MSFT,short,manual:curation,high
+Microsoft,US.MSFT,en,manual:curation,high
+MSFT.O,US.MSFT,ticker,manual:curation,high
+MSFT,US.MSFT,ticker,docs/csv:01,high
+Alphabet Inc.,US.GOOGL,full,manual:curation,high
+谷歌,US.GOOGL,short,manual:curation,high
+Alphabet,US.GOOGL,en,manual:curation,high
+GOOGL.O,US.GOOGL,ticker,manual:curation,high
+GOOGL,US.GOOGL,ticker,docs/csv:01,high
+Amazon.com Inc.,US.AMZN,full,manual:curation,high
+亚马逊,US.AMZN,short,manual:curation,high
+Amazon,US.AMZN,en,manual:curation,high
+AMZN.O,US.AMZN,ticker,manual:curation,high
+AMZN,US.AMZN,ticker,docs/csv:01,high
+Meta Platforms Inc.,US.META,full,manual:curation,high
+Meta,US.META,short,manual:curation,high
+Meta Platforms,US.META,en,manual:curation,high
+META.O,US.META,ticker,manual:curation,high
+META,US.META,ticker,docs/csv:01,high
+Oracle Corporation,US.ORCL,full,manual:curation,high
+甲骨文,US.ORCL,short,manual:curation,high
+Oracle,US.ORCL,en,manual:curation,high
+ORCL.N,US.ORCL,ticker,manual:curation,high
+ORCL,US.ORCL,ticker,docs/csv:01,high
+CoreWeave Inc.,US.CRWV,full,manual:curation,high
+CoreWeave,US.CRWV,short,manual:curation,high
+CRWV.O,US.CRWV,ticker,manual:curation,high
+CRWV,US.CRWV,ticker,docs/csv:01,high
+Arista Networks Inc.,US.ANET,full,manual:curation,high
+阿里斯塔,US.ANET,short,manual:curation,high
+Arista Networks,US.ANET,en,manual:curation,high
+ANET.N,US.ANET,ticker,manual:curation,high
+ANET,US.ANET,ticker,docs/csv:01,high
+Astera Labs Inc.,US.ALAB,full,manual:curation,high
+Astera Labs,US.ALAB,short,manual:curation,high
+ALAB.O,US.ALAB,ticker,manual:curation,high
+ALAB,US.ALAB,ticker,docs/csv:01,high
+Vertiv Holdings Co,US.VRT,full,manual:curation,high
+维谛技术,US.VRT,short,manual:curation,high
+Vertiv,US.VRT,en,manual:curation,high
+VRT.N,US.VRT,ticker,manual:curation,high
+VRT,US.VRT,ticker,docs/csv:01,high
+ASML Holding N.V.,NL.ASML,full,manual:curation,high
+阿斯麦,NL.ASML,short,manual:curation,high
+ASML,NL.ASML,en,manual:curation,high
+ASML.O,NL.ASML,ticker,manual:curation,high
+台湾积体电路制造股份有限公司,TW.2330,full,manual:curation,high
+TSM,TW.2330,ticker,docs/csv:01,high
+日月光投资控股股份有限公司,TW.3711,full,manual:curation,high
+日月光投控,TW.3711,short,manual:curation,high
+ASE Technology,TW.3711,en,manual:curation,high
+3711.TW,TW.3711,ticker,manual:curation,high
+ASX,TW.3711,ticker,docs/csv:01,high
+联发科技股份有限公司,TW.2454,full,manual:curation,high
+联发科,TW.2454,short,manual:curation,high
+MediaTek,TW.2454,en,manual:curation,high
+2454.TW,TW.2454,ticker,manual:curation,high
+鸿海精密工业股份有限公司,TW.2317,full,manual:curation,high
+鸿海(富士康),TW.2317,short,manual:curation,high
+Hon Hai Precision,TW.2317,en,manual:curation,high
+2317.TW,TW.2317,ticker,manual:curation,high
+广达电脑股份有限公司,TW.2382,full,manual:curation,high
+广达,TW.2382,short,manual:curation,high
+Quanta Computer,TW.2382,en,manual:curation,high
+2382.TW,TW.2382,ticker,manual:curation,high
+纬创资通股份有限公司,TW.3231,full,manual:curation,high
+纬创,TW.3231,short,manual:curation,high
+Wistron,TW.3231,en,manual:curation,high
+3231.TW,TW.3231,ticker,manual:curation,high
+台达电子工业股份有限公司,TW.2308,full,manual:curation,high
+台达电,TW.2308,short,manual:curation,high
+Delta Electronics,TW.2308,en,manual:curation,high
+2308.TW,TW.2308,ticker,manual:curation,high
+世芯电子股份有限公司,TW.3661,full,manual:curation,high
+世芯-KY,TW.3661,short,manual:curation,high
+Alchip Technologies,TW.3661,en,manual:curation,high
+3661.TW,TW.3661,ticker,manual:curation,high
+Samsung Electronics Co. Ltd.,KR.005930,full,manual:curation,high
+三星电子,KR.005930,short,manual:curation,high
+Samsung Electronics,KR.005930,en,manual:curation,high
+005930.KS,KR.005930,ticker,manual:curation,high
+SK hynix Inc.,KR.000660,full,manual:curation,high
+000660.KS,KR.000660,ticker,manual:curation,high
+Hanmi Semiconductor Co. Ltd.,KR.042700,full,manual:curation,high
+韩美半导体,KR.042700,short,manual:curation,high
+Hanmi Semiconductor,KR.042700,en,manual:curation,high
+042700.KS,KR.042700,ticker,manual:curation,high
+Tokyo Electron Limited,JP.8035,full,manual:curation,high
+东京电子,JP.8035,short,manual:curation,high
+Tokyo Electron,JP.8035,en,manual:curation,high
+8035.T,JP.8035,ticker,manual:curation,high
+Advantest Corporation,JP.6857,full,manual:curation,high
+爱德万测试,JP.6857,short,manual:curation,high
+Advantest,JP.6857,en,manual:curation,high
+6857.T,JP.6857,ticker,manual:curation,high
+Shin-Etsu Chemical Co. Ltd.,JP.4063,full,manual:curation,high
+信越化学,JP.4063,short,manual:curation,high
+Shin-Etsu Chemical,JP.4063,en,manual:curation,high
+4063.T,JP.4063,ticker,manual:curation,high
+上海微电子装备(集团)股份有限公司,CN.SMEE,full,manual:curation,high
+上海微电子(SMEE),CN.SMEE,short,manual:curation,high
+SMEE,CN.SMEE,en,manual:curation,high
+长鑫科技集团股份有限公司,CN.688825,full,manual:curation,high
+长鑫存储(CXMT),CN.688825,short,manual:curation,high
+CXMT,CN.688825,en,manual:curation,high
+688825.SH,CN.688825,ticker,manual:curation,high
+长鑫存储技术有限公司,CN.688825,full,docs/csv:01,high
+杭州深度求索人工智能基础技术研究有限公司,CN.DEEPSEEK,full,manual:curation,high
+深度求索(DeepSeek),CN.DEEPSEEK,short,manual:curation,high
+DeepSeek,CN.DEEPSEEK,en,manual:curation,high
+OpenAI OpCo LLC,US.OPENAI,full,manual:curation,high
+OpenAI,US.OPENAI,short,manual:curation,high
+Anthropic PBC,US.ANTHROPIC,full,manual:curation,high
+Anthropic,US.ANTHROPIC,short,manual:curation,high
+第四范式智能技术股份有限公司,HK.6682,full,manual:curation,high
+第四范式,HK.6682,short,manual:curation,high
+4Paradigm,HK.6682,en,manual:curation,high
+6682.HK,HK.6682,ticker,manual:curation,high
+华为技术有限公司,CN.HUAWEI,full,manual:curation,high
+华为,CN.HUAWEI,short,manual:curation,high
+Huawei,CN.HUAWEI,en,manual:curation,high
+长江存储科技有限责任公司,CN.YMTC,full,manual:curation,high
+长江存储,CN.YMTC,short,manual:curation,high
+YMTC,CN.YMTC,en,manual:curation,high
+Apple Inc.,US.AAPL,full,manual:curation,high
+苹果,US.AAPL,short,manual:curation,high
+Apple,US.AAPL,en,manual:curation,high
+AAPL.O,US.AAPL,ticker,manual:curation,high
+"Tesla, Inc.",US.TSLA,full,manual:curation,high
+特斯拉,US.TSLA,short,manual:curation,high
+Tesla,US.TSLA,en,manual:curation,high
+TSLA.O,US.TSLA,ticker,manual:curation,high
+字节跳动有限公司,CN.BYTEDANCE,full,manual:curation,high
+字节跳动,CN.BYTEDANCE,short,manual:curation,high
+ByteDance,CN.BYTEDANCE,en,manual:curation,high
+北京月之暗面科技有限公司,CN.MOONSHOT,full,manual:curation,high
+月之暗面,CN.MOONSHOT,short,manual:curation,high
+Moonshot AI,CN.MOONSHOT,en,manual:curation,high
+MiniMax,HK.0100,full,manual:curation,high
+0100.HK,HK.0100,ticker,manual:curation,high
+北京智谱华章科技股份有限公司,HK.2513,full,manual:curation,high
+智谱AI,HK.2513,short,manual:curation,high
+Zhipu AI,HK.2513,en,manual:curation,high
+2513.HK,HK.2513,ticker,manual:curation,high
+杭州士兰微电子股份有限公司,CN.600460,full,manual:curation,high
+士兰微,CN.600460,short,manual:curation,high
+Silan Microelectronics,CN.600460,en,manual:curation,high
+600460.SH,CN.600460,ticker,manual:curation,high
+昆山新莱洁净应用材料股份有限公司,CN.300260,full,manual:curation,high
+新莱应材,CN.300260,short,manual:curation,high
+Kunshan Kinglai Hygienic Materials,CN.300260,en,manual:curation,high
+300260.SZ,CN.300260,ticker,manual:curation,high
+华工科技产业股份有限公司,CN.000988,full,manual:curation,high
+华工科技,CN.000988,short,manual:curation,high
+HGTECH,CN.000988,en,manual:curation,high
+000988.SZ,CN.000988,ticker,manual:curation,high
+深圳太辰光通信股份有限公司,CN.300570,full,manual:curation,high
+太辰光,CN.300570,short,manual:curation,high
+T&S Communications,CN.300570,en,manual:curation,high
+300570.SZ,CN.300570,ticker,manual:curation,high
+創意電子股份有限公司,TW.3443,full,manual:curation,high
+创意电子,TW.3443,short,manual:curation,high
+Global Unichip,TW.3443,en,manual:curation,high
+3443.TW,TW.3443,ticker,manual:curation,high
+Coherent Corp.,US.COHR,full,manual:curation,high
+Coherent,US.COHR,short,manual:curation,high
+COHR.N,US.COHR,ticker,manual:curation,high
+龙芯中科技术股份有限公司,CN.688047,full,manual:curation,high
+杭州长川科技股份有限公司,CN.300604,full,manual:curation,high
+Hangzhou Changchuan Technology,CN.300604,en,manual:curation,high
+澜起科技股份有限公司,CN.688008,full,manual:curation,high
+Montage Technology,CN.688008,en,manual:curation,high
+沪士电子股份有限公司,CN.002463,full,manual:curation,high
+WUS Printed Circuit,CN.002463,en,manual:curation,high
+Marvell,US.MRVL,nickname,docs/csv:02,high
+世芯,TW.3661,nickname,docs/csv:02,high
+Arista,US.ANET,nickname,docs/csv:02,high
+深度求索,CN.DEEPSEEK,nickname,docs/csv:02,high
+长鑫存储,CN.688825,nickname,docs/csv:02,high
+上海微电子,CN.SMEE,nickname,docs/csv:02,high
+阿里云,HK.9988,nickname,docs/csv:02,high
+平头哥,HK.9988,nickname,docs/csv:02,high
+腾讯云,HK.0700,nickname,docs/csv:02,high
+百度智能云,HK.9888,nickname,docs/csv:02,high
+昆仑芯,HK.9888,nickname,docs/csv:02,high
+三星代工,KR.005930,nickname,docs/csv:02,high
+英特尔代工,US.INTC,nickname,docs/csv:02,high
+华为海思,CN.HUAWEI,nickname,docs/csv:02,high
+华为云,CN.HUAWEI,nickname,docs/csv:02,high

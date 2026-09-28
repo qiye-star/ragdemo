@@ -179,7 +179,9 @@ def test_seeded_metrics_get_a_baseline_version_visible_at_any_as_of(
 
     count = load_metrics(db, Path("db/seed/node_metric.csv"))
     rows = db.execute("SELECT metric_id FROM core.node_metric").fetchall()
-    assert len(rows) == count == 30
+    with Path("db/seed/node_metric.csv").open(encoding="utf-8") as fh:
+        expected = sum(1 for _ in fh) - 1  # 减表头
+    assert len(rows) == count == expected
     for (metric_id,) in rows:
         found = metric_as_of(db, str(metric_id), as_of=datetime(2015, 6, 1, tzinfo=UTC))
         assert found is not None, metric_id

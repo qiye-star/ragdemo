@@ -182,6 +182,7 @@ def test_rows_removed_from_the_sheet_are_left_alone(
     """表里删掉一行不等于删除口径：导入只追加/修改表里出现的行。"""
     path = tmp_path / "口径.xlsx"
     export_template(conn, path)
+    before = conn.execute("SELECT count(*) FROM core.node_metric").fetchone()
     wb = openpyxl.load_workbook(path)
     wb[METRIC_SHEET].delete_rows(2)
     wb.save(path)
@@ -190,7 +191,7 @@ def test_rows_removed_from_the_sheet_are_left_alone(
         conn, plan, author="founder", change_note=None, known_at=datetime.now().astimezone()
     )
     row = conn.execute("SELECT count(*) FROM core.node_metric").fetchone()
-    assert row is not None and row[0] == 30
+    assert row is not None and before is not None and row[0] == before[0]
 
 
 @pytest.mark.db

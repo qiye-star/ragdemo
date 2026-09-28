@@ -1,4 +1,183 @@
 from_entity,to_entity,relation_type,strength,share_estimate,direction_note,evidence_type,valid_from,confidence
+NL.ASML,TW.2330,supplies_to,,,EUV与DUV光刻机唯一/主要供应商（docs/csv#1；L1设备→L2制造；核实：ASML与台积电年报;设备采购披露）,expert,2026-09-28,medium
+NL.ASML,KR.005930,supplies_to,,,EUV光刻机供应（docs/csv#2；L1设备→L2制造；核实：双方年报）,expert,2026-09-28,medium
+NL.ASML,US.INTC,supplies_to,,,EUV光刻机供应（docs/csv#3；L1设备→L2制造；核实：双方年报）,expert,2026-09-28,medium
+NL.ASML,CN.688981,supplies_to,,,DUV浸没式设备供应(EUV受出口管制限制)（docs/csv#4；L1设备→L2制造；核实：中芯国际年报设备采购;出口管制公告）,news,2026-09-28,low
+NL.ASML,KR.000660,supplies_to,,,DRAM先进制程光刻设备（docs/csv#5；L1设备→L2存储；核实：双方年报）,expert,2026-09-28,medium
+US.AMAT,TW.2330,supplies_to,,,薄膜沉积与离子注入设备（docs/csv#6；L1设备→L2制造；核实：AMAT 10-K客户集中度）,expert,2026-09-28,medium
+US.AMAT,KR.005930,supplies_to,,,前道设备供应（docs/csv#7；L1设备→L2制造；核实：AMAT 10-K）,expert,2026-09-28,medium
+US.LRCX,TW.2330,supplies_to,,,刻蚀设备供应（docs/csv#8；L1设备→L2制造；核实：LRCX 10-K）,expert,2026-09-28,medium
+US.LRCX,KR.000660,supplies_to,,,存储刻蚀设备（docs/csv#9；L1设备→L2存储；核实：LRCX 10-K）,expert,2026-09-28,medium
+US.KLAC,TW.2330,supplies_to,,,量测与缺陷检测设备（docs/csv#10；L1设备→L2制造；核实：KLAC 10-K）,expert,2026-09-28,medium
+JP.8035,TW.2330,supplies_to,,,涂胶显影与刻蚀设备（docs/csv#11；L1设备→L2制造；核实：TEL年报）,expert,2026-09-28,medium
+JP.8035,KR.005930,supplies_to,,,前道设备供应（docs/csv#12；L1设备→L2制造；核实：TEL年报）,expert,2026-09-28,medium
+JP.8035,KR.000660,supplies_to,,,存储前道设备（docs/csv#13；L1设备→L2存储；核实：TEL年报）,expert,2026-09-28,medium
+JP.6857,TW.2330,supplies_to,,,SoC测试机（docs/csv#14；L1设备→L2制造；核实：Advantest年报）,expert,2026-09-28,medium
+JP.6857,US.NVDA,supplies_to,,,AI芯片测试环节设备(经代工/封测厂)（docs/csv#15；L1设备→L2设计；核实：行业分析报告）,news,2026-09-28,low
+KR.042700,KR.000660,supplies_to,,,HBM TC键合设备主要供应商（docs/csv#16；L1设备→L2存储；核实：韩美半导体年报与公告）,filing,2026-09-28,high
+JP.4063,TW.2330,supplies_to,,,大硅片与光刻胶（docs/csv#17；L0材料→L2制造；核实：信越年报）,expert,2026-09-28,medium
+JP.4063,KR.005930,supplies_to,,,硅片供应（docs/csv#18；L0材料→L2制造；核实：信越年报）,expert,2026-09-28,medium
+CN.002371,CN.688981,supplies_to,,,刻蚀/薄膜/清洗设备（docs/csv#19；L1设备→L2制造；核实：北方华创年报客户结构）,expert,2026-09-28,medium
+CN.002371,CN.688825,supplies_to,,,存储产线设备（docs/csv#20；L1设备→L2存储；核实：行业media;需访谈验证）,news,2026-09-28,low
+CN.002371,CN.688347,supplies_to,,,特色工艺产线设备（docs/csv#21；L1设备→L2制造；核实：双方年报）,expert,2026-09-28,medium
+CN.688012,CN.688981,supplies_to,,,CCP/ICP刻蚀设备（docs/csv#22；L1设备→L2制造；核实：中微公司年报）,expert,2026-09-28,medium
+CN.688012,CN.YMTC,supplies_to,,,3D NAND刻蚀设备（docs/csv#23；L1设备→L2存储；核实：行业报道;需访谈验证）,news,2026-09-28,low
+CN.688012,TW.2330,supplies_to,,,刻蚀设备(部分制程)（docs/csv#24；L1设备→L2制造；核实：中微年报海外收入）,news,2026-09-28,low
+CN.688072,CN.688981,supplies_to,,,PECVD/ALD薄膜设备（docs/csv#25；L1设备→L2制造；核实：拓荆年报）,expert,2026-09-28,medium
+CN.688072,CN.688825,supplies_to,,,薄膜沉积设备（docs/csv#26；L1设备→L2存储；核实：需访谈验证）,news,2026-09-28,low
+CN.688082,CN.688981,supplies_to,,,清洗与电镀设备（docs/csv#27；L1设备→L2制造；核实：盛美年报）,expert,2026-09-28,medium
+CN.688082,CN.YMTC,supplies_to,,,清洗设备（docs/csv#28；L1设备→L2存储；核实：需访谈验证）,news,2026-09-28,low
+CN.688120,CN.688981,supplies_to,,,CMP设备（docs/csv#29；L1设备→L2制造；核实：华海清科年报）,expert,2026-09-28,medium
+CN.688037,CN.688981,supplies_to,,,涂胶显影设备（docs/csv#30；L1设备→L2制造；核实：芯源微年报）,expert,2026-09-28,medium
+CN.603690,CN.688981,supplies_to,,,清洗设备与高纯工艺系统（docs/csv#31；L1设备→L2制造；核实：至纯年报）,expert,2026-09-28,medium
+CN.600641,CN.688981,supplies_to,,,离子注入设备(凯世通)（docs/csv#32；L1设备→L2制造；核实：万业年报）,news,2026-09-28,low
+CN.300567,CN.688981,supplies_to,,,量测检测设备（docs/csv#33；L1设备→L2制造；核实：精测年报半导体板块）,expert,2026-09-28,medium
+CN.SMEE,CN.688981,supplies_to,,,DUV光刻机(国产替代路径)（docs/csv#34；L1设备→L2制造；核实：行业报道;非上市无财报）,news,2026-09-28,low
+CN.688409,CN.002371,supplies_to,,,设备精密零部件（docs/csv#35；L1零部件→L1设备；核实：富创年报客户集中度）,filing,2026-09-28,high
+CN.688409,CN.688012,supplies_to,,,设备精密零部件（docs/csv#36；L1零部件→L1设备；核实：富创年报）,filing,2026-09-28,high
+CN.688409,US.AMAT,supplies_to,,,设备零部件出口（docs/csv#37；L1零部件→L1设备；核实：富创年报海外收入）,filing,2026-09-28,high
+CN.300260,CN.002371,supplies_to,,,超高洁净流体部件（docs/csv#38；L1零部件→L1设备；核实：新莱年报）,expert,2026-09-28,medium
+CN.688126,CN.688981,supplies_to,,,300mm大硅片（docs/csv#39；L0材料→L2制造；核实：沪硅年报）,expert,2026-09-28,medium
+CN.605358,CN.688981,supplies_to,,,硅片供应（docs/csv#40；L0材料→L2制造；核实：立昂微年报）,expert,2026-09-28,medium
+CN.300054,CN.688981,supplies_to,,,CMP抛光垫（docs/csv#41；L0材料→L2制造；核实：鼎龙年报）,expert,2026-09-28,medium
+CN.688019,CN.688981,supplies_to,,,CMP抛光液（docs/csv#42；L0材料→L2制造；核实：安集年报客户结构）,expert,2026-09-28,medium
+CN.688019,CN.YMTC,supplies_to,,,抛光液供应（docs/csv#43；L0材料→L2存储；核实：需访谈验证）,news,2026-09-28,low
+CN.002409,CN.YMTC,supplies_to,,,电子特气与前驱体（docs/csv#44；L0材料→L2存储；核实：雅克年报）,expert,2026-09-28,medium
+CN.002409,CN.688825,supplies_to,,,前驱体材料（docs/csv#45；L0材料→L2存储；核实：需访谈验证）,news,2026-09-28,low
+CN.300346,CN.688981,supplies_to,,,光刻胶与特种气体（docs/csv#46；L0材料→L2制造；核实：南大光电年报）,expert,2026-09-28,medium
+CN.300666,TW.2330,supplies_to,,,溅射靶材（docs/csv#47；L0材料→L2制造；核实：江丰年报客户披露）,filing,2026-09-28,high
+CN.300666,CN.688981,supplies_to,,,溅射靶材（docs/csv#48；L0材料→L2制造；核实：江丰年报）,expert,2026-09-28,medium
+US.SNPS,US.NVDA,supplies_to,,,EDA工具与IP授权（docs/csv#49；L1工具→L2设计；核实：SNPS 10-K）,expert,2026-09-28,medium
+US.SNPS,US.AMD,supplies_to,,,EDA工具与IP（docs/csv#50；L1工具→L2设计；核实：SNPS 10-K）,expert,2026-09-28,medium
+US.SNPS,TW.2454,supplies_to,,,EDA工具与IP（docs/csv#51；L1工具→L2设计；核实：双方披露）,expert,2026-09-28,medium
+US.CDNS,US.NVDA,supplies_to,,,EDA工具与IP（docs/csv#52；L1工具→L2设计；核实：CDNS 10-K）,expert,2026-09-28,medium
+US.CDNS,US.AVGO,supplies_to,,,EDA工具（docs/csv#53；L1工具→L2设计；核实：CDNS 10-K）,expert,2026-09-28,medium
+CN.301269,CN.688256,supplies_to,,,国产EDA工具（docs/csv#54；L1工具→L2设计；核实：华大九天年报客户结构）,news,2026-09-28,low
+CN.301269,CN.688041,supplies_to,,,国产EDA工具（docs/csv#55；L1工具→L2设计；核实：需核实）,news,2026-09-28,low
+CN.688206,CN.688981,supplies_to,,,器件建模与仿真工具（docs/csv#56；L1工具→L2制造；核实：概伦年报）,expert,2026-09-28,medium
+CN.301095,CN.688981,supplies_to,,,良率分析与测试EDA（docs/csv#57；L1工具→L2制造；核实：广立微年报）,expert,2026-09-28,medium
+TW.2330,US.NVDA,supplies_to,,,AI GPU先进制程代工（docs/csv#58；L2制造→L2设计；核实：双方法说会与年报）,expert,2026-09-28,medium
+TW.2330,US.AMD,supplies_to,,,GPU与CPU代工（docs/csv#59；L2制造→L2设计；核实：双方披露）,expert,2026-09-28,medium
+TW.2330,US.AVGO,supplies_to,,,定制ASIC代工（docs/csv#60；L2制造→L2设计；核实：双方法说会）,expert,2026-09-28,medium
+TW.2330,US.AAPL,supplies_to,,,先进制程SoC代工（docs/csv#61；L2制造→L2设计；核实：行业分析报告）,expert,2026-09-28,medium
+TW.2330,TW.2454,supplies_to,,,SoC代工（docs/csv#62；L2制造→L2设计；核实：双方披露）,expert,2026-09-28,medium
+TW.2330,US.MRVL,supplies_to,,,定制芯片代工（docs/csv#63；L2制造→L2设计；核实：MRVL 10-K）,expert,2026-09-28,medium
+TW.2330,TW.3661,supplies_to,,,ASIC后端设计对应产能（docs/csv#64；L2制造→L2设计服务；核实：世芯年报）,expert,2026-09-28,medium
+TW.2330,US.ALAB,supplies_to,,,连接芯片代工（docs/csv#65；L2制造→L2设计；核实：ALAB 10-K）,news,2026-09-28,low
+KR.005930,US.TSLA,supplies_to,,,AI芯片代工合作（docs/csv#66；L2制造→L2设计；核实：双方公告）,news,2026-09-28,low
+CN.688981,CN.HUAWEI,supplies_to,,,昇腾系列AI芯片代工（docs/csv#67；L2制造→L2设计；核实：行业报道;双方未正式确认）,news,2026-09-28,low
+CN.688981,CN.688256,supplies_to,,,部分产品代工（docs/csv#68；L2制造→L2设计；核实：需核实）,news,2026-09-28,low
+CN.688347,CN.600460,supplies_to,,,特色工艺代工（docs/csv#69；L2制造→L2设计；核实：双方年报）,expert,2026-09-28,medium
+TW.3711,US.NVDA,supplies_to,,,先进封装与测试（docs/csv#70；L2封测→L2设计；核实：ASE法说会）,expert,2026-09-28,medium
+TW.3711,US.AMD,supplies_to,,,封装测试服务（docs/csv#71；L2封测→L2设计；核实：ASE法说会）,expert,2026-09-28,medium
+CN.002156,US.AMD,supplies_to,0.90,,通富微电承接 AMD 的封装测试外包,expert,2016-01-01,medium
+CN.600584,CN.688041,supplies_to,,,封装测试服务（docs/csv#73；L2封测→L2设计；核实：需核实）,news,2026-09-28,low
+CN.600584,CN.688981,supplies_to,,,封测协同（docs/csv#74；L2封测→L2制造；核实：双方年报）,expert,2026-09-28,medium
+KR.000660,US.NVDA,supplies_to,,,HBM高带宽存储（docs/csv#77；L2存储→L2设计；核实：双方披露与法说会）,expert,2026-09-28,medium
+KR.005930,US.NVDA,supplies_to,,,HBM供应(认证与放量节奏需核实)（docs/csv#78；L2存储→L2设计；核实：行业报道）,news,2026-09-28,low
+US.MU,US.NVDA,supplies_to,,,HBM供应（docs/csv#79；L2存储→L2设计；核实：MU 10-K与业绩会）,expert,2026-09-28,medium
+KR.000660,US.AMD,supplies_to,,,HBM供应（docs/csv#80；L2存储→L2设计；核实：双方披露）,expert,2026-09-28,medium
+US.MU,US.AMD,supplies_to,,,HBM供应（docs/csv#81；L2存储→L2设计；核实：业绩会）,news,2026-09-28,low
+US.NVDA,US.MSFT,supplies_to,,,AI GPU采购（docs/csv#83；L2设计→L4算力；核实：双方财报与业绩会）,expert,2026-09-28,medium
+US.NVDA,US.GOOGL,supplies_to,,,AI GPU采购（docs/csv#84；L2设计→L4算力；核实：业绩会）,expert,2026-09-28,medium
+US.NVDA,US.AMZN,supplies_to,,,AI GPU采购（docs/csv#85；L2设计→L4算力；核实：业绩会）,expert,2026-09-28,medium
+US.NVDA,US.META,supplies_to,,,AI GPU采购（docs/csv#86；L2设计→L4算力；核实：Meta资本开支说明）,expert,2026-09-28,medium
+US.NVDA,US.ORCL,supplies_to,,,AI GPU采购（docs/csv#87；L2设计→L4算力；核实：ORCL业绩会）,expert,2026-09-28,medium
+US.NVDA,US.CRWV,supplies_to,,,AI GPU采购(核心供应关系)（docs/csv#88；L2设计→L4算力；核实：CRWV招股书与10-K）,filing,2026-09-28,high
+US.NVDA,CN.000977,supplies_to,,,AI加速卡(受出口管制影响)（docs/csv#89；L2设计→L3硬件；核实：出口管制公告;浪潮年报）,news,2026-09-28,low
+US.AMD,US.MSFT,supplies_to,,,MI系列加速卡（docs/csv#90；L2设计→L4算力；核实：双方公告）,expert,2026-09-28,medium
+US.AMD,US.META,supplies_to,,,MI系列加速卡（docs/csv#91；L2设计→L4算力；核实：双方公告）,news,2026-09-28,low
+US.AMD,US.ORCL,supplies_to,,,MI系列加速卡（docs/csv#92；L2设计→L4算力；核实：ORCL公告）,news,2026-09-28,low
+US.AVGO,US.GOOGL,supplies_to,,,TPU定制芯片设计合作（docs/csv#93；L2设计↔L4算力；核实：行业分析与业绩会）,expert,2026-09-28,medium
+US.AVGO,US.META,supplies_to,,,MTIA定制芯片设计合作（docs/csv#94；L2设计↔L4算力；核实：行业分析）,news,2026-09-28,low
+US.MRVL,US.AMZN,supplies_to,,,Trainium定制芯片合作（docs/csv#95；L2设计↔L4算力；核实：MRVL业绩会）,news,2026-09-28,low
+TW.3661,US.AMZN,supplies_to,,,ASIC后端设计服务（docs/csv#96；L2设计服务→L4算力；核实：世芯法说会）,news,2026-09-28,low
+CN.688256,HK.9988,supplies_to,,,AI加速卡供应（docs/csv#101；L2设计→L4算力；核实：行业报道;需核实）,news,2026-09-28,low
+CN.688256,CN.BYTEDANCE,supplies_to,,,AI加速卡供应（docs/csv#102；L2设计→L4算力；核实：行业报道;需核实）,news,2026-09-28,low
+TW.2317,US.NVDA,supplies_to,,,AI服务器整机代工（docs/csv#104；L3硬件→L2设计；核实：鸿海法说会）,expert,2026-09-28,medium
+TW.2382,US.NVDA,supplies_to,,,AI服务器代工（docs/csv#105；L3硬件→L2设计；核实：广达法说会）,expert,2026-09-28,medium
+TW.3231,US.NVDA,supplies_to,,,AI服务器与模组代工（docs/csv#106；L3硬件→L2设计；核实：纬创法说会）,expert,2026-09-28,medium
+TW.2382,US.META,supplies_to,,,AI服务器代工（docs/csv#108；L3硬件→L4算力；核实：法说会）,news,2026-09-28,low
+TW.2317,US.MSFT,supplies_to,,,服务器代工（docs/csv#109；L3硬件→L4算力；核实：法说会）,news,2026-09-28,low
+CN.000977,HK.9988,supplies_to,,,AI服务器供应（docs/csv#110；L3硬件→L4算力；核实：浪潮年报客户结构）,expert,2026-09-28,medium
+CN.000977,HK.0700,supplies_to,,,AI服务器供应（docs/csv#111；L3硬件→L4算力；核实：浪潮年报）,expert,2026-09-28,medium
+CN.000977,HK.9888,supplies_to,,,AI服务器供应（docs/csv#112；L3硬件→L4算力；核实：浪潮年报）,expert,2026-09-28,medium
+CN.300308,US.NVDA,supplies_to,,,800G/1.6T光模块（docs/csv#116；L3网络→L2设计；核实：中际旭创年报海外客户集中度）,news,2026-09-28,low
+CN.300308,US.GOOGL,supplies_to,,,高速光模块（docs/csv#117；L3网络→L4算力；核实：行业报道）,news,2026-09-28,low
+CN.300308,US.META,supplies_to,,,高速光模块（docs/csv#118；L3网络→L4算力；核实：行业报道）,news,2026-09-28,low
+CN.300308,US.AMZN,supplies_to,,,高速光模块（docs/csv#119；L3网络→L4算力；核实：行业报道）,news,2026-09-28,low
+CN.300394,CN.300308,supplies_to,,,光器件与光引擎（docs/csv#121；L3网络→L3网络；核实：天孚年报客户集中度）,expert,2026-09-28,medium
+CN.300394,CN.300502,supplies_to,,,光器件供应（docs/csv#122；L3网络→L3网络；核实：天孚年报）,expert,2026-09-28,medium
+CN.688498,CN.300308,supplies_to,,,DFB/EML光芯片（docs/csv#123；L3光芯片→L3网络；核实：源杰年报客户结构）,expert,2026-09-28,medium
+CN.688498,CN.300502,supplies_to,,,光芯片供应（docs/csv#124；L3光芯片→L3网络；核实：源杰年报）,expert,2026-09-28,medium
+US.ANET,US.META,supplies_to,,,数据中心交换机（docs/csv#128；L3网络→L4算力；核实：ANET 10-K客户集中度）,filing,2026-09-28,high
+US.ANET,US.MSFT,supplies_to,,,数据中心交换机（docs/csv#129；L3网络→L4算力；核实：ANET 10-K）,filing,2026-09-28,high
+CN.002837,CN.000977,supplies_to,,,数据中心液冷与温控（docs/csv#131；L3配套→L3硬件；核实：英维克年报）,expert,2026-09-28,medium
+CN.002837,CN.603019,supplies_to,0.60,,智算中心交付配套液冷方案,expert,2021-01-01,low
+TW.2308,US.NVDA,supplies_to,,,服务器电源与散热方案（docs/csv#139；L3配套→L2设计；核实：台达法说会）,news,2026-09-28,low
+US.MSFT,US.OPENAI,supplies_to,,,云算力与基础设施（docs/csv#146；L4算力→L5模型；核实：双方公告）,filing,2026-09-28,high
+US.AMZN,US.ANTHROPIC,invests_in,,,云算力与战略投资（docs/csv#147；L4算力→L5模型；核实：双方公告）,filing,2026-09-28,high
+US.AMZN,US.ANTHROPIC,supplies_to,,,云算力与战略投资（docs/csv#147；L4算力→L5模型；核实：双方公告）,filing,2026-09-28,high
+US.GOOGL,US.ANTHROPIC,invests_in,,,云算力与战略投资（docs/csv#148；L4算力→L5模型；核实：双方公告）,filing,2026-09-28,high
+US.GOOGL,US.ANTHROPIC,supplies_to,,,云算力与战略投资（docs/csv#148；L4算力→L5模型；核实：双方公告）,filing,2026-09-28,high
+US.ORCL,US.OPENAI,supplies_to,,,算力基础设施合作（docs/csv#149；L4算力→L5模型；核实：双方公告与媒体报道）,news,2026-09-28,low
+US.CRWV,US.MSFT,supplies_to,,,GPU算力租赁（docs/csv#150；L4算力→L4算力；核实：CRWV招股书客户集中度）,filing,2026-09-28,high
+HK.9988,CN.MOONSHOT,supplies_to,,,算力与投资关系（docs/csv#151；L4算力→L5模型；核实：行业报道;需核实）,news,2026-09-28,low
+HK.9988,HK.0100,supplies_to,,,算力支持（docs/csv#152；L4算力→L5模型；核实：需核实）,news,2026-09-28,low
+HK.0700,HK.2513,supplies_to,,,算力与投资关系（docs/csv#153；L4算力→L5模型；核实：需核实）,news,2026-09-28,low
+CN.002230,US.NVDA,substitutes,,,基于昇腾的训练算力路线（docs/csv#155；L5模型↔L2设计；核实：讯飞公开表述）,news,2026-09-28,low
+HK.9988,US.NVDA,substitutes,,,平头哥自研芯片减少外购依赖（docs/csv#157；L4算力↔L2设计；核实：阿里公开材料）,expert,2026-09-28,medium
+HK.9888,US.NVDA,substitutes,,,昆仑芯自研替代路径（docs/csv#158；L4算力↔L2设计；核实：百度公开材料）,expert,2026-09-28,medium
+US.GOOGL,US.NVDA,substitutes,,,TPU降低对外购GPU依赖（docs/csv#159；L4算力↔L2设计；核实：业绩会与行业分析）,expert,2026-09-28,medium
+US.AMZN,US.NVDA,substitutes,,,Trainium/Inferentia自研路线（docs/csv#160；L4算力↔L2设计；核实：AWS公开材料）,expert,2026-09-28,medium
+US.MSFT,US.NVDA,substitutes,,,Maia自研加速器（docs/csv#161；L4算力↔L2设计；核实：微软公告）,news,2026-09-28,low
+US.META,US.NVDA,substitutes,,,MTIA自研加速器（docs/csv#162；L4算力↔L2设计；核实：Meta技术博客）,news,2026-09-28,low
+US.NVDA,US.AMD,competes_with,,,AI加速卡市场直接竞争（docs/csv#163；L2设计；核实：双方财报与市场份额报告）,expert,2026-09-28,medium
+US.NVDA,US.AVGO,competes_with,,,通用GPU与定制ASIC路线之争（docs/csv#164；L2设计；核实：行业分析报告）,expert,2026-09-28,medium
+US.NVDA,US.GOOGL,competes_with,,,GPU与TPU的算力路线竞争（docs/csv#165；L2设计；核实：行业分析）,expert,2026-09-28,medium
+US.AMD,US.INTC,competes_with,,,服务器CPU与加速器竞争（docs/csv#166；L2设计；核实：双方财报）,expert,2026-09-28,medium
+US.AVGO,US.MRVL,competes_with,,,定制ASIC设计服务竞争（docs/csv#167；L2设计；核实：双方财报）,expert,2026-09-28,medium
+TW.3661,TW.3443,competes_with,,,ASIC设计服务竞争（docs/csv#168；L2设计服务；核实：双方法说会）,expert,2026-09-28,medium
+TW.2330,KR.005930,competes_with,,,先进制程代工竞争（docs/csv#169；L2制造；核实：代工份额报告）,expert,2026-09-28,medium
+TW.2330,US.INTC,competes_with,,,先进制程代工竞争（docs/csv#170；L2制造；核实：行业分析）,expert,2026-09-28,medium
+CN.688981,CN.688347,competes_with,,,国内代工产能竞争(制程定位不同)（docs/csv#171；L2制造；核实：双方年报）,expert,2026-09-28,medium
+KR.000660,KR.005930,competes_with,,,HBM市场直接竞争（docs/csv#172；L2存储；核实：市场份额报告）,expert,2026-09-28,medium
+KR.000660,US.MU,competes_with,,,HBM市场竞争（docs/csv#173；L2存储；核实：市场份额报告）,expert,2026-09-28,medium
+CN.688825,US.MU,competes_with,,,DRAM市场竞争(国产替代)（docs/csv#174；L2存储；核实：行业报道）,news,2026-09-28,low
+US.SNPS,US.CDNS,competes_with,,,EDA市场双寡头竞争（docs/csv#175；L1工具；核实：双方10-K）,expert,2026-09-28,medium
+CN.301269,US.SNPS,competes_with,,,国产EDA替代竞争（docs/csv#176；L1工具；核实：华大九天招股书）,expert,2026-09-28,medium
+US.AMAT,US.LRCX,competes_with,,,前道设备部分品类竞争（docs/csv#177；L1设备；核实：双方10-K）,expert,2026-09-28,medium
+CN.002371,CN.688012,competes_with,,,国产刻蚀设备竞争（docs/csv#178；L1设备；核实：双方年报）,expert,2026-09-28,medium
+CN.002371,US.AMAT,competes_with,,,国产替代竞争（docs/csv#179；L1设备；核实：行业分析）,expert,2026-09-28,medium
+CN.688012,US.LRCX,competes_with,,,刻蚀设备竞争（docs/csv#180；L1设备；核实：行业分析）,expert,2026-09-28,medium
+CN.688072,US.AMAT,competes_with,,,薄膜沉积设备竞争（docs/csv#181；L1设备；核实：行业分析）,expert,2026-09-28,medium
+CN.688120,US.AMAT,competes_with,,,CMP设备竞争（docs/csv#182；L1设备；核实：行业分析）,expert,2026-09-28,medium
+CN.SMEE,NL.ASML,competes_with,,,光刻机国产替代(代际差距显著)（docs/csv#183；L1设备；核实：行业分析）,expert,2026-09-28,medium
+CN.300308,CN.300502,competes_with,,,高速光模块市场竞争（docs/csv#184；L3网络；核实：双方年报）,expert,2026-09-28,medium
+CN.300308,US.COHR,competes_with,,,全球光模块市场竞争（docs/csv#185；L3网络；核实：行业份额报告）,expert,2026-09-28,medium
+CN.002281,CN.300308,competes_with,,,光模块市场竞争（docs/csv#186；L3网络；核实：双方年报）,expert,2026-09-28,medium
+CN.000977,CN.603019,competes_with,0.90,,国内 AI 服务器整机市场的主要同业,expert,2015-01-01,medium
+CN.000977,CN.000938,competes_with,,,服务器市场竞争（docs/csv#188；L3硬件；核实：IDC份额报告）,expert,2026-09-28,medium
+TW.2317,TW.2382,competes_with,,,AI服务器代工订单竞争（docs/csv#189；L3硬件；核实：双方法说会）,expert,2026-09-28,medium
+TW.2382,TW.3231,competes_with,,,AI服务器代工竞争（docs/csv#180；L3硬件；核实：双方法说会）,expert,2026-09-28,medium
+CN.601138,TW.2317,competes_with,,,服务器代工业务重叠(同系但独立经营)（docs/csv#191；L3硬件；核实：双方财报）,expert,2026-09-28,medium
+CN.002837,CN.301018,competes_with,,,数据中心温控竞争（docs/csv#192；L3配套；核实：双方年报）,expert,2026-09-28,medium
+CN.002837,US.VRT,competes_with,,,液冷与温控市场竞争（docs/csv#193；L3配套；核实：行业分析）,expert,2026-09-28,medium
+TW.2308,US.VRT,competes_with,,,数据中心电源竞争（docs/csv#194；L3配套；核实：行业分析）,expert,2026-09-28,medium
+CN.688256,CN.688041,competes_with,,,国产AI加速卡竞争（docs/csv#195；L2设计；核实：双方年报）,expert,2026-09-28,medium
+CN.688256,CN.HUAWEI,competes_with,,,国产AI芯片市场竞争（docs/csv#196；L2设计；核实：IDC国产份额报告）,expert,2026-09-28,medium
+HK.9660,HK.2533,competes_with,,,车规AI芯片竞争（docs/csv#197；L2设计；核实：双方招股书）,expert,2026-09-28,medium
+HK.9988,HK.0700,competes_with,,,国内公有云市场竞争（docs/csv#198；L4算力；核实：IDC/Canalys份额报告）,expert,2026-09-28,medium
+HK.9988,CN.HUAWEI,competes_with,,,国内公有云与智算竞争（docs/csv#199；L4算力；核实：份额报告）,expert,2026-09-28,medium
+CN.DEEPSEEK,CN.MOONSHOT,competes_with,,,国内基础大模型竞争（docs/csv#200；L5模型；核实：行业分析）,expert,2026-09-28,medium
+CN.688041,CN.688008,depends_on,0.30,,服务器平台需要配套内存接口芯片,expert,2022-08-12,low
+CN.688041,CN.688047,competes_with,0.60,,国产服务器 CPU 的两条主要路线：x86 兼容与自主指令集,expert,2022-08-12,medium
+CN.300604,CN.002156,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
+CN.300604,CN.600584,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
+CN.688047,CN.603019,supplies_to,0.30,,信创整机可选自主指令集平台,expert,2022-06-24,low
+CN.002463,CN.000977,supplies_to,0.60,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
+CN.002463,CN.603019,supplies_to,0.30,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
+CN.688008,CN.000977,supplies_to,0.60,,服务器内存模组配套内存接口芯片,expert,2019-07-22,medium
 CN.688041,CN.603019,supplies_to,0.90,,海光的 CPU 与 DCU 是中科曙光服务器整机的核心部件,expert,2022-08-12,medium
 CN.603019,CN.688041,invests_in,0.90,,中科曙光是海光信息的主要股东,announcement,2022-08-12,high
 CN.688041,CN.000977,supplies_to,0.30,,浪潮信息的国产化机型可选海光平台,expert,2022-08-12,low
@@ -6,26 +185,10 @@ CN.688041,CN.000938,supplies_to,0.30,,新华三国产化服务器可选海光平
 CN.688041,US.AMD,depends_on,0.90,,x86 指令集授权与初代微架构来自与 AMD 的合资安排,expert,2022-08-12,medium
 CN.688041,TW.2330,depends_on,0.60,,早期产品由台积电代工；列入美国实体清单后先进制程供给受限,expert,2022-08-12,low
 CN.688041,CN.002156,depends_on,0.60,,封装测试环节依赖国内封测厂,expert,2022-08-12,low
-CN.688041,CN.688008,depends_on,0.30,,服务器平台需要配套内存接口芯片,expert,2022-08-12,low
-CN.688041,CN.688047,competes_with,0.60,,国产服务器 CPU 的两条主要路线：x86 兼容与自主指令集,expert,2022-08-12,medium
 CN.688041,US.INTC,competes_with,0.90,,服务器 CPU 市场的主要在位者,expert,2022-08-12,high
 CN.688041,US.AMD,competes_with,0.60,,同属 x86 阵营，面向不同区域市场,expert,2022-08-12,medium
 CN.688041,US.NVDA,substitutes,0.60,,DCU 在国内市场对受管制的数据中心 GPU 形成替代,expert,2023-01-01,medium
-CN.688041,CN.688256,competes_with,0.60,,国产 AI 加速卡的主要同业,expert,2022-08-12,medium
-US.NVDA,TW.2330,depends_on,0.90,,数据中心 GPU 由台积电先进制程代工并使用其 CoWoS 封装,expert,2020-01-01,high
-US.AMD,TW.2330,depends_on,0.90,,数据中心产品由台积电代工,expert,2020-01-01,high
-US.NVDA,KR.000660,depends_on,0.90,,数据中心 GPU 配套 HBM,expert,2020-01-01,high
-CN.002156,US.AMD,supplies_to,0.90,,通富微电承接 AMD 的封装测试外包,expert,2016-01-01,medium
 CN.600584,CN.688256,supplies_to,0.30,,国内加速卡的封测外包选项之一,expert,2020-07-20,low
-CN.300604,CN.002156,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
-CN.300604,CN.600584,supplies_to,0.60,,封测产线扩产需采购测试机与分选机,expert,2018-01-01,low
 CN.688256,CN.603019,supplies_to,0.30,,智算整机可选国产加速卡,expert,2020-07-20,low
-CN.688047,CN.603019,supplies_to,0.30,,信创整机可选自主指令集平台,expert,2022-06-24,low
-CN.002463,CN.000977,supplies_to,0.60,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
-CN.002463,CN.603019,supplies_to,0.30,,服务器主板采用高多层高频 PCB,expert,2020-01-01,low
 CN.300308,CN.000938,supplies_to,0.30,,数据中心互联采购光模块,expert,2020-01-01,low
-CN.002837,CN.603019,supplies_to,0.60,,智算中心交付配套液冷方案,expert,2021-01-01,low
-CN.688008,CN.000977,supplies_to,0.60,,服务器内存模组配套内存接口芯片,expert,2019-07-22,medium
 KR.000660,CN.000977,supplies_to,0.30,,服务器内存供应,expert,2020-01-01,low
-CN.000977,CN.603019,competes_with,0.90,,国内 AI 服务器整机市场的主要同业,expert,2015-01-01,medium
-CN.000938,CN.000977,competes_with,0.60,,国内服务器与网络设备市场的同业,expert,2015-01-01,medium

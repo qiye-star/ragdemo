@@ -2,10 +2,12 @@
 
 这个文件跑绿 = P0 可以收。跑红 = 不能进 P1，没有商量余地。
 
-四条计数断言带 `seed_full` 标记，因为它们依赖创始人工作流 W9.1 的全量录入
-（实体 100 家、关系 200 条）。**期望值一个都没有改**——改 EXPECTED_COUNTS
-去迁就现有数据，等于把验收标准换成「有多少算多少」。
-数据补齐后去掉标记即可，或直接跑 `make accept-p0`（它不过滤标记）。
+四条计数断言是**下限**（2026-09-28 负责人决定，原为 == 100 / 200 / 15 / 30）：
+种子改由 `docs/csv` 生成（`ragdemo db seed-build`），底稿 200 条关系里有 28 条的一端是
+"北美云厂"这类泛称、3 条合并别名后是同一实体，建不成实体关系；实体因补录关系表里的
+名单外公司而多于 100。关系下限因此降到 150，其余三项不降。
+只数"现在有效"的行：现行关系、启用的规则、有现行口径版本的指标——同步导入时被
+标记失效 / 停用的旧行留在表里（时点表不删行），不该算进"有多少数据"。
 """
 
 from __future__ import annotations
@@ -19,11 +21,17 @@ import pytest
 
 DSN = os.environ.get("RAGDEMO_DSN", "postgresql://postgres:ragdemo@127.0.0.1:5433/ragdemo")
 
-EXPECTED_COUNTS = {
-    "core.entity": 100,
-    "core.entity_relation": 200,
-    "core.propagation_rule": 15,
-    "core.node_metric": 30,
+MINIMUM_COUNTS = {
+    "core.entity": ("SELECT count(*) FROM core.entity", 100),
+    "core.entity_relation": (
+        "SELECT count(*) FROM core.entity_relation WHERE superseded_at IS NULL",
+        150,
+    ),
+    "core.propagation_rule": ("SELECT count(*) FROM core.propagation_rule WHERE enabled", 15),
+    "core.node_metric": (
+        "SELECT count(*) FROM core.node_metric_version WHERE superseded_at IS NULL",
+        30,
+    ),
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。
@@ -60,14 +68,12 @@ def app_read_conn(
 
 
 @pytest.mark.db
-@pytest.mark.seed_full
-@pytest.mark.parametrize(("table", "expected"), sorted(EXPECTED_COUNTS.items()))
-def test_seed_counts(
-    conn: psycopg.Connection[tuple[object, ...]], table: str, expected: int
-) -> None:
-    row = conn.execute(f"SELECT count(*) FROM {table}").fetchone()
+@pytest.mark.parametrize("table", sorted(MINIMUM_COUNTS))
+def test_seed_counts(conn: psycopg.Connection[tuple[object, ...]], table: str) -> None:
+    sql, minimum = MINIMUM_COUNTS[table]
+    row = conn.execute(sql).fetchone()
     assert row is not None
-    assert row[0] == expected
+    assert int(str(row[0])) >= minimum, f"{table}: {row[0]} < {minimum}"
 
 
 @pytest.mark.db

@@ -191,6 +191,37 @@ def publish_metric(
     return PublishResult(outcome, version)
 
 
+def retire_metric(conn: psycopg.Connection, metric_id: str, *, known_at: datetime) -> bool:
+    """让指标的现行版本在 `known_at` 失效（口径不再维护）。历史版本保留，按 as_of 回看照旧。
+
+    还有现行供应商字段映射指向它时拒绝：映射会变成指向"不存在的口径"。
+    返回是否真的让一个现行版本失效了（已经失效 / 从未存在返回 False）。
+    """
+    _require_aware(known_at, "known_at")
+    with conn.transaction():
+        mapped = conn.execute(
+            "SELECT count(*) FROM core.metric_source_map_version"
+            " WHERE metric_id = %s AND superseded_at IS NULL",
+            (metric_id,),
+        ).fetchone()
+        if mapped is not None and int(mapped[0]) > 0:
+            raise ValueError(f"{metric_id} 还有现行的供应商字段映射，先下线映射再停用指标")
+        live = conn.execute(
+            "SELECT known_at FROM core.node_metric_version"
+            " WHERE metric_id = %s AND superseded_at IS NULL FOR UPDATE",
+            (metric_id,),
+        ).fetchone()
+        if live is None:
+            return False
+        _check_order(live[0], known_at, metric_id)
+        conn.execute(
+            "UPDATE core.node_metric_version SET superseded_at = %s"
+            " WHERE metric_id = %s AND superseded_at IS NULL",
+            (known_at, metric_id),
+        )
+    return True
+
+
 def metric_as_of(
     conn: psycopg.Connection, metric_id: str, *, as_of: datetime
 ) -> Versioned[MetricSpec] | None:

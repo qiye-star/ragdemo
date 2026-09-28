@@ -16,6 +16,7 @@ from ragdemo.ingest.facts_cli import facts_group
 from ragdemo.metrics.cli import metrics_group
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo.quality.replay import replay_and_check
+from ragdemo.seed.cli import seed_build_command, seed_listing_dates_command
 from ragdemo.seed.isolation_demo import AlreadySeeded, clear_isolation_demo, seed_isolation_demo
 from ragdemo.seed.loader import load_all
 from ragdemo_core.db.invariants import check_point_in_time_leaks, check_schema_invariants
@@ -147,6 +148,10 @@ def db_seed() -> None:
         counts = load_all(conn, SEED_DIR)
     for table, n in counts.items():
         click.echo(f"{table}: {n}")
+
+
+db.add_command(seed_listing_dates_command)
+db.add_command(seed_build_command)
 
 
 @db.command("check")

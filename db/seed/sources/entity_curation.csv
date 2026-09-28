@@ -1,0 +1,119 @@
+key,entity_id,entity_type,status,market,tushare_code,wind_code,name_full,name_en,l1_layer,l2_segment,l3_node,primary_node,hq_country,currency,fiscal_year_end,curation_note
+中芯国际,CN.688981,listed,active,SSE,688981.SH,688981.SH,,SMIC,算力,芯片制造,晶圆代工,晶圆代工,CN,CNY,12,另在港股上市 0981.HK
+华虹半导体,CN.688347,listed,active,SSE,688347.SH,688347.SH,,Hua Hong Semiconductor,算力,芯片制造,晶圆代工,晶圆代工,CN,CNY,12,另在港股上市 1347.HK
+寒武纪,CN.688256,listed,active,SSE,688256.SH,688256.SH,中科寒武纪科技股份有限公司,Cambricon,算力,AI芯片,云端训练芯片|边缘推理芯片,云端训练芯片,CN,CNY,12,docs/csv 全称写作"寒武纪科技股份有限公司"，按法定名称"中科寒武纪科技股份有限公司"
+海光信息,CN.688041,listed,active,SSE,688041.SH,688041.SH,,Hygon Information Technology,算力,AI芯片,通用服务器CPU|云端训练芯片,通用服务器CPU,CN,CNY,12,
+北方华创,CN.002371,listed,active,SZSE,002371.SZ,002371.SZ,,NAURA,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+中微公司,CN.688012,listed,active,SSE,688012.SH,688012.SH,,AMEC,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+拓荆科技,CN.688072,listed,active,SSE,688072.SH,688072.SH,,Piotech,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+盛美上海,CN.688082,listed,active,SSE,688082.SH,688082.SH,,ACM Research (Shanghai),算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+华海清科,CN.688120,listed,active,SSE,688120.SH,688120.SH,,Hwatsing,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+芯源微,CN.688037,listed,active,SSE,688037.SH,688037.SH,,KINGSEMI,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,
+至纯科技,CN.603690,listed,active,SSE,603690.SH,603690.SH,,PNC Process Systems,算力,芯片制造,晶圆制造设备|设备零部件,晶圆制造设备,CN,CNY,12,
+万业企业,CN.600641,listed,active,SSE,600641.SH,600641.SH,,Shanghai Wanye Enterprises,算力,芯片制造,晶圆制造设备,晶圆制造设备,CN,CNY,12,含地产业务
+精测电子,CN.300567,listed,active,SZSE,300567.SZ,300567.SZ,,Wuhan Jingce Electronic,算力,芯片制造,量测检测设备,量测检测设备,CN,CNY,12,
+华大九天,CN.301269,listed,active,SZSE,301269.SZ,301269.SZ,,Empyrean Technology,算力,芯片制造,EDA工具,EDA工具,CN,CNY,12,
+概伦电子,CN.688206,listed,active,SSE,688206.SH,688206.SH,,Primarius,算力,芯片制造,EDA工具,EDA工具,CN,CNY,12,
+广立微,CN.301095,listed,active,SZSE,301095.SZ,301095.SZ,,Semitronix,算力,芯片制造,EDA工具,EDA工具,CN,CNY,12,
+沪硅产业,CN.688126,listed,active,SSE,688126.SH,688126.SH,,NSIG,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+立昂微,CN.605358,listed,active,SSE,605358.SH,605358.SH,,Hangzhou Lion Microelectronics,算力,芯片制造,半导体材料|功率半导体,半导体材料,CN,CNY,12,
+鼎龙股份,CN.300054,listed,active,SZSE,300054.SZ,300054.SZ,,Hubei Dinglong,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+安集科技,CN.688019,listed,active,SSE,688019.SH,688019.SH,,Anji Microelectronics,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+雅克科技,CN.002409,listed,active,SZSE,002409.SZ,002409.SZ,,Jiangsu Yoke Technology,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+南大光电,CN.300346,listed,active,SZSE,300346.SZ,300346.SZ,,Jiangsu Nata Opto-electronic,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+江丰电子,CN.300666,listed,active,SZSE,300666.SZ,300666.SZ,,Konfoong Materials,算力,芯片制造,半导体材料,半导体材料,CN,CNY,12,
+富创精密,CN.688409,listed,active,SSE,688409.SH,688409.SH,,Fortune Precision,算力,芯片制造,设备零部件,设备零部件,CN,CNY,12,
+长电科技,CN.600584,listed,active,SSE,600584.SH,600584.SH,,JCET,算力,芯片制造,先进封装,先进封装,CN,CNY,12,
+通富微电,CN.002156,listed,active,SZSE,002156.SZ,002156.SZ,,TFME,算力,芯片制造,先进封装,先进封装,CN,CNY,12,
+华天科技,CN.002185,listed,active,SZSE,002185.SZ,002185.SZ,,Tianshui Huatian,算力,芯片制造,先进封装,先进封装,CN,CNY,12,
+甬矽电子,CN.688362,listed,active,SSE,688362.SH,688362.SH,,Forehope Electronic,算力,芯片制造,先进封装,先进封装,CN,CNY,12,
+浪潮信息,CN.000977,listed,active,SZSE,000977.SZ,000977.SZ,,Inspur Electronic Information,算力,服务器与网络,AI服务器|通用服务器,AI服务器,CN,CNY,12,
+中科曙光,CN.603019,listed,active,SSE,603019.SH,603019.SH,曙光信息产业股份有限公司,Sugon,算力,服务器与网络,AI服务器|通用服务器|IDC,AI服务器,CN,CNY,12,docs/csv 全称写作"中科曙光信息产业股份有限公司"，按法定名称"曙光信息产业股份有限公司"
+紫光股份,CN.000938,listed,active,SZSE,000938.SZ,000938.SZ,,Unisplendour,算力,服务器与网络,交换机|AI服务器,交换机,CN,CNY,12,
+工业富联,CN.601138,listed,active,SSE,601138.SH,601138.SH,,Foxconn Industrial Internet,算力,服务器与网络,AI服务器,AI服务器,CN,CNY,12,
+中际旭创,CN.300308,listed,active,SZSE,300308.SZ,300308.SZ,,Innolight,算力,服务器与网络,光模块,光模块,CN,CNY,12,
+新易盛,CN.300502,listed,active,SZSE,300502.SZ,300502.SZ,,Eoptolink,算力,服务器与网络,光模块,光模块,CN,CNY,12,
+天孚通信,CN.300394,listed,active,SZSE,300394.SZ,300394.SZ,,TFC Communication,算力,服务器与网络,光器件与光芯片|光模块,光器件与光芯片,CN,CNY,12,
+光迅科技,CN.002281,listed,active,SZSE,002281.SZ,002281.SZ,,Accelink,算力,服务器与网络,光模块|光器件与光芯片,光模块,CN,CNY,12,
+源杰科技,CN.688498,listed,active,SSE,688498.SH,688498.SH,,Yuanjie Semiconductor,算力,服务器与网络,光器件与光芯片,光器件与光芯片,CN,CNY,12,
+英维克,CN.002837,listed,active,SZSE,002837.SZ,002837.SZ,,Envicool,算力,数据中心配套,液冷散热,液冷散热,CN,CNY,12,
+申菱环境,CN.301018,listed,active,SZSE,301018.SZ,301018.SZ,,Guangdong Shenling Environmental,算力,数据中心配套,液冷散热,液冷散热,CN,CNY,12,
+高澜股份,CN.300499,listed,active,SZSE,300499.SZ,300499.SZ,,Guangzhou Goaland,算力,数据中心配套,液冷散热,液冷散热,CN,CNY,12,
+麦格米特,CN.002851,listed,active,SZSE,002851.SZ,002851.SZ,,Megmeet,算力,数据中心配套,服务器电源,服务器电源,CN,CNY,12,
+科华数据,CN.002335,listed,active,SZSE,002335.SZ,002335.SZ,,Kehua Data,算力,数据中心配套,服务器电源|IDC,服务器电源,CN,CNY,12,UPS 与数据中心
+欧陆通,CN.300870,listed,active,SZSE,300870.SZ,300870.SZ,,Shenzhen Honor Electronic,算力,数据中心配套,服务器电源,服务器电源,CN,CNY,12,
+优刻得,CN.688158,listed,active,SSE,688158.SH,688158.SH,,UCloud,算力,算力服务,公有云|算力租赁,公有云,CN,CNY,12,
+首都在线,CN.300846,listed,active,SZSE,300846.SZ,300846.SZ,,Capitalonline,算力,算力服务,算力租赁|公有云,算力租赁,CN,CNY,12,
+润泽科技,CN.300442,listed,active,SZSE,300442.SZ,300442.SZ,,Range Intelligent Computing,算力,数据中心配套,IDC,IDC,CN,CNY,12,
+科大讯飞,CN.002230,listed,active,SZSE,002230.SZ,002230.SZ,,iFlytek,模型,基础模型,通用大模型|AI办公,通用大模型,CN,CNY,12,
+海康威视,CN.002415,listed,active,SZSE,002415.SZ,002415.SZ,,Hikvision,应用,行业应用,智能视觉,智能视觉,CN,CNY,12,
+恒生电子,CN.600570,listed,active,SSE,600570.SH,600570.SH,,Hundsun,应用,行业应用,金融AI,金融AI,CN,CNY,12,
+商汤科技,HK.0020,listed,active,HKEX,,0020.HK,,SenseTime,模型,基础模型,多模态模型|通用大模型|公有云,多模态模型,CN,CNY,12,
+地平线,HK.9660,listed,active,HKEX,,9660.HK,,Horizon Robotics,算力,AI芯片,边缘推理芯片|智能驾驶,边缘推理芯片,CN,CNY,12,
+黑芝麻智能,HK.2533,listed,active,HKEX,,2533.HK,,Black Sesame Technologies,算力,AI芯片,边缘推理芯片|智能驾驶,边缘推理芯片,CN,CNY,12,
+联想集团,HK.0992,listed,active,HKEX,,0992.HK,,Lenovo Group,算力,服务器与网络,AI服务器|AI终端,AI服务器,CN,USD,3,
+阿里巴巴,HK.9988,listed,active,HKEX,,9988.HK,,Alibaba Group,算力,算力服务,公有云|通用大模型|定制ASIC,公有云,CN,CNY,3,另在美股上市 BABA
+腾讯,HK.0700,listed,active,HKEX,,0700.HK,,Tencent,算力,算力服务,公有云|通用大模型,公有云,CN,CNY,12,
+百度,HK.9888,listed,active,HKEX,,9888.HK,,Baidu,模型,基础模型,通用大模型|公有云|定制ASIC,通用大模型,CN,CNY,12,另在美股上市 BIDU
+优必选,HK.9880,listed,active,HKEX,,9880.HK,,UBTech Robotics,终端,智能终端,人形机器人,人形机器人,CN,CNY,12,
+金山云,HK.3896,listed,active,HKEX,,3896.HK,,Kingsoft Cloud,算力,算力服务,公有云,公有云,CN,CNY,12,另在美股上市 KC
+海天瑞声,CN.688787,listed,active,SSE,688787.SH,688787.SH,,SpeechOcean,数据,数据服务,数据标注|语料库,数据标注,CN,CNY,12,
+英伟达,US.NVDA,listed,active,NASDAQ,,NVDA.O,,NVIDIA,算力,AI芯片,云端训练芯片|云端推理芯片,云端训练芯片,US,USD,1,
+AMD,US.AMD,listed,active,NASDAQ,,AMD.O,,AMD,算力,AI芯片,云端训练芯片|通用服务器CPU,通用服务器CPU,US,USD,12,
+英特尔,US.INTC,listed,active,NASDAQ,,INTC.O,,Intel,算力,AI芯片,通用服务器CPU|晶圆代工,通用服务器CPU,US,USD,12,
+博通,US.AVGO,listed,active,NASDAQ,,AVGO.O,,Broadcom,算力,AI芯片,定制ASIC|交换机,定制ASIC,US,USD,10,财年约于 10 月末 / 11 月初结束，需核对
+迈威尔科技,US.MRVL,listed,active,NASDAQ,,MRVL.O,,Marvell Technology,算力,AI芯片,定制ASIC|高速互联芯片,定制ASIC,US,USD,1,
+美光科技,US.MU,listed,active,NASDAQ,,MU.O,,Micron Technology,算力,存储,HBM|服务器内存|企业级SSD,HBM,US,USD,8,财年约于 8 月末 / 9 月初结束
+应用材料,US.AMAT,listed,active,NASDAQ,,AMAT.O,,Applied Materials,算力,芯片制造,晶圆制造设备,晶圆制造设备,US,USD,10,
+泛林集团,US.LRCX,listed,active,NASDAQ,,LRCX.O,,Lam Research,算力,芯片制造,晶圆制造设备,晶圆制造设备,US,USD,6,
+科磊,US.KLAC,listed,active,NASDAQ,,KLAC.O,,KLA,算力,芯片制造,量测检测设备,量测检测设备,US,USD,6,
+新思科技,US.SNPS,listed,active,NASDAQ,,SNPS.O,,Synopsys,算力,芯片制造,EDA工具,EDA工具,US,USD,10,
+铿腾电子,US.CDNS,listed,active,NASDAQ,,CDNS.O,,Cadence Design Systems,算力,芯片制造,EDA工具,EDA工具,US,USD,12,
+微软,US.MSFT,listed,active,NASDAQ,,MSFT.O,,Microsoft,算力,算力服务,公有云|通用大模型|定制ASIC,公有云,US,USD,6,
+谷歌,US.GOOGL,listed,active,NASDAQ,,GOOGL.O,,Alphabet,算力,算力服务,公有云|通用大模型|定制ASIC,公有云,US,USD,12,
+亚马逊,US.AMZN,listed,active,NASDAQ,,AMZN.O,,Amazon,算力,算力服务,公有云|定制ASIC,公有云,US,USD,12,
+Meta,US.META,listed,active,NASDAQ,,META.O,,Meta Platforms,模型,基础模型,通用大模型|定制ASIC,通用大模型,US,USD,12,
+甲骨文,US.ORCL,listed,active,NYSE,,ORCL.N,,Oracle,算力,算力服务,公有云|算力租赁,公有云,US,USD,5,
+CoreWeave,US.CRWV,listed,active,NASDAQ,,CRWV.O,,CoreWeave,算力,算力服务,算力租赁,算力租赁,US,USD,12,
+阿里斯塔,US.ANET,listed,active,NYSE,,ANET.N,,Arista Networks,算力,服务器与网络,交换机,交换机,US,USD,12,
+Astera Labs,US.ALAB,listed,active,NASDAQ,,ALAB.O,,Astera Labs,算力,服务器与网络,高速互联芯片,高速互联芯片,US,USD,12,
+维谛技术,US.VRT,listed,active,NYSE,,VRT.N,,Vertiv,算力,数据中心配套,液冷散热|服务器电源,液冷散热,US,USD,12,
+阿斯麦,NL.ASML,listed,active,EURONEXT,,ASML.O,,ASML,算力,芯片制造,光刻设备,光刻设备,NL,EUR,12,主上市地为阿姆斯特丹泛欧交易所，另在纳斯达克上市；上市日期取纳斯达克
+台积电,TW.2330,listed,active,TWSE,,2330.TW,,TSMC,算力,芯片制造,晶圆代工|先进封装,晶圆代工,TW,TWD,12,另在美股上市 TSM
+日月光投控,TW.3711,listed,active,TWSE,,3711.TW,,ASE Technology,算力,芯片制造,先进封装,先进封装,TW,TWD,12,另在美股上市 ASX
+联发科,TW.2454,listed,active,TWSE,,2454.TW,,MediaTek,算力,AI芯片,边缘推理芯片|定制ASIC,边缘推理芯片,TW,TWD,12,
+鸿海(富士康),TW.2317,listed,active,TWSE,,2317.TW,,Hon Hai Precision,算力,服务器与网络,AI服务器,AI服务器,TW,TWD,12,
+广达,TW.2382,listed,active,TWSE,,2382.TW,,Quanta Computer,算力,服务器与网络,AI服务器,AI服务器,TW,TWD,12,
+纬创,TW.3231,listed,active,TWSE,,3231.TW,,Wistron,算力,服务器与网络,AI服务器,AI服务器,TW,TWD,12,
+台达电,TW.2308,listed,active,TWSE,,2308.TW,,Delta Electronics,算力,数据中心配套,服务器电源|液冷散热,服务器电源,TW,TWD,12,
+世芯-KY,TW.3661,listed,active,TWSE,,3661.TW,,Alchip Technologies,算力,AI芯片,定制ASIC,定制ASIC,TW,TWD,12,
+三星电子,KR.005930,listed,active,KRX,,005930.KS,,Samsung Electronics,算力,存储,HBM|服务器内存|企业级SSD|晶圆代工,HBM,KR,KRW,12,
+SK海力士,KR.000660,listed,active,KRX,,000660.KS,,SK hynix,算力,存储,HBM|服务器内存,HBM,KR,KRW,12,
+韩美半导体,KR.042700,listed,active,KRX,,042700.KS,,Hanmi Semiconductor,算力,芯片制造,封装设备,封装设备,KR,KRW,12,HBM TC 键合设备
+东京电子,JP.8035,listed,active,TSE,,8035.T,,Tokyo Electron,算力,芯片制造,晶圆制造设备,晶圆制造设备,JP,JPY,3,
+爱德万测试,JP.6857,listed,active,TSE,,6857.T,,Advantest,算力,芯片制造,测试设备,测试设备,JP,JPY,3,
+信越化学,JP.4063,listed,active,TSE,,4063.T,,Shin-Etsu Chemical,算力,芯片制造,半导体材料,半导体材料,JP,JPY,3,
+上海微电子(SMEE),CN.SMEE,private,active,,,,,SMEE,算力,芯片制造,光刻设备,光刻设备,CN,CNY,12,
+长鑫存储(CXMT),CN.688825,listed,active,SSE,688825.SH,688825.SH,长鑫科技集团股份有限公司,CXMT,算力,存储,服务器内存|HBM,服务器内存,CN,CNY,12,docs/csv 标为非上市；供应商数据显示已于 2026-07-27 以"长鑫科技"在科创板上市（688825.SH），按已上市录入；法定全称需核对
+深度求索(DeepSeek),CN.DEEPSEEK,private,active,,,,,DeepSeek,模型,基础模型,通用大模型,通用大模型,CN,CNY,12,
+OpenAI,US.OPENAI,private,active,,,,,OpenAI,模型,基础模型,通用大模型,通用大模型,US,USD,12,
+Anthropic,US.ANTHROPIC,private,active,,,,,Anthropic,模型,基础模型,通用大模型,通用大模型,US,USD,12,
+第四范式,HK.6682,listed,active,HKEX,,6682.HK,,4Paradigm,应用,企业应用,企业AI平台,企业AI平台,CN,CNY,12,
+华为,CN.HUAWEI,private,active,,,,华为技术有限公司,Huawei,算力,AI芯片,云端训练芯片|公有云|通用大模型,云端训练芯片,CN,CNY,12,关系表补录（华为海思 / 华为云合并为一个实体）
+长江存储,CN.YMTC,private,active,,,,长江存储科技有限责任公司,YMTC,算力,存储,企业级SSD,企业级SSD,CN,CNY,12,关系表补录
+苹果,US.AAPL,listed,active,NASDAQ,,AAPL.O,Apple Inc.,Apple,终端,智能终端,AI终端,AI终端,US,USD,9,关系表补录
+特斯拉,US.TSLA,listed,active,NASDAQ,,TSLA.O,"Tesla, Inc.",Tesla,应用,行业应用,智能驾驶|人形机器人,智能驾驶,US,USD,12,关系表补录
+字节跳动,CN.BYTEDANCE,private,active,,,,字节跳动有限公司,ByteDance,模型,基础模型,通用大模型|公有云,通用大模型,CN,CNY,12,关系表补录
+月之暗面,CN.MOONSHOT,private,active,,,,北京月之暗面科技有限公司,Moonshot AI,模型,基础模型,通用大模型,通用大模型,CN,CNY,12,关系表补录
+MiniMax,HK.0100,listed,active,HKEX,,0100.HK,MiniMax,MiniMax,模型,基础模型,通用大模型|多模态模型,通用大模型,CN,USD,12,关系表补录；供应商数据显示 2026-01-09 港股上市（0100.HK）；法定全称与报告币种需核对
+智谱AI,HK.2513,listed,active,HKEX,,2513.HK,北京智谱华章科技股份有限公司,Zhipu AI,模型,基础模型,通用大模型,通用大模型,CN,CNY,12,关系表补录；供应商数据显示 2026-01-08 港股上市（2513.HK）
+士兰微,CN.600460,listed,active,SSE,600460.SH,600460.SH,杭州士兰微电子股份有限公司,Silan Microelectronics,能源,电力供应,功率半导体,功率半导体,CN,CNY,12,关系表补录
+新莱应材,CN.300260,listed,active,SZSE,300260.SZ,300260.SZ,昆山新莱洁净应用材料股份有限公司,Kunshan Kinglai Hygienic Materials,算力,芯片制造,设备零部件,设备零部件,CN,CNY,12,关系表补录
+华工科技,CN.000988,listed,active,SZSE,000988.SZ,000988.SZ,华工科技产业股份有限公司,HGTECH,算力,服务器与网络,光模块,光模块,CN,CNY,12,关系表补录
+太辰光,CN.300570,listed,active,SZSE,300570.SZ,300570.SZ,深圳太辰光通信股份有限公司,T&S Communications,算力,服务器与网络,光器件与光芯片,光器件与光芯片,CN,CNY,12,关系表补录
+创意电子,TW.3443,listed,active,TWSE,,3443.TW,創意電子股份有限公司,Global Unichip,算力,AI芯片,定制ASIC,定制ASIC,TW,TWD,12,关系表补录
+Coherent,US.COHR,listed,active,NYSE,,COHR.N,Coherent Corp.,Coherent,算力,服务器与网络,光模块|光器件与光芯片,光模块,US,USD,6,关系表补录
+龙芯中科,CN.688047,listed,active,SSE,688047.SH,688047.SH,龙芯中科技术股份有限公司,Loongson,算力,AI芯片,通用服务器CPU,通用服务器CPU,CN,CNY,12,原种子保留（不在 docs/csv 名单）；自主 LoongArch 指令集路线
+长川科技,CN.300604,listed,active,SZSE,300604.SZ,300604.SZ,杭州长川科技股份有限公司,Hangzhou Changchuan Technology,算力,芯片制造,测试设备,测试设备,CN,CNY,12,原种子保留（不在 docs/csv 名单）
+澜起科技,CN.688008,listed,active,SSE,688008.SH,688008.SH,澜起科技股份有限公司,Montage Technology,算力,存储,服务器内存,服务器内存,CN,CNY,12,原种子保留（不在 docs/csv 名单）；内存接口芯片
+沪电股份,CN.002463,listed,active,SZSE,002463.SZ,002463.SZ,沪士电子股份有限公司,WUS Printed Circuit,算力,服务器与网络,PCB,PCB,CN,CNY,12,原种子保留（不在 docs/csv 名单）

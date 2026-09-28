@@ -12,20 +12,33 @@ contract_liability,,合同负债,leading,quarterly,filing,合并资产负债表�
 prepayment,,预付款项,leading,quarterly,filing,合并资产负债表预付款项行,1,期末预付款项；锁定代工与封测产能通常先表现为预付款上升,CNY
 capex,,资本开支,leading,quarterly,filing,现金流量表投资活动部分,1,购建固定资产、无形资产和其他长期资产支付的现金,CNY
 operating_cash_flow,,经营活动现金流净额,confirming,quarterly,filing,现金流量表经营活动小计,1,经营活动产生的现金流量净额,CNY
-foundry_utilization,晶圆代工,晶圆代工产能利用率,leading,quarterly,ir_page,法说会简报「产能利用率」页,1,先进制程产线的产能利用率,ratio
-foundry_hpc_revenue_pct,晶圆代工,高效能运算收入占比,confirming,quarterly,ir_page,法说会简报分平台营收占比表,1,高效能运算平台收入占总收入比重,ratio
-cowos_capacity,先进封装,CoWoS 月产能,leading,quarterly,ir_page,法说会问答中的先进封装产能表述,1,CoWoS 系列先进封装的月产能,pcs
-advanced_packaging_revenue,先进封装,先进封装收入,confirming,quarterly,filing,分部报告按封装类型的收入表,1,先进封装业务的分部收入,CNY
-packaging_equipment_orders,封装设备,封装设备在手订单,leading,quarterly,filing,年报「在手订单」段落,1,期末先进封装专用设备的在手订单金额,CNY
-test_equipment_orders,测试设备,测试设备在手订单,leading,quarterly,filing,年报「在手订单」段落,1,期末测试机与分选机的在手订单金额,CNY
-abf_substrate_utilization,载板,ABF 载板稼动率,leading,monthly,vendor_api,,1,ABF 载板产线的稼动率,ratio
-hbm_bit_shipment,HBM,HBM 位元出货量,leading,quarterly,vendor_api,,1,HBM 产品的位元出货量,pcs
-hbm_asp,HBM,HBM 平均单价,confirming,quarterly,vendor_api,,1,HBM 产品的平均销售单价,USD
-dram_server_spot_price,服务器内存,服务器 DRAM 现货价,leading,daily,vendor_api,,1,服务器用 DDR5 颗粒现货均价,USD
-enterprise_ssd_shipment,企业级SSD,企业级 SSD 出货量,confirming,quarterly,vendor_api,,1,数据中心用固态硬盘出货容量,pcs
-ai_server_shipment,AI服务器,AI 服务器出货量,confirming,quarterly,vendor_api,,1,搭载加速卡的服务器整机出货台数,pcs
-accelerator_card_shipment,云端训练芯片,加速卡出货量,confirming,quarterly,filing,年报「主要产品产销量情况」表,1,云端训练加速卡的出货张数,pcs
-server_cpu_shipment,通用服务器CPU,服务器 CPU 出货量,confirming,quarterly,filing,年报「主要产品产销量情况」表,1,服务器 CPU 的出货颗数,pcs
-optical_module_800g_shipment,光模块,800G 光模块出货量,leading,quarterly,vendor_api,,1,800G 及以上速率光模块的出货只数,pcs
-liquid_cooling_order,液冷散热,液冷新签订单金额,leading,quarterly,announcement,重大合同公告与年报订单段落,1,期内新签液冷相关订单的合同金额,CNY
-compute_rental_price,算力租赁,算力租赁报价,leading,monthly,vendor_api,,1,单卡单月的智能算力租赁报价,CNY
+cowos_capacity,先进封装,先进封装(CoWoS类)产能,leading,quarterly,ir_page,来源：台积电季度法说会简报与逐字稿；位置：产能与资本开支章节；数据商字段：Wind/Bloomberg无标准字段;需从法说会纪要手工提取；注意：口径不统一;需区分CoWoS-S/L/R各代,1,台积电及同业每月先进封装晶圆产能,pcs
+tsmc_monthly_revenue,晶圆代工,台积电月度营收,confirming,monthly,announcement,来源：台积电月度营收公告；位置：全文；数据商字段：TSM Monthly Revenue；注意：含非AI业务;需结合HPC占比拆分,1,台积电每月合并营收,TWD
+foundry_hpc_revenue_pct,晶圆代工,台积电HPC平台营收占比,confirming,quarterly,ir_page,来源：台积电季度法说会简报；位置：营收结构分析页；数据商字段：需手工提取；注意：HPC口径含非AI的高性能计算,1,高性能计算平台占晶圆收入比重,ratio
+foundry_capex_total,晶圆代工,晶圆代工资本开支合计,leading,quarterly,filing,来源：各厂年报与法说会；位置：资本开支指引章节；数据商字段：CAPEX(合并报表口径)；注意：指引常在年中调整;需追踪修正,1,台积电+三星+中芯等主要代工厂年度资本开支指引,USD
+hbm_asp,HBM,HBM合约价格,leading,monthly,vendor_api,来源：第三方研究机构价格报告；位置：存储价格月报；数据商字段：TrendForce/DRAMeXchange合约价；注意：合约价与现货价差异大;长约锁价使价格变化滞后体现,1,各世代HBM的季度合约均价,USD
+hbm_dram_capacity_share,HBM,HBM产能占DRAM总产能比重,leading,quarterly,vendor_api,来源：SK海力士/三星/美光法说会；位置：产能规划章节；数据商字段：需第三方测算；注意：HBM单位晶圆产出低于标准DRAM;需换算,1,HBM晶圆投片占DRAM总投片比例,ratio
+memory_hbm_revenue_pct,HBM,存储厂商HBM收入占比,confirming,quarterly,filing,来源：SK海力士/美光季度财报；位置：业务结构章节；数据商字段：需手工提取；注意：部分厂商未单独披露;需估算,1,HBM收入占存储业务收入比重,ratio
+semi_equipment_billings,晶圆制造设备,半导体设备出货金额(北美/日本),leading,monthly,vendor_api,来源：SEMI月度统计；位置：全文；数据商字段：SEMI Billings；注意：含非AI用途设备;领先晶圆厂产能约2-3个季度,1,北美与日本半导体设备制造商月度出货金额,USD
+equipment_backlog,晶圆制造设备,主要设备商在手订单,leading,quarterly,filing,来源：各厂季度财报；位置：资产负债表与MD&A；数据商字段：Backlog / Deferred Revenue；注意：各厂定义不一;部分不披露backlog,1,应用材料/泛林/东京电子/北方华创的在手订单或递延收入,USD
+china_equipment_localization_rate,晶圆制造设备,中国晶圆厂设备国产化率,confirming,semiannual,vendor_api,来源：行业研究报告与招标公告；位置：设备招标章节；数据商字段：无标准字段;需第三方测算；注意：招标口径与实际到货口径差异大,1,国产设备在新增采购中的金额占比,ratio
+eda_china_revenue,EDA工具,EDA厂商中国区收入,confirming,quarterly,filing,来源：SNPS/CDNS 10-K与10-Q；位置：地区收入分部；数据商字段：Revenue by Geography；注意：地区口径按客户注册地非使用地,1,新思/铿腾来自中国区的收入及占比,USD
+nvda_datacenter_revenue,云端训练芯片,英伟达数据中心业务收入,confirming,quarterly,filing,来源：NVDA 10-Q/10-K；位置：分部报告；数据商字段：Revenue - Data Center Segment；注意：全球需求的总量指标;无法拆分区域,1,数据中心分部季度收入,USD
+nvda_datacenter_guidance,云端训练芯片,英伟达数据中心收入指引,leading,quarterly,ir_page,来源：NVDA季度业绩会；位置：指引章节；数据商字段：Guidance(需手工录入)；注意：指引口径含全部业务;需结合业务结构判断,1,下季度收入指引中枢,USD
+accelerator_card_shipment,云端训练芯片,AI加速卡出货量(全球),confirming,quarterly,vendor_api,来源：IDC/TrendForce出货报告；位置：加速器出货章节；数据商字段：无标准字段;第三方估算；注意：各机构口径差异大;需固定单一来源做趋势,1,主要厂商AI加速卡年度/季度出货量,pcs
+china_ai_chip_domestic_share,云端训练芯片,中国AI芯片国产份额,confirming,semiannual,vendor_api,来源：IDC中国AI加速器市场报告；位置：份额章节；数据商字段：无标准字段；注意：出货量口径与收入口径结论可能相反,1,国产芯片占中国AI加速卡出货或收入比重,ratio
+gov_procurement_ai_chip_listings,云端训练芯片,国产AI芯片政府采购入围数量,leading,irregular,announcement,来源：采购目录公告；位置：目录名单；数据商字段：无标准字段；注意：入围不等于放量;需结合实际采购金额,1,进入安全可靠采购目录的国产AI芯片型号数,pcs
+osat_advanced_packaging_revenue_pct,先进封装,封测厂先进封装收入占比,confirming,quarterly,filing,来源：日月光/长电/通富季报；位置：业务结构；数据商字段：需手工提取；注意：先进封装定义各厂不一,1,先进封装占封测收入比重,ratio
+ai_server_shipment,AI服务器,AI服务器出货量,confirming,quarterly,vendor_api,来源：IDC/TrendForce服务器报告；位置：AI服务器章节；数据商字段：无标准字段；注意：AI服务器定义门槛不一(是否含推理服务器),1,全球及中国AI服务器季度出货台数,pcs
+odm_ai_server_revenue_pct,AI服务器,服务器代工厂AI服务器营收占比,confirming,monthly,filing,来源：各厂月度营收与法说会；位置：营收结构；数据商字段：需手工提取；注意：台厂月营收为合并口径;AI拆分仅在法说会给出,1,鸿海/广达/纬创/工业富联AI服务器收入占比,ratio
+optical_module_highspeed_shipment,光模块,高速光模块出货量(800G/1.6T),leading,quarterly,vendor_api,来源：LightCounting/Omdia报告；位置：光模块出货章节；数据商字段：无标准字段;第三方估算；注意：代际切换期口径混乱;需区分速率,1,主要厂商高速光模块季度出货,pcs
+optical_module_overseas_revenue_pct,光模块,光模块厂商海外收入占比,confirming,semiannual,filing,来源：各公司年报与半年报；位置：分地区收入；数据商字段：Revenue by Region；注意：海外收入非全部来自云厂;需结合客户集中度,1,中际旭创/新易盛境外收入占比,ratio
+optical_module_top5_customer_pct,光模块,光模块厂商前五大客户集中度,confirming,annual,filing,来源：各公司年报；位置：重大客户披露；数据商字段：Customer Concentration；注意：中国上市公司多不披露客户名称,1,前五大客户收入占比,ratio
+optical_chip_localization_rate,光器件与光芯片,光芯片国产化率,leading,semiannual,vendor_api,来源：行业研究与公司交流；位置：供应链章节；数据商字段：无标准字段；注意：高速率光芯片国产化率显著低于低速率,1,国产DFB/EML光芯片在光模块BOM中的占比,ratio
+liquid_cooling_penetration,液冷散热,液冷渗透率,leading,semiannual,vendor_api,来源：IDC/赛迪液冷市场报告；位置：渗透率章节；数据商字段：无标准字段;第三方估算；注意：冷板式与浸没式需分开统计,1,液冷方案在新增AI服务器机柜中的占比,ratio
+dc_power_queue_time,IDC,数据中心电力接入排队时长,leading,semiannual,vendor_api,来源：电网公司公告与行业媒体；位置：并网章节；数据商字段：无标准字段；注意：区域差异极大;需按具体电力市场追踪,-1,主要市场新增数据中心并网平均等待时间,days
+hyperscaler_capex_total,公有云,北美四大云厂合计资本开支,leading,quarterly,filing,来源：四家10-Q与业绩会；位置：现金流量表与指引；数据商字段：Capital Expenditures；注意：含非AI用途(如自建园区土建);需结合管理层表述拆分,1,微软/谷歌/亚马逊/Meta季度资本开支合计及指引,USD
+gpu_cloud_rpo,算力租赁,GPU云厂商在手合约金额,leading,quarterly,filing,来源：CRWV 10-Q/10-K；位置：收入确认附注；数据商字段：Remaining Performance Obligation(RPO)；注意：RPO含长期合约;需看确认节奏,1,CoreWeave等GPU云的剩余履约义务,USD
+model_api_price,通用大模型,主流模型API单位推理定价,leading,monthly,ir_page,来源：各模型厂商官方定价页；位置：定价页；数据商字段：无标准字段;需手工采集；注意：促销与阶梯定价干扰;需固定口径对比,1,每百万token输入/输出价格,USD
+open_model_derivatives,通用大模型,开源模型衍生数量,confirming,monthly,vendor_api,来源：模型社区公开统计；位置：模型主页；数据商字段：Hugging Face API；注意：下载数受刷量影响;衍生模型数更稳健,1,主流开源模型在模型社区的衍生模型与下载数,pcs
+token_volume,通用大模型,AI应用侧token调用量,confirming,quarterly,announcement,来源：各厂业绩会与技术博客；位置：业务进展章节；数据商字段：无标准字段；注意：披露不连续;口径常变更,1,云厂商或模型厂商披露的token处理量,pcs

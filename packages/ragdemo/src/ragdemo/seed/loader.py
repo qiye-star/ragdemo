@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -23,6 +23,7 @@ from ragdemo.metrics.definitions import (
     SourceMapSpec,
     publish_metric,
     publish_source_map,
+    retire_metric,
 )
 from ragdemo.seed.taxonomy import DEFAULT_TAXONOMY_PATH, Taxonomy, load_taxonomy
 
@@ -84,61 +85,106 @@ def _validate_entities(rows: list[dict[str, str]], taxonomy: Taxonomy) -> list[d
         unknown = taxonomy.unknown([*nodes, row["primary_node"]])
         if unknown:
             raise SeedError(f"第 {i} 行环节名不在环节表中: {unknown}（{eid}）")
-        if not row["listed_date"]:
+        listed = row.get("entity_type", "listed") == "listed"
+        if listed and not row["listed_date"]:
             raise SeedError(f"第 {i} 行缺少 listed_date: {eid}（观点评分需要它剔除次新股）")
+        valid_from = row.get("valid_from") or row["listed_date"]
+        if not valid_from:
+            raise SeedError(f"第 {i} 行非上市实体要给 valid_from（环节归属的起点）: {eid}")
 
         out.append(
             {
                 **{k: (v or None) for k, v in row.items() if k in NULLABLE_ENTITY_COLUMNS},
                 **{k: v for k, v in row.items() if k not in NULLABLE_ENTITY_COLUMNS},
                 "l3_node": nodes,
-                "listed_date": date.fromisoformat(row["listed_date"]),
+                "listed_date": date.fromisoformat(row["listed_date"])
+                if row["listed_date"]
+                else None,
+                "valid_from": date.fromisoformat(valid_from),
                 "fiscal_year_end": int(row["fiscal_year_end"]) if row["fiscal_year_end"] else None,
             }
         )
     return out
 
 
-def load_entities(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = None) -> int:
-    """导入实体，同时为每个 l3_node 写一行 entity_node_membership。"""
+_ENTITY_COLUMNS = (
+    "entity_id", "name_full", "name_short", "name_en", "entity_type", "market", "tushare_code",
+    "l1_layer", "l2_segment", "l3_node", "primary_node", "hq_country", "status", "listed_date",
+    "currency", "fiscal_year_end", "notes",
+)  # fmt: skip
+
+
+def load_entities(
+    conn: Connection,
+    csv_path: Path,
+    taxonomy: Taxonomy | None = None,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """导入 / 同步实体，并同步每个实体的环节归属（时点表）。
+
+    `core.entity` 是"当前画像"表，已有的行直接更新。环节归属是时点表：
+    - 新实体的归属 known_at 取 valid_from 当日 00:00（种子的既有约定，03 §6.3）；
+    - 已有实体新增的环节从导入时刻 `now` 起才算已知——不回溯到上市日；
+    - 种子里去掉的环节（或主环节换了）记 superseded_at = now，不删行。
+    CSV 里没有、库里有的实体不动：它可能已经挂着财务 / 行情数据。
+    """
     records = _validate_entities(_read(csv_path), _taxonomy_or_default(taxonomy))
+    now = now or datetime.now(UTC)
+    columns = ", ".join(_ENTITY_COLUMNS)
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in _ENTITY_COLUMNS if c != "entity_id")
     with conn.transaction():
         for r in records:
+            existed = conn.execute(
+                "SELECT 1 FROM core.entity WHERE entity_id = %s", (r["entity_id"],)
+            ).fetchone()
             conn.execute(
-                "INSERT INTO core.entity (entity_id, name_full, name_short, name_en,"
-                " entity_type, market, tushare_code, l1_layer, l2_segment, l3_node,"
-                " primary_node, hq_country, status, listed_date, currency,"
-                " fiscal_year_end, notes) "
-                "VALUES (%(entity_id)s,%(name_full)s,%(name_short)s,%(name_en)s,"
-                " %(entity_type)s,%(market)s,%(tushare_code)s,%(l1_layer)s,%(l2_segment)s,"
-                " %(l3_node)s,%(primary_node)s,%(hq_country)s,%(status)s,%(listed_date)s,"
-                " %(currency)s,%(fiscal_year_end)s,%(notes)s)",
+                f"INSERT INTO core.entity ({columns}) VALUES"
+                f" ({', '.join(f'%({c})s' for c in _ENTITY_COLUMNS)})"
+                f" ON CONFLICT (entity_id) DO UPDATE SET {updates}, updated_at = now()",
                 r,
             )
-            for node in r["l3_node"]:
-                conn.execute(
-                    "INSERT INTO core.entity_node_membership "
-                    "(entity_id, l3_node, is_primary, valid_from, known_at, source,"
-                    " ingest_run_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                    (
-                        r["entity_id"],
-                        node,
-                        node == r["primary_node"],
-                        r["listed_date"],
-                        _known_at_for(r["listed_date"]),
-                        SEED_SOURCE,
-                        SEED_RUN_ID,
-                    ),
-                )
+            _sync_membership(conn, r, is_new=existed is None, now=now)
     return len(records)
 
 
-def _load_simple(conn: Connection, csv_path: Path, table: str, columns: list[str]) -> int:
-    """按列名直插的简单导入，用于别名 / 指标 / 规则等无派生逻辑的表。
+def _sync_membership(conn: Connection, r: dict[str, Any], *, is_new: bool, now: datetime) -> None:
+    desired = {node: node == r["primary_node"] for node in r["l3_node"]}
+    live = {
+        str(row[0]): bool(row[1])
+        for row in conn.execute(
+            "SELECT l3_node, is_primary FROM core.entity_node_membership"
+            " WHERE entity_id = %s AND superseded_at IS NULL",
+            (r["entity_id"],),
+        ).fetchall()
+    }
+    for node, primary in live.items():
+        if desired.get(node) != primary:
+            conn.execute(
+                "UPDATE core.entity_node_membership SET superseded_at = %s"
+                " WHERE entity_id = %s AND l3_node = %s AND superseded_at IS NULL",
+                (now, r["entity_id"], node),
+            )
+    for node, primary in desired.items():
+        if live.get(node) == primary:
+            continue
+        valid_from, known_at = (
+            (r["valid_from"], _known_at_for(r["valid_from"])) if is_new else (now.date(), now)
+        )
+        conn.execute(
+            "INSERT INTO core.entity_node_membership "
+            "(entity_id, l3_node, is_primary, valid_from, known_at, source, ingest_run_id)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (r["entity_id"], node, primary, valid_from, known_at, SEED_SOURCE, SEED_RUN_ID),
+        )
+
+
+def _load_simple(
+    conn: Connection, csv_path: Path, table: str, columns: list[str], *, on_conflict: str = ""
+) -> int:
+    """按列名直插的简单导入，用于别名这类无派生逻辑的表。
 
     空单元格对应的列会被整个省略，而不是写入 NULL——这样数据库的 DEFAULT 才会生效。
-    node_metric.direction 与 propagation_rule.lag_days 都是 NOT NULL DEFAULT，
-    写 NULL 会直接违反约束。
     """
     rows = _read(csv_path)
     if not rows:
@@ -151,14 +197,14 @@ def _load_simple(conn: Connection, csv_path: Path, table: str, columns: list[str
             present = [c for c in columns if row[c] != ""]
             placeholders = ",".join(f"%({c})s" for c in present)
             conn.execute(
-                f"INSERT INTO {table} ({','.join(present)}) VALUES ({placeholders})",
+                f"INSERT INTO {table} ({','.join(present)}) VALUES ({placeholders}) {on_conflict}",
                 {c: row[c] for c in present},
             )
     return len(rows)
 
 
-def load_aliases(conn: Connection, csv_path: Path) -> int:
-    """导入别名。
+def load_aliases(conn: Connection, csv_path: Path, *, now: datetime | None = None) -> int:
+    """导入别名（重复导入是空操作）。
 
     别名一对多是允许的（「中兴」「长城」天然歧义，消歧靠上下文规则），
     但别名等于**另一家实体的全称**一定是录入错误，必须拦下来
@@ -183,15 +229,27 @@ def load_aliases(conn: Connection, csv_path: Path) -> int:
         csv_path,
         "core.entity_alias",
         ["alias", "entity_id", "alias_type", "source", "confidence"],
+        on_conflict="ON CONFLICT (alias, entity_id) DO NOTHING",
     )
 
 
-def load_metrics(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = None) -> int:
-    """指标定义经口径版本化入口写入（迁移 018）：每个指标生成版本 1，
-    known_at 取固定基线 METRIC_BASELINE_KNOWN_AT，在任何历史 as_of 下都可见。
-    与种子实体 known_at 取 valid_from 是同一个有意接受的乐观偏差（03 §6.3）。"""
+def load_metrics(
+    conn: Connection,
+    csv_path: Path,
+    taxonomy: Taxonomy | None = None,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """指标定义经口径版本化入口写入 / 同步（迁移 018）。
+
+    - 新指标：版本 1，known_at 取固定基线 METRIC_BASELINE_KNOWN_AT，任何历史 as_of 下
+      都可见——与种子实体 known_at 取 valid_from 是同一个有意接受的乐观偏差（03 §6.3）；
+    - 口径变了：发新版本，known_at = 导入时刻 `now`（口径变更是现在才知道的）；
+    - 种子里去掉的：现行版本在 `now` 失效（retire_metric），历史版本保留。
+    """
     rows = _read(csv_path)
     tax = _taxonomy_or_default(taxonomy)
+    now = now or datetime.now(UTC)
     for i, row in enumerate(rows, start=2):
         # l3_node 可空：revenue_total / ai_revenue_pct 这类跨环节指标本来就不挂环节。
         unknown = tax.unknown([row.get("l3_node", "")])
@@ -200,6 +258,12 @@ def load_metrics(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = N
     missing = set(_METRIC_CSV_COLUMNS) - set(rows[0]) if rows else set()
     if missing:
         raise SeedError(f"{csv_path.name} 缺少列: {sorted(missing)}")
+    live = {
+        str(r[0])
+        for r in conn.execute(
+            "SELECT metric_id FROM core.node_metric_version WHERE superseded_at IS NULL"
+        ).fetchall()
+    }
     with conn.transaction():
         for row in rows:
             spec = MetricSpec(
@@ -214,14 +278,18 @@ def load_metrics(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = N
                 extraction_hint=row["extraction_hint"] or None,
                 direction=int(row["direction"]) if row["direction"] else 1,
             )
+            existing = spec.metric_id in live
             publish_metric(
                 conn,
                 spec,
                 author="seed",
-                known_at=METRIC_BASELINE_KNOWN_AT,
+                known_at=now if existing else METRIC_BASELINE_KNOWN_AT,
                 source=SEED_SOURCE,
                 ingest_run_id="seed",
+                change_note="种子同步" if existing else None,
             )
+        for metric_id in sorted(live - {r["metric_id"] for r in rows}):
+            retire_metric(conn, metric_id, known_at=now)
     return len(rows)
 
 
@@ -239,7 +307,7 @@ _METRIC_CSV_COLUMNS = (
 )
 
 
-def load_source_maps(conn: Connection, csv_path: Path) -> int:
+def load_source_maps(conn: Connection, csv_path: Path, *, now: datetime | None = None) -> int:
     """供应商字段映射经口径版本化入口写入（迁移 018）：版本 1 取固定基线时刻。
     幂等——已存在且内容相同的行不产生新版本，可以对已经种过数据的库重复执行。"""
     rows = _read(csv_path)
@@ -263,12 +331,38 @@ def load_source_maps(conn: Connection, csv_path: Path) -> int:
     return len(rows)
 
 
-def load_relations(conn: Connection, csv_path: Path) -> int:
+def load_relations(conn: Connection, csv_path: Path, *, now: datetime | None = None) -> int:
+    """导入 / 同步实体关系（时点表）。
+
+    按 (from, to, 类型) 同步：库里已有同一三元组的现行种子关系就沿用它（不因 valid_from
+    不同而多出一条"同时有效"的重复）；种子里去掉的现行种子关系记 superseded_at = now。
+    只动 source = manual:seed 的行——别的来源写入的关系不归种子管。
+    """
     rows = _read(csv_path)
+    now = now or datetime.now(UTC)
+    for i, row in enumerate(rows, start=2):
+        if not row.get("valid_from"):
+            raise SeedError(f"第 {i} 行缺少 valid_from")
+    wanted = {(r["from_entity"], r["to_entity"], r["relation_type"]) for r in rows}
     with conn.transaction():
-        for i, row in enumerate(rows, start=2):
-            if not row.get("valid_from"):
-                raise SeedError(f"第 {i} 行缺少 valid_from")
+        live = {
+            (str(r[0]), str(r[1]), str(r[2]))
+            for r in conn.execute(
+                "SELECT from_entity, to_entity, relation_type::text FROM core.entity_relation"
+                " WHERE superseded_at IS NULL AND source = %s",
+                (SEED_SOURCE,),
+            ).fetchall()
+        }
+        for src, dst, kind in sorted(live - wanted):
+            conn.execute(
+                "UPDATE core.entity_relation SET superseded_at = %s"
+                " WHERE from_entity = %s AND to_entity = %s AND relation_type = %s"
+                "   AND superseded_at IS NULL AND source = %s",
+                (now, src, dst, kind, SEED_SOURCE),
+            )
+        for row in rows:
+            if (row["from_entity"], row["to_entity"], row["relation_type"]) in live:
+                continue
             vf = date.fromisoformat(row["valid_from"])
             conn.execute(
                 "INSERT INTO core.entity_relation (from_entity, to_entity, relation_type,"
@@ -293,9 +387,32 @@ def load_relations(conn: Connection, csv_path: Path) -> int:
     return len(rows)
 
 
+_RULE_COLUMNS = (
+    "trigger_node",
+    "trigger_event",
+    "affected_node",
+    "direction",
+    "lag_days",
+    "mechanism",
+    "weight_field",
+    "confidence",
+    "author",
+)
+
+
+def _rule_key(values: Sequence[object]) -> tuple[str, ...]:
+    return tuple("" if v is None else str(v) for v in values)
+
+
 def load_propagation_rules(
-    conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = None
+    conn: Connection,
+    csv_path: Path,
+    taxonomy: Taxonomy | None = None,
+    *,
+    now: datetime | None = None,
 ) -> int:
+    """导入 / 同步传导规则。规则表不是时点表，靠 enabled 开关：内容完全相同的现行规则
+    不重复插入；种子里去掉的现行规则置 enabled = false（不删行，旧观点的解释还引用它）。"""
     rows = _read(csv_path)
     tax = _taxonomy_or_default(taxonomy)
     for i, row in enumerate(rows, start=2):
@@ -305,25 +422,34 @@ def load_propagation_rules(
                 f"第 {i} 行触发/受影响环节不在环节表中: {unknown}"
                 f"（规则会匹配不到任何实体，且不会报错）"
             )
-    return _load_simple(
-        conn,
-        csv_path,
-        "core.propagation_rule",
-        [
-            "trigger_node",
-            "trigger_event",
-            "affected_node",
-            "direction",
-            "lag_days",
-            "mechanism",
-            "weight_field",
-            "confidence",
-            "author",
-        ],
-    )
+    wanted = {_rule_key([row[c] for c in _RULE_COLUMNS]) for row in rows}
+    with conn.transaction():
+        live = {
+            _rule_key(r[1:]): int(str(r[0]))
+            for r in conn.execute(
+                f"SELECT rule_id, {', '.join(_RULE_COLUMNS)} FROM core.propagation_rule"
+                " WHERE enabled"
+            ).fetchall()
+        }
+        for k, rule_id in live.items():
+            if k not in wanted:
+                conn.execute(
+                    "UPDATE core.propagation_rule SET enabled = false WHERE rule_id = %s",
+                    (rule_id,),
+                )
+        for row in rows:
+            if _rule_key([row[c] for c in _RULE_COLUMNS]) in live:
+                continue
+            present = [c for c in _RULE_COLUMNS if row[c] != ""]
+            conn.execute(
+                f"INSERT INTO core.propagation_rule ({', '.join(present)})"
+                f" VALUES ({', '.join(f'%({c})s' for c in present)})",
+                {c: row[c] for c in present},
+            )
+    return len(rows)
 
 
-_LOADERS: list[tuple[str, str, Callable[[Connection, Path], int]]] = [
+_LOADERS: list[tuple[str, str, Callable[..., int]]] = [
     ("entity.csv", "core.entity", load_entities),
     ("entity_alias.csv", "core.entity_alias", load_aliases),
     ("node_metric.csv", "core.node_metric", load_metrics),
@@ -333,11 +459,12 @@ _LOADERS: list[tuple[str, str, Callable[[Connection, Path], int]]] = [
 ]
 
 
-def load_all(conn: Connection, seed_dir: Path) -> dict[str, int]:
-    """按依赖顺序导入 seed_dir 下存在的 CSV，返回每张表的导入行数。"""
+def load_all(conn: Connection, seed_dir: Path, *, now: datetime | None = None) -> dict[str, int]:
+    """按依赖顺序导入 / 同步 seed_dir 下存在的 CSV，返回每张表的行数。重复执行是安全的。"""
+    now = now or datetime.now(UTC)
     counts: dict[str, int] = {}
     for filename, table, fn in _LOADERS:
         path = seed_dir / filename
         if path.exists():
-            counts[table] = fn(conn, path)
+            counts[table] = fn(conn, path, now=now)
     return counts

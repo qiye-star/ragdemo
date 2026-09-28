@@ -27,6 +27,7 @@ from ragdemo.metrics.definitions import (
     publish_ai_revenue_rule,
     publish_metric,
     publish_source_map,
+    retire_metric,
     source_maps_as_of,
 )
 from ragdemo_core.db.migrate import migrate
@@ -225,3 +226,32 @@ def test_migration_backfills_existing_rows_as_baseline_version(
         )
         (mapping,) = source_maps_as_of(c, "revenue_total", as_of=datetime(2010, 1, 1, tzinfo=CST))
         assert mapping.version == 1
+
+
+# --- 停用指标 --------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_retired_metric_disappears_from_now_but_history_still_sees_it(
+    conn: psycopg.Connection,
+) -> None:
+    _baseline(conn)
+    assert retire_metric(conn, "revenue_total", known_at=T1)
+    assert metric_as_of(conn, "revenue_total", as_of=AFTER_T1) is None
+    before = metric_as_of(conn, "revenue_total", as_of=BEFORE_T1)
+    assert before is not None and before.spec.definition == REVENUE.definition
+    assert not retire_metric(conn, "revenue_total", known_at=AFTER_T1), "已停用的再停用是空操作"
+
+
+@pytest.mark.db
+def test_metric_with_a_live_source_map_cannot_be_retired(conn: psycopg.Connection) -> None:
+    _baseline(conn)
+    publish_source_map(
+        conn,
+        SourceMapSpec(metric_id="revenue_total", provider="wind", provider_field="营业收入"),
+        author="seed",
+        known_at=METRIC_BASELINE_KNOWN_AT,
+        ingest_run_id="t",
+    )
+    with pytest.raises(ValueError, match="映射"):
+        retire_metric(conn, "revenue_total", known_at=T1)

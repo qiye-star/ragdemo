@@ -1,0 +1,31 @@
+seq,metric_id,l3_node,frequency,source_type,unit,direction,curation_note
+1,cowos_capacity,先进封装,quarterly,ir_page,pcs,1,沿用原指标 ID（同一口径：先进封装晶圆月产能）
+2,tsmc_monthly_revenue,晶圆代工,monthly,announcement,TWD,1,
+3,foundry_hpc_revenue_pct,晶圆代工,quarterly,ir_page,ratio,1,沿用原指标 ID
+4,foundry_capex_total,晶圆代工,quarterly,filing,USD,1,多家合计，币种折算为美元
+5,hbm_asp,HBM,monthly,vendor_api,USD,1,沿用原指标 ID；源表频率"月度/季度"取月度
+6,hbm_dram_capacity_share,HBM,quarterly,vendor_api,ratio,1,
+7,memory_hbm_revenue_pct,HBM,quarterly,filing,ratio,1,
+8,semi_equipment_billings,晶圆制造设备,monthly,vendor_api,USD,1,
+9,equipment_backlog,晶圆制造设备,quarterly,filing,USD,1,多家合计，币种折算为美元
+10,china_equipment_localization_rate,晶圆制造设备,semiannual,vendor_api,ratio,1,
+11,eda_china_revenue,EDA工具,quarterly,filing,USD,1,
+12,nvda_datacenter_revenue,云端训练芯片,quarterly,filing,USD,1,
+13,nvda_datacenter_guidance,云端训练芯片,quarterly,ir_page,USD,1,
+14,accelerator_card_shipment,云端训练芯片,quarterly,vendor_api,pcs,1,沿用原指标 ID；来源由年报改为第三方估算
+15,china_ai_chip_domestic_share,云端训练芯片,semiannual,vendor_api,ratio,1,
+16,gov_procurement_ai_chip_listings,云端训练芯片,irregular,announcement,pcs,1,
+17,osat_advanced_packaging_revenue_pct,先进封装,quarterly,filing,ratio,1,
+18,ai_server_shipment,AI服务器,quarterly,vendor_api,pcs,1,沿用原指标 ID
+19,odm_ai_server_revenue_pct,AI服务器,monthly,filing,ratio,1,源表频率"月度/季度"取月度
+20,optical_module_highspeed_shipment,光模块,quarterly,vendor_api,pcs,1,取代原 optical_module_800g_shipment（口径扩到 800G/1.6T）
+21,optical_module_overseas_revenue_pct,光模块,semiannual,filing,ratio,1,
+22,optical_module_top5_customer_pct,光模块,annual,filing,ratio,1,
+23,optical_chip_localization_rate,光器件与光芯片,semiannual,vendor_api,ratio,1,
+24,liquid_cooling_penetration,液冷散热,semiannual,vendor_api,ratio,1,
+25,dc_power_queue_time,IDC,semiannual,vendor_api,days,-1,排队越长越不利
+26,hyperscaler_capex_total,公有云,quarterly,filing,USD,1,
+27,gpu_cloud_rpo,算力租赁,quarterly,filing,USD,1,
+28,model_api_price,通用大模型,monthly,ir_page,USD,1,每百万 token 价格
+29,open_model_derivatives,通用大模型,monthly,vendor_api,pcs,1,
+30,token_volume,通用大模型,quarterly,announcement,pcs,1,

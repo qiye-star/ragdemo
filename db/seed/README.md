@@ -1,66 +1,78 @@
 # 种子数据
 
-由创始人手工维护（工作流 W9.1，见 `docs/11-sdlc.md` §3）。
 **这些 CSV 提交进仓库**——P0 验收（`docs/10-roadmap.md`）要求在干净 clone 上
 `make seed` 就能复现表计数，忽略它们等于让验收不可复现。
 
-| 文件 | 目标表 | P0 目标数量 | 当前 |
+## 从哪来：`docs/csv` → `db/seed`
+
+2026-09-28 起，实体、别名、关系、指标、传导规则由创始人维护的底稿 **`docs/csv/`**
+生成，不再手改 `db/seed/*.csv`：
+
+```bash
+ragdemo db seed-listing-dates   # 联网：从供应商取上市日期 → sources/listing_dates.csv
+ragdemo db seed-build           # 离线、确定性：docs/csv + sources/ → db/seed/*.csv
+ragdemo db seed                 # 同步进库（可重复执行）
+```
+
+`docs/csv` 改了只需重跑后两步。`sources/` 里是把人读底稿落成入库格式所需的整理结果：
+
+| 文件 | 内容 |
+|---|---|
+| `entity_curation.csv` | 每家公司一行：实体 ID、类型、市场、代码、L1/L2/L3 环节、币种、财年截止月 |
+| `relation_names.csv` | 关系表里的别名（ASML → 阿斯麦、阿里云 → 阿里巴巴）与泛称（"北美云厂"） |
+| `metric_curation.csv` | 指标字典每条的 metric_id、环节、频率、来源类型、单位、方向 |
+| `rule_curation.csv` | 传导规则每条的触发事件代号，以及"L3网络(光模块/交换机)"展开成的环节 |
+| `kept_relations.csv` | 原种子里 docs/csv 没有表达的关系（含不在名单里的 4 家的关系），原样保留 |
+| `listing_dates.csv` | 上市日期，每行带来源（tushare / wind）与取数日期 |
+| `docs_csv_version.csv` | 底稿编制日期（新关系的 valid_from） |
+
+`taxonomy.csv`（环节表）仍然手工维护；新环节先加在这里。
+
+| 文件 | 目标表 | P0 下限 | 当前 |
 |---|---|---|---|
-| `taxonomy.csv` | 无（导入时校验用） | — | 38 个 L3 环节 |
-| `entity.csv` | `core.entity` + `core.entity_node_membership` | 100 | **18** |
-| `entity_alias.csv` | `core.entity_alias` | 约 400 | **73** |
-| `entity_relation.csv` | `core.entity_relation` | 200 | **30** |
-| `node_metric.csv` | `core.node_metric` | 30 | **30 ✅** |
-| `propagation_rule.csv` | `core.propagation_rule` | 15 | **15 ✅** |
+| `entity.csv` | `core.entity` + `core.entity_node_membership` | 100 | 118 |
+| `entity_alias.csv` | `core.entity_alias` | — | 528 |
+| `entity_relation.csv` | `core.entity_relation`（现行） | 150 | 193 |
+| `node_metric.csv` | `core.node_metric_version`（现行） | 30 | 43 |
+| `propagation_rule.csv` | `core.propagation_rule`（启用） | 15 | 44 |
 
-## 当前这批数据是什么
+实体 118 = docs/csv 名单 100 + 关系表补录的名单外公司 14 + 原种子保留 4（龙芯中科、
+长川科技、澜起科技、沪电股份，已有 Wind 财务数据）。指标 43 = 13 个财务报表科目
+（Wind 财务数据挂在上面）+ 指标字典 30 个。
 
-以 **海光信息（`CN.688041`）** 为核心的一个完整样例切片：海光本身，加上
-它在产业链上绕不开的 17 家对手方（整机客户、封测、存储、竞品、代工）。
-`entity_relation` 因此能写出真实拓扑，而不是孤立的一行。
+## 构建时写死的规则
 
-`node_metric` 与 `propagation_rule` 是**环节级**的，不随公司数量增减，
-已按 P0 验收标准做满 30 条与 15 条。
+- **名字解析是严格的。** 关系表里的名字必须是名单简称、`relation_names.csv` 登记的别名或
+  泛称；都不是就构建失败，不静默丢关系。
+- **泛称不是实体。** "工业富联 供货 北美云厂"不建关系，写进工业富联的 `notes`，信息不丢。
+- **关系不回溯。** 底稿里的关系没有日期；新关系 `valid_from` = 底稿编制日期
+  （2026-09-28），`known_at` = 当日 00:00。把"行业共识"记成多年前就已知是前视。
+  与原种子同一 (from, to, 类型) 的关系沿用原行。
+- **上市日期取供应商数据**（A 股 Tushare `stock_basic`，限频时退到 Wind；境外 Wind），
+  两家对 59 只 A 股一致。原种子手填的 7 个上市日期有误（浪潮信息差两年），已按供应商更正。
+- 底稿与供应商数据冲突时按供应商：长鑫存储已于 2026-07-27 上市（688825.SH）、MiniMax
+  （0100.HK）与智谱（2513.HK）已于 2026 年 1 月上市，底稿仍写非上市 / 未收录。
+- 传导规则的时滞取下限（"1-2个季度" → 90 天）；可观测验证点与失效条件并进 `mechanism`；
+  `author` = `docs/csv#<序号>` 指回底稿。底稿第 2、11 条正文含裸逗号导致错列，按规则还原。
 
-实体与关系的 100 / 200 待创始人补齐。`tests/test_p0_acceptance.py` 里的
-期望值**一个都没有改**，那四条断言带 `seed_full` 标记，补完数据后
-`make accept-p0` 会自动转绿。
+## 同步语义（`ragdemo db seed` 可重复执行）
 
-## 录入约定
+库里已经有真实数据（财务、行情），不能清库重来：
 
-- `l3_node` 用 `|` 分隔多个环节；`primary_node` 必须是其中之一。
-- **所有环节名必须在 `taxonomy.csv` 里在册。** 环节名是 `entity`、
-  `entity_node_membership`、`node_metric`、`propagation_rule`、`opinion`
-  五张表之间的事实联结键，而数据库对它一个字都不校验——一个错字不会报错，
-  只会让该环节的评分基准悄悄变成空集、让传导规则悄悄匹配不到任何实体。
-  导入器会交叉校验并拒绝不在册的环节名。
-- `listed_date` 必填——观点评分要用它剔除上市不足 60 个交易日的公司。
-- 别名可以一对多（「长城」「中兴」天然歧义），但**不得等于另一家实体的全称**，
-  那一定是录入错误，导入器会拒绝。
-- 导入时 `known_at` 取 `valid_from` 当日 00:00，不取导入时间。
-  这是一个已知的、有意接受的乐观偏差，见 `docs/03-point-in-time.md` §6.3。
-  缓解方式是 `source` 统一标 `manual:seed`，评测报告把依赖手工关系的观点单独分组。
+- `core.entity` 是当前画像表，直接更新；CSV 里没有、库里有的实体不动。
+- 环节归属、关系是时点表：去掉的行记 `superseded_at` = 导入时刻，不删行；
+  **已有实体新增的环节从导入时刻起才算已知**，新实体的归属仍取 `valid_from` 当日 00:00
+  （上市公司 = 上市日，非上市 = 底稿编制日）——这是一个已知的、有意接受的乐观偏差，
+  见 `docs/03-point-in-time.md` §6.3。
+- 指标：新指标版本 1 取固定基线时刻；口径变了发新版本（known_at = 导入时刻）；
+  去掉的指标现行版本失效（还有现行供应商映射的拒绝停用）。
+- 传导规则：内容相同的不重复插入，去掉的置 `enabled = false`。
+- 别名只增不删。
 
 ## 数据质量与待核对项
 
-只录**公开可查的事实**：公司名称、证券代码、产业链归属、公开披露或行业common
-knowledge 层面的供应/客户/竞争关系。不含任何采购自供应商的数据。
-
-两处刻意的保守处理：
-
-1. **`share_estimate` 一律留空。** 没有公开披露的份额就不编一个精确数字。
-   `strength` 只用 0.3 / 0.6 / 0.9 三档表达定性强弱，配合
-   `evidence_type=expert`、`confidence=low|medium`，让这些关系天然落进
-   `docs/08-evaluation.md` §3.1「依赖手工关系」的单独分组。
-2. **`listed_date` 中不确定的已在 `notes` 里标注「需与供应商数据核对」。**
-   P1 的 Tushare 适配器（W1.3）上线后应跑一次核对：
-
-   ```sql
-   -- 以 stock_basic 为准比对种子里的上市日期
-   SELECT e.entity_id, e.name_short, e.listed_date, e.notes
-     FROM core.entity e
-    WHERE e.notes ILIKE '%核对%'
-    ORDER BY e.entity_id;
-   ```
+只录**公开可查的事实**。`share_estimate`、`strength` 在底稿没有给出时一律留空，不编数字；
+`ai_revenue_pct` 在底稿里全是"待核实"，留空，核实来源建议写在 `notes`。
+`notes` 里带"需核对"的条目（财年截止月、法定全称等）是整理时的不确定项。
 
 本批数据不含任何买卖建议、目标价或评级（`CLAUDE.md` §0）。
