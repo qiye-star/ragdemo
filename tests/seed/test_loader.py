@@ -15,12 +15,12 @@ from ragdemo_core.db.migrate import migrate
 MIGRATIONS = Path("db/migrations")
 
 HEADER = (
-    "entity_id,name_full,name_short,name_en,entity_type,market,tushare_code,"
+    "entity_id,name_full,name_short,name_en,entity_type,market,tushare_code,wind_code,"
     "l1_layer,l2_segment,l3_node,primary_node,hq_country,status,listed_date,"
     "currency,fiscal_year_end,notes\n"
 )
 GOOD_ROW = (
-    "CN.688256,寒武纪-U,寒武纪,Cambricon,listed,SSE,688256.SH,"
+    "CN.688256,寒武纪-U,寒武纪,Cambricon,listed,SSE,688256.SH,688256.SH,"
     "算力,AI芯片,云端训练芯片|边缘推理芯片,云端训练芯片,CN,active,2020-07-20,"
     "CNY,12,\n"
 )
@@ -51,6 +51,15 @@ def test_loads_entity_and_node_membership(
     assert entities is not None
     assert memberships is not None
     assert (n, entities[0], memberships[0]) == (1, 1, 2)
+
+
+@pytest.mark.db
+def test_wind_code_lands_in_core_entity(
+    db: psycopg.Connection[tuple[object, ...]], tmp_path: Path
+) -> None:
+    load_entities(db, _csv(tmp_path, GOOD_ROW))
+    row = db.execute("SELECT wind_code FROM core.entity WHERE entity_id = 'CN.688256'").fetchone()
+    assert row == ("688256.SH",)
 
 
 @pytest.mark.db
@@ -124,7 +133,7 @@ def test_alias_colliding_with_another_entity_name_is_rejected(
     别名一对多是允许的（「长城」），但别名等于另一家的全称一定是录入错误。
     """
     two = GOOD_ROW + (
-        "CN.688041,海光信息,海光,Hygon,listed,SSE,688041.SH,"
+        "CN.688041,海光信息,海光,Hygon,listed,SSE,688041.SH,688041.SH,"
         "算力,AI芯片,通用服务器CPU,通用服务器CPU,CN,active,2022-08-12,CNY,12,\n"
     )
     _csv(tmp_path, two)
@@ -156,9 +165,9 @@ def test_blank_optional_cells_become_null_not_empty_string(
 ) -> None:
     """tushare_code 带 UNIQUE：两家海外实体都留空时，写空串会在第二行撞唯一键。"""
     overseas = (
-        "US.NVDA,NVIDIA Corporation,英伟达,NVIDIA,listed,NASDAQ,,"
+        "US.NVDA,NVIDIA Corporation,英伟达,NVIDIA,listed,NASDAQ,,,"
         "算力,AI芯片,云端训练芯片,云端训练芯片,US,active,1999-01-22,USD,1,\n"
-        "US.AMD,Advanced Micro Devices Inc.,AMD,AMD,listed,NASDAQ,,"
+        "US.AMD,Advanced Micro Devices Inc.,AMD,AMD,listed,NASDAQ,,,"
         "算力,AI芯片,通用服务器CPU,通用服务器CPU,US,active,1972-09-27,USD,12,\n"
     )
     assert load_entities(db, _csv(tmp_path, overseas)) == 2

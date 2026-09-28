@@ -38,6 +38,17 @@ def test_every_company_in_the_list_becomes_an_entity(built) -> None:  # type: ig
     )
 
 
+def test_wind_code_is_carried_from_curation(built) -> None:  # type: ignore[no-untyped-def]  # noqa: ANN001
+    """`entity_curation.csv` 早就给每家公司标好了 `wind_code`（A 股与 `tushare_code`
+    相同，港股/美股是当地代码），此前 `ENTITY_FIELDS` 没带上它，`core.entity.wind_code`
+    因此永远是 NULL——`ingest/announcements.py::entity_routes` 靠这一列才能把港股实体
+    路由到披露易，缺了它这些实体永远进不了公告增量摄入（公告双源接入计划 Task 13
+    准备工作，发现于 2026-09-28）。"""
+    by_id = {e["entity_id"]: e for e in built.files["entity.csv"]}
+    assert by_id["CN.688041"]["wind_code"] == "688041.SH"
+    assert by_id["HK.9988"]["wind_code"] == "9988.HK"
+
+
 def test_listed_entities_have_provider_listing_dates(built) -> None:  # type: ignore[no-untyped-def]  # noqa: ANN001
     listed = [e for e in built.files["entity.csv"] if e["entity_type"] == "listed"]
     assert all(e["listed_date"] for e in listed)
