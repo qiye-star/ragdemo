@@ -136,11 +136,10 @@ def seed_isolation_demo(
             "UPDATE core.document SET version_group_id = %s WHERE doc_id = %s", (doc_id, doc_id)
         )
 
-        # 块必须原样复制文档的 entity_id（NULL）/doc_type/known_at——
-        # check_schema_invariants 的 block_mismatch 检查这三列必须与所属
-        # 文档一致；owner_tenant/owner_user 这两列该检查不看，但 RLS 的
-        # block_visibility 策略直接读块自己的这两列，不看文档的，必须一起
-        # 复制对，否则块的可见性会跟文档对不上。
+        # 块必须原样复制文档的 entity_id（NULL）/doc_type/publish_at/known_at/
+        # owner_tenant/owner_user——check_schema_invariants 的 block_mismatch
+        # 检查这六列必须与所属文档一致。owner_* 尤其不能错：RLS 的
+        # block_visibility 策略直接读块自己的这两列，不看文档的。
         conn.execute(
             "INSERT INTO core.doc_block"
             " (doc_id, block_type, section_path, ordinal, is_leaf, content,"

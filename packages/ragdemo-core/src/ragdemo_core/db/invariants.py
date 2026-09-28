@@ -111,12 +111,18 @@ def check_schema_invariants(conn: psycopg.Connection[tuple[object, ...]]) -> lis
         if readable and readable[0]:
             violations.append(f"app_read 不应对时点表 {qualified} 有 SELECT 权限")
 
+    # docs/05-document-pipeline.md §6 规则 5 点名的全部反规范化列。owner_* 不可省：
+    # RLS 的 block_visibility 策略读块自己的 owner 列、不看文档，私有文档下一个
+    # owner 为 NULL 的块会被当成公共数据检索出来。
     block_mismatch = conn.execute(
         "SELECT count(*) FROM ("
         "  SELECT b.block_id FROM core.doc_block b JOIN core.document d USING (doc_id)"
-        "   WHERE b.entity_id IS DISTINCT FROM d.entity_id"
-        "      OR b.doc_type  IS DISTINCT FROM d.doc_type"
-        "      OR b.known_at  IS DISTINCT FROM d.known_at"
+        "   WHERE b.entity_id    IS DISTINCT FROM d.entity_id"
+        "      OR b.doc_type     IS DISTINCT FROM d.doc_type"
+        "      OR b.known_at     IS DISTINCT FROM d.known_at"
+        "      OR b.publish_at   IS DISTINCT FROM d.publish_at"
+        "      OR b.owner_tenant IS DISTINCT FROM d.owner_tenant"
+        "      OR b.owner_user   IS DISTINCT FROM d.owner_user"
         "   LIMIT 1000) t"
     ).fetchone()
     if block_mismatch and block_mismatch[0]:
