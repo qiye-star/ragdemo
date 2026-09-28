@@ -17,6 +17,8 @@ from ragdemo.adapters.wind import (
 )
 from ragdemo.config import load_config
 from ragdemo.ingest.wind_facts import a_share_windcodes, ingest_wind_facts
+from ragdemo.sources.backlog import Backlog
+from ragdemo.sources.health import PgSourceHealth
 from ragdemo_core.blob import LocalBlobStore
 
 WIND_URL_ENV = "RAGDEMO_WIND_MCP_URL"
@@ -66,13 +68,28 @@ def ingest_command(
         gateway = gateway_client_from_env(url_env=WIND_URL_ENV, provider="wind-mcp")
         adapter = WindFundamentalsAdapter(gateway, windcodes=codes, quarters=quarters)
         blob = LocalBlobStore(load_config().blob_root)
-        report = ingest_wind_facts(
-            conn, adapter, blob, partition_date=on, ingest_run_id="cli:facts-ingest"
-        )
+        # 冷却与待补清单走独立的 autocommit 连接：入库回滚撤销不了它们（ADR-0012）。
+        with psycopg.connect(_dsn(), autocommit=True) as state:
+            report = ingest_wind_facts(
+                conn,
+                adapter,
+                blob,
+                windcodes=codes,
+                partition_date=on,
+                ingest_run_id="cli:facts-ingest",
+                quarters=quarters,
+                health=PgSourceHealth(state),
+                backlog=Backlog(state),
+            )
     click.echo(f"写入 {report.written} 条，与库中相同跳过 {report.skipped} 条")
+    for code, reason in report.backlogged.items():
+        click.echo(f"[待补] {code}: {reason}", err=True)
     for warning in report.warnings:
         click.echo(f"[未入库] {warning}", err=True)
     for code, reason in report.failed.items():
         click.echo(f"[失败] {code}: {reason}", err=True)
-    if report.failed:
-        raise click.ClickException(f"{len(report.failed)} 个实体未能入库，见上方原因")
+    if report.failed or report.backlogged:
+        raise click.ClickException(
+            f"{len(set(report.failed) | set(report.backlogged))} 个实体未能入库，见上方原因"
+            "（进了待补清单的，下次运行会自动先补）"
+        )
