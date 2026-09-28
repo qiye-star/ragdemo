@@ -37,7 +37,8 @@
 | 日行情 | Tushare MCP `daily` | Tushare REST `daily`（同账号，另一条通道） | Wind `get_stock_kline`（降级） | 本分区失败，游标不推进，下次重拉 |
 | 财务三表科目 | Wind `get_stock_fundamentals` | —（不跨源写入） | — | 记入待补清单 `core.ingest_backlog`，下次触发自动补 |
 | 财务核对 | iFind `get_stock_financials` | — | — | 只告警，**永不写库** |
-| 公告 | Wind `get_company_announcements` | iFind `search_notice`（降级：只有标题、日期、片段） | — | 本次跳过，下次触发按日期区间重查 |
+| 公告（A 股） | 巨潮资讯网（全文，见 ADR-0013） | Wind `get_company_announcements`（降级，只写目录） | iFind `search_notice`（降级，只写目录） | 本实体进待补清单，全文等主源恢复后自动补 |
+| 公告（港股 / 美股·ADR） | 港交所披露易 / EDGAR（全文，见 ADR-0013、2026-09-28 公告双源接入计划） | — | — | 本次跳过，下次触发重查 |
 
 一个 MCP 服务在别的数据上只能以"降级层"出现，并在路由表里显式写出。路由表是代码
 （`ragdemo.sources.routing.ROUTES`），有测试守着"每个服务恰好一个主职"。

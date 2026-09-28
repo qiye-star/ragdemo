@@ -272,14 +272,10 @@ def conn(temp_db: str) -> psycopg.Connection:
         "VALUES ('CN.688041','海光信息技术股份有限公司','listed','算力','AI芯片',"
         " ARRAY['通用服务器CPU'],'通用服务器CPU','688041.SH')"
     )
-    # 'cninfo' 是 --source 的默认值（ingest/cli.py），这里只是测试夹具里的
-    # 一个占位登记——真实供应商的四条款要等商务确认后由运维登记
-    # （docs/superpowers/plans/2026-09-22-data-foundation.md 阶段 B）。
-    c.execute(
-        "INSERT INTO core.source_registry (source_id, vendor, layer, can_cache,"
-        " can_show_raw, can_vectorize, time_precision) "
-        "VALUES ('cninfo','cninfo','filing',true,true,true,'second')"
-    )
+    # 'cninfo' 是 --source 的默认值（ingest/cli.py）。此前这里手工插入一条
+    # 占位登记；020_cninfo_source_registry.sql 现在已经真登记了这条来源
+    # （adr/0013），migrate() 已经把它插过一次，这里不用再插——两次插入
+    # 同一个 source_id 会撞主键。
     c.commit()
     return c
 
@@ -533,3 +529,31 @@ def test_docs_rechunk_refuses_when_nothing_is_cached(
     )
     assert result.exit_code != 0
     assert "没有已归档的解析结果" in result.output
+
+
+# --- docs ingest-cninfo：诚实 UA 是硬要求（公告双源接入计划 D3）------------------
+
+
+def test_ingest_cninfo_refuses_without_a_user_agent_and_does_not_call_cninfo() -> None:
+    """未设 RAGDEMO_CNINFO_USER_AGENT 时以非零码退出，且不发起任何请求——
+    与 `docs ingest-edgar` 对 EDGAR_USER_AGENT 的既有做法一致：伪装成浏览器的
+    UA（旧代码里的 'Mozilla/5.0'）比不带联系方式的诚实 UA 更容易被识别为爬虫，
+    也不符合"不做爬虫"的口径，不该有默认值。"""
+    result = CliRunner().invoke(
+        main,
+        [
+            "docs",
+            "ingest-cninfo",
+            "--stock",
+            "688041",
+            "--entity-ref",
+            "688041.SH",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-12-31",
+        ],
+        env={"RAGDEMO_CNINFO_USER_AGENT": ""},
+    )
+    assert result.exit_code != 0
+    assert "RAGDEMO_CNINFO_USER_AGENT" in result.output

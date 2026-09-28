@@ -171,6 +171,67 @@ class HttpClient:
             f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
         ) from last_error
 
+    def post_form(
+        self,
+        endpoint: str,
+        body: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> RawResponse:
+        """POST `application/x-www-form-urlencoded` 体，按状态码分类——与
+        `post_json` 同一套分类规则，唯一区别是编码方式。加它的直接动因是
+        巨潮资讯网（adr/0013）：`hisAnnouncement/query` /
+        `information/topSearch/query` 都是网站前端自己在用的表单接口，
+        不接受 JSON 体（实测确认，不是文档猜测的）。
+        """
+        if self.daily_quota is not None and self.calls_today >= self.daily_quota:
+            raise QuotaExceeded(f"{self.provider} 已达每日配额 {self.daily_quota}")
+
+        merged = {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            **dict(headers or {}),
+        }
+        last_error: Exception | None = None
+        for attempt in range(1, self.policy.max_attempts + 1):
+            wait = self.bucket.acquire()
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                response = self._client.post(endpoint, data=dict(body), headers=merged)
+            except httpx.TransportError as exc:
+                last_error = exc
+            else:
+                self.calls_today += 1
+                if response.status_code < 400:
+                    try:
+                        payload = response.json()
+                    except json.JSONDecodeError as e:
+                        raise UpstreamUnavailable(
+                            f"{self.provider} {endpoint} 返回无效 JSON 体"
+                        ) from e
+                    return RawResponse(
+                        provider=self.provider,
+                        endpoint=endpoint,
+                        params=body,
+                        payload=payload,
+                        http_status=response.status_code,
+                        fetched_at=datetime.now(UTC),
+                        cost_cents=self.cost_per_call_cents,
+                    )
+                if response.status_code not in self.policy.retry_on_status:
+                    raise UpstreamUnavailable(
+                        f"{self.provider} {endpoint} 返回 {response.status_code}（不重试）"
+                    )
+                last_error = _error_for(response)
+
+            if attempt < self.policy.max_attempts:
+                time.sleep(_backoff_seconds(last_error, attempt, self.policy))
+
+        raise UpstreamUnavailable(
+            f"{self.provider} {endpoint} 重试 {self.policy.max_attempts} 次后仍失败"
+        ) from last_error
+
     def get_bytes(
         self,
         endpoint: str,

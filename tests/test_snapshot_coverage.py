@@ -36,6 +36,9 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("ingest/edgar_docs.py", "list_filings"): (
         "dry run 专用：只列申报、不写库；--yes 走 ingest_edgar_filings，那里留底"
     ),
+    ("ingest/cninfo_docs.py", "list_announcements"): (
+        "dry run 专用：只列公告、不写库；--yes 走 ingest_cninfo_announcements，那里留底"
+    ),
 }
 
 

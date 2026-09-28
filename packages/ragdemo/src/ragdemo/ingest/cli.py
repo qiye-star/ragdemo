@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ import click
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.adapters.cninfo import CninfoAdapter
 from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.local_manifest import (
@@ -45,6 +46,7 @@ from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
 from ragdemo.ingest.assets_docs import prepare_documents, record_parse_snapshots
+from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
 from ragdemo.ingest.snapshot import record_snapshot
@@ -549,3 +551,112 @@ def docs_ingest_edgar(
         for ref, result in results:
             status = "跳过(已存在)" if result.skipped else "写入"
             click.echo(f"{status} doc_id={result.doc_id} {ref.form_type} {ref.accession}")
+
+
+# --- docs ingest-cninfo（adr/0013：公告全文主源改巨潮资讯网直连）------------
+
+
+def _cninfo_user_agent() -> str:
+    ua = os.environ.get("RAGDEMO_CNINFO_USER_AGENT", "").strip()
+    if not ua:
+        raise click.ClickException(
+            "环境变量 RAGDEMO_CNINFO_USER_AGENT 未设置。访问巨潮资讯网要带能联系到人的"
+            'User-Agent（形如 "组织名 联系邮箱"，与 EDGAR_USER_AGENT 同一个理由），'
+            "不该伪装成浏览器，这个值属于部署配置，不该由代码编造。"
+        )
+    return ua
+
+
+@docs_group.command("ingest-cninfo")
+@click.option("--stock", required=True, help="巨潮的股票代码，如 688041（不带 .SH 后缀）")
+@click.option(
+    "--entity-ref",
+    required=True,
+    help="显式实体代码，如 688041.SH，匹配 core.entity.tushare_code——与 docs ingest"
+    "同一个理由：不从股票代码猜 entity_ref，避免静默写成 entity_id=NULL",
+)
+@click.option("--since", required=True, help="起始日期 YYYY-MM-DD")
+@click.option("--until", required=True, help="截止日期 YYYY-MM-DD（含）")
+@click.option("--source", default="cninfo", help="写入 core.document.source 的值")
+@click.option("--yes", is_flag=True, default=False, help="真正下载 PDF 并写库；不传则只 dry run")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="本次最多入库几份公告；不传则处理命中的全部公告（一家公司在几年窗口内"
+    "可能有几十上百份公告，回填历史时应显式设置这个值，避免一次性发出大量请求——"
+    "adr/0013 提醒过巨潮的频控没有官方保证）",
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def docs_ingest_cninfo(
+    stock: str,
+    entity_ref: str,
+    since: str,
+    until: str,
+    source: str,
+    yes: bool,
+    limit: int | None,
+    blob_root_opt: Path | None,
+) -> None:
+    """按股票代码拉巨潮资讯网公告列表，取 PDF 字节存 blob，写一行 core.document
+    （路径 B，未解析——本命令只证明「原始公告真的能取到、真的能存住」，这两步
+    之后的解析走既有的 `docs ingest`/`docs rechunk` 流程，不在这里重新实现一遍）。
+
+    默认 dry run：只列出命中的公告，不发起任何 PDF 下载（不该在没有 --yes 的
+    情况下悄悄对巨潮发出批量请求）。
+    """
+    user_agent = _cninfo_user_agent()
+    since_dt = datetime.combine(date.fromisoformat(since), time.min, tzinfo=UTC)
+    until_dt = datetime.combine(date.fromisoformat(until), time.max, tzinfo=UTC)
+    query_client = HttpClient(
+        provider="cninfo",
+        base_url="https://www.cninfo.com.cn",
+        policy=RetryPolicy(max_attempts=3, backoff_base_s=1.0),
+        # 60/分钟（1 次/秒）是保守估计，不是巨潮承诺的 SLA——adr/0013
+        # "后果" 一节已经写明，真实批量抓取时按观察结果调整。
+        bucket=TokenBucket(rate_per_minute=60),
+        default_headers={"User-Agent": user_agent},
+    )
+    adapter = CninfoAdapter(query_client)
+
+    if not yes:
+        refs = list_announcements(
+            adapter,
+            stock_code=stock,
+            since=since_dt,
+            until=until_dt,
+            ingest_run_id="cli:docs-ingest-cninfo",
+        )
+        click.echo(f"[dry run] {stock} 命中 {len(refs)} 份带 PDF 附件的公告")
+        for ref in refs:
+            click.echo(f"  - {ref.publish_at.date()} {ref.title} {ref.pdf_path}")
+        click.echo("[dry run] 未发起任何 PDF 下载，--yes 才会真正下载并写库")
+        return
+
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    static_client = HttpClient(
+        provider="cninfo-static",
+        base_url="https://static.cninfo.com.cn",
+        policy=RetryPolicy(max_attempts=3, backoff_base_s=1.0),
+        bucket=TokenBucket(rate_per_minute=60),
+        default_headers={"User-Agent": user_agent},
+    )
+
+    with psycopg.connect(_dsn()) as conn:
+        results = ingest_cninfo_announcements(
+            conn,
+            adapter=adapter,
+            static_client=static_client,
+            blob=blob,
+            stock_code=stock,
+            entity_ref=entity_ref,
+            source=source,
+            since=since_dt,
+            until=until_dt,
+            limit=limit,
+            ingest_run_id="cli:docs-ingest-cninfo",
+        )
+        for ref, result in results:
+            status = "跳过(已存在)" if result.skipped else "写入"
+            click.echo(f"{status} doc_id={result.doc_id} {ref.publish_at.date()} {ref.title}")

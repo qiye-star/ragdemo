@@ -16,7 +16,13 @@ class Capability(StrEnum):
     PRICE_DAILY = "price_daily"
     FINANCIALS = "financials"
     FINANCIALS_VERIFY = "financials_verify"
-    ANNOUNCEMENTS = "announcements"
+    # 公告按市场分三条能力（2026-09-28 公告双源接入计划，修订 ADR-0013）：每个市场的
+    # 官方/半官方渠道形状不同（A 股巨潮日精度、港股披露易分钟精度、美股 EDGAR 秒精度），
+    # 合并成一个 Capability 会强迫写一套通用接口，掩盖这些真实差异。
+    ANNOUNCEMENTS_CN = "announcements_cn"
+    ANNOUNCEMENTS_HK = "announcements_hk"
+    ANNOUNCEMENTS_US = "announcements_us"
+    ANNOUNCEMENTS_VERIFY = "announcements_verify"
 
 
 @dataclass(frozen=True)
@@ -26,6 +32,7 @@ class LayerSpec:
     source: str  # 写库时的来源标识
     degraded: bool
     writes: bool = True
+    full_text: bool = True  # False：只给目录/摘录，进不了要求全文的文档管线
 
 
 ROUTES: Mapping[Capability, tuple[LayerSpec, ...]] = {
@@ -43,9 +50,38 @@ ROUTES: Mapping[Capability, tuple[LayerSpec, ...]] = {
             "ifind-financials", service="ifind-stock", source="ifind", degraded=False, writes=False
         ),
     ),
-    Capability.ANNOUNCEMENTS: (
-        LayerSpec("wind-docs", service="wind-financial-docs", source="wind", degraded=False),
-        LayerSpec("ifind-notice", service="ifind-news", source="ifind", degraded=True),
+    # A 股：巨潮资讯网为主（官方指定披露平台，能给全文），Wind/iFind 降级只写目录，
+    # 全文进待补清单（2026-09-28 公告双源接入计划，修订 ADR-0013 的"只有一层"）。
+    Capability.ANNOUNCEMENTS_CN: (
+        LayerSpec("cninfo", service="cninfo-http", source="cninfo", degraded=False),
+        LayerSpec(
+            "wind-docs",
+            service="wind-financial-docs",
+            source="wind",
+            degraded=True,
+            full_text=False,
+        ),
+        LayerSpec(
+            "ifind-notice", service="ifind-news", source="ifind", degraded=True, full_text=False
+        ),
+    ),
+    # 港股：港交所披露易（官方指定披露平台），单层——不可用就整批失败，不悄悄降级到
+    # 给不出全文的来源。
+    Capability.ANNOUNCEMENTS_HK: (
+        LayerSpec("hkexnews", service="hkexnews-http", source="hkexnews", degraded=False),
+    ),
+    # 美股 + 已在 SEC 报送的 ADR（台积电、日月光、阿里巴巴、百度、金山云）：EDGAR，单层。
+    Capability.ANNOUNCEMENTS_US: (
+        LayerSpec("edgar", service="edgar-http", source="edgar", degraded=False),
+    ),
+    Capability.ANNOUNCEMENTS_VERIFY: (
+        LayerSpec(
+            "wind-coverage",
+            service="wind-financial-docs",
+            source="wind",
+            degraded=False,
+            writes=False,
+        ),
     ),
 }
 

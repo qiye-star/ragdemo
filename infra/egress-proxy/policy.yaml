@@ -22,6 +22,10 @@ allowlist:
     inject_credential: null
   - host: www.sec.gov
     inject_credential: null
+  - host: www.cninfo.com.cn      # 公告查询（adr/0013）：官方披露平台，无需鉴权
+    inject_credential: null
+  - host: static.cninfo.com.cn   # 公告 PDF 下载（adr/0013）
+    inject_credential: null
   - host: api.textin.com            # 文档解析（adr/0008）
     inject_credential: [TEXTIN_APP_ID, TEXTIN_SECRET_CODE]
     inject_as: header               # x-ti-app-id / x-ti-secret-code
