@@ -68,6 +68,10 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       TEXTIN_APP_ID: ${TEXTIN_APP_ID:-}
       TEXTIN_SECRET_CODE: ${TEXTIN_SECRET_CODE:-}
+      WIND_MCP_TOKEN: ${WIND_MCP_TOKEN:-}
+      IFIND_MCP_TOKEN: ${IFIND_MCP_TOKEN:-}
+      # stdout 不是终端时 Python 会整块缓冲，出网日志要实时可见才有审计意义。
+      PYTHONUNBUFFERED: "1"
     ports:
       - "127.0.0.1:8080:8080"
       # Phase 1B 新增：TextIn 专用反向代理端口。回环明文进、TLS 出到
@@ -82,6 +86,13 @@ services:
       # 127.0.0.1:8082（除非显式开 keep_host_header，这里没开）。这条链路
       # 与 TextIn 那条共享同一个前提，已经在这台代理上跑通过。
       - "127.0.0.1:8082:8082"
+      # 2026-09-28：三个数据 MCP 的反向代理端口，同一个模式——回环明文进、TLS 出，
+      # 凭据由 addon.py 按 policy.yaml 注入，业务进程只知道 127.0.0.1:<端口>。
+      # 8083 Tushare 官方 MCP（token 注入 URL 参数）、8084 万得 Wind（Bearer）、
+      # 8085 同花顺 iFinD（Authorization 头）。
+      - "127.0.0.1:8083:8083"
+      - "127.0.0.1:8084:8084"
+      - "127.0.0.1:8085:8085"
     # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
     # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
     # /policy/addon.py`，这里只追加三个 --mode：显式声明 regular@8080（保留
@@ -91,12 +102,22 @@ services:
     # 会被当成 ENTRYPOINT 后面多出来的参数，mitmdump 把它们全部解读成一个
     # 正则过滤表达式（"Only processing flows that match ..."），代理直接不转发。
     command:
+      # 关掉 mitmdump 自带的逐请求输出：它会打印完整 URL，Tushare MCP 的 token 在查询串里，
+      # 即使被截断也会漏出前缀（2026-09-28 实测）。请求日志只由 addon.py 记录，查询串已剥掉。
+      - --set
+      - flow_detail=0
       - --mode
       - regular@8080
       - --mode
       - reverse:https://api.textin.com@8081
       - --mode
       - reverse:https://api.siliconflow.cn@8082
+      - --mode
+      - reverse:https://api.tushare.pro@8083
+      - --mode
+      - reverse:https://mcp.wind.com.cn@8084
+      - --mode
+      - reverse:https://api-mcp.51ifind.com:8643@8085
     restart: unless-stopped
 
 volumes:

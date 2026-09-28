@@ -6,7 +6,18 @@ log: full           # 记录 host / path / 状态码 / 字节数 / 耗时；不�
 allowlist:
   - host: api.tushare.pro
     inject_credential: TUSHARE_TOKEN
-    inject_as: body_json            # tushare 把 token 放在 JSON body 的 token 字段
+    inject_as: body_json            # tushare REST 接口把 token 放在 JSON body 的 token 字段
+    path_rules:
+      - prefix: /mcp                # Tushare 官方 MCP：token 放在 URL 参数 ?token=
+        inject_as: query
+        query_param: token
+  - host: mcp.wind.com.cn           # 万得 Wind MCP：财务数据（2026-09-28 选定）
+    inject_credential: WIND_MCP_TOKEN
+    inject_as: bearer
+  - host: api-mcp.51ifind.com       # 同花顺 iFinD MCP：Authorization 头直接放 token，不带 Bearer
+    inject_credential: IFIND_MCP_TOKEN
+    inject_as: header
+    headers: [Authorization]
   - host: data.sec.gov
     inject_credential: null
   - host: www.sec.gov

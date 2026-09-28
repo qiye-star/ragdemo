@@ -134,3 +134,42 @@ def test_runbook_documents_pg_chroma_snapshot_alignment() -> None:
     runbook = Path("infra/runbook-backup.md").read_text(encoding="utf-8")
     assert "Chroma" in runbook
     assert "同一时点" in runbook
+
+
+ADDON = Path("infra/egress-proxy/addon.py")
+
+
+def test_egress_policy_routes_the_three_data_mcps_with_injected_credentials() -> None:
+    """2026-09-28 选定的数据源：Tushare 官方 MCP（行情）、万得（财务）、同花顺（公告片段）。"""
+    policy = yaml.safe_load(POLICY.read_text(encoding="utf-8"))
+    rules = {rule["host"]: rule for rule in policy["allowlist"]}
+    tushare_mcp = next(r for r in rules["api.tushare.pro"]["path_rules"] if r["prefix"] == "/mcp")
+    assert (tushare_mcp["inject_as"], tushare_mcp["query_param"]) == ("query", "token")
+    assert rules["mcp.wind.com.cn"]["inject_as"] == "bearer"
+    assert rules["api-mcp.51ifind.com"]["headers"] == ["Authorization"]
+    compose = COMPOSE.read_text(encoding="utf-8")
+    for target in (
+        "reverse:https://api.tushare.pro@8083",
+        "reverse:https://mcp.wind.com.cn@8084",
+        "reverse:https://api-mcp.51ifind.com:8643@8085",
+    ):
+        assert target in compose
+    for var in ("WIND_MCP_TOKEN: ${WIND_MCP_TOKEN:-}", "IFIND_MCP_TOKEN: ${IFIND_MCP_TOKEN:-}"):
+        assert var in compose
+
+
+def test_mitmdump_does_not_print_full_urls() -> None:
+    """Tushare MCP 的 token 在查询串里：mitmdump 自带的逐请求输出会打印完整 URL，
+    截断后仍漏出 token 前缀（2026-09-28 实测）。必须关掉，日志只由 addon 记录。"""
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    command = compose["services"]["egress-proxy"]["command"]
+    assert "flow_detail=0" in command
+    assert command[command.index("flow_detail=0") - 1] == "--set"
+
+
+def test_addon_never_logs_the_raw_request_path() -> None:
+    """addon 的每一条日志都只能用剥掉查询串的路径。"""
+    text = ADDON.read_text(encoding="utf-8")
+    for call in re.findall(r"logger\.\w+\((.*?)\)\n", text, flags=re.DOTALL):
+        assert "flow.request.path" not in call, call
+    assert "_redacted_path(flow)" in text

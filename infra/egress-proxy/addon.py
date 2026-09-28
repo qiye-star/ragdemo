@@ -58,7 +58,24 @@ def _credential_names(rule: dict[str, Any]) -> list[str]:
     return list(raw) if isinstance(raw, list) else [raw]
 
 
+def _effective_rule(flow: http.HTTPFlow, rule: dict[str, Any]) -> dict[str, Any]:
+    """同一主机的不同路径可能要不同的注入方式：api.tushare.pro 的 REST 接口把 token
+    放在 JSON body，MCP 端点（/mcp/）把 token 放在 URL 参数。`path_rules` 按前缀覆盖。"""
+    path = flow.request.path.split("?", 1)[0]
+    for sub in rule.get("path_rules") or []:
+        if path.startswith(sub["prefix"]):
+            return {**rule, **{k: v for k, v in sub.items() if k != "prefix"}}
+    return rule
+
+
+def _redacted_path(flow: http.HTTPFlow) -> str:
+    """日志里只记路径、不记查询串：有的供应商（Tushare MCP）把凭据放在 URL 参数里，
+    注入之后查询串里就有密钥，原样落日志等于把 §4.1 的硬约束破掉。"""
+    return flow.request.path.split("?", 1)[0]
+
+
 def _inject(flow: http.HTTPFlow, rule: dict[str, Any]) -> None:
+    rule = _effective_rule(flow, rule)
     names = _credential_names(rule)
     if not names:
         return
@@ -85,6 +102,11 @@ def _inject(flow: http.HTTPFlow, rule: dict[str, Any]) -> None:
             flow.request.headers[header] = value
         return
 
+    if mode == "query":
+        # Tushare 官方 MCP：token 作为 URL 参数（?token=...）。覆盖调用方可能带的同名参数。
+        flow.request.query[rule.get("query_param", "token")] = values[0]
+        return
+
     if mode == "body_json":
         # tushare 把 token 放在 JSON body 里。只补 token 字段，不动其他参数。
         try:
@@ -106,7 +128,7 @@ def request(flow: http.HTTPFlow) -> None:
     if rule is None:
         if policy.default_action == "deny":
             # 拒绝事件要告警：它要么是配置漏了一个供应商，要么是有人在往外发数据。
-            logger.warning("egress denied host=%s path=%s", host, flow.request.path)
+            logger.warning("egress denied host=%s path=%s", host, _redacted_path(flow))
             flow.response = http.Response.make(
                 403,
                 b'{"error":"egress blocked: host not in allowlist"}',
@@ -127,7 +149,7 @@ def response(flow: http.HTTPFlow) -> None:
     logger.info(
         "egress host=%s path=%s status=%d bytes=%d",
         flow.request.pretty_host,
-        flow.request.path,
+        _redacted_path(flow),
         flow.response.status_code,
         len(flow.response.content or b""),
     )
