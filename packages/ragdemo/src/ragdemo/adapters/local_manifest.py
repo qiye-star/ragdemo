@@ -34,6 +34,7 @@ import zlib
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, time, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -262,6 +263,7 @@ def manifest_raw_response(
         payload={**asdict(entry), "raw_bytes_ref": doc.raw_bytes_ref},
         http_status=200,  # 本地文件读取成功；沿用 200 表达"成功取得"
         fetched_at=datetime.now(UTC),
+        cost_cents=Decimal(0),  # 读本地文件不花钱；NULL 在成本账本里表示"单价未知"
     )
 
 

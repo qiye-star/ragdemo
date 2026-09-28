@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ from ragdemo.parse.textin import (
 )
 from ragdemo.parse.tree import build_tree
 from ragdemo.parse.validate import validate_chunks
+from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 _MISSING_DESC_RE = re.compile(r"^块 (\d+): 表格块缺少 content_desc$")
@@ -286,6 +288,14 @@ def docs_ingest(
     budget = PageBudget(max_pages)
     failures = 0
     with psycopg.connect(_dsn()) as conn:
+        if parser_kind == "textin":
+            try:
+                budget_status = ensure_budget(
+                    conn, now=datetime.now(UTC), cap_cny=cfg.monthly_budget_cny
+                )
+            except BudgetExceeded as exc:
+                raise click.ClickException(str(exc)) from None
+            click.echo(f"[预算] {budget_status.describe()}")
         writer = DocumentWriter(conn, ingest_run_id="cli:docs-ingest", source=source_name)
         # 每条 manifest 记录先落 provider_snapshot 再解析（CLAUDE.md §1.5）；
         # dry run 不走到这里，不写库。

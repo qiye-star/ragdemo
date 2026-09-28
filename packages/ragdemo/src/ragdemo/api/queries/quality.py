@@ -35,6 +35,17 @@ NON_ASOF_NOTE = "该表不在 asof schema，不是时点权威（见 db/migratio
 # 源码文本（不 import，只读字符串字面量）做交叉核对。
 METRIC_REGISTRY: tuple[MetricSpec, ...] = (
     MetricSpec(
+        metric="monthly_cost_ratio",
+        is_gate=True,
+        blocking=True,
+        direction="lower_is_better",
+        has_no_sample_sentinel=False,
+        description=(
+            "本月（北京时间）已用预算 / 月度上限；≥0.8 告警，≥1.0 阻断全部计费调用；"
+            "有单价未知的计费调用时同样记为未通过"
+        ),
+    ),
+    MetricSpec(
         metric="parse_success_rate",
         is_gate=True,
         blocking=True,

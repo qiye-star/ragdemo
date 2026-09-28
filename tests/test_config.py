@@ -136,3 +136,18 @@ def test_siliconflow_model_names_are_overridable() -> None:
     )
     assert cfg.siliconflow_embed_model == "custom/embed"
     assert cfg.siliconflow_rerank_model == "custom/rerank"
+
+
+def test_monthly_budget_defaults_to_5000_cny() -> None:
+    """起步期数据 + 模型每月 ≤ 5000 元（docs/00-overview.md 约束）。"""
+    assert load_config({}).monthly_budget_cny == Decimal(5000)
+
+
+def test_monthly_budget_reads_from_env() -> None:
+    assert load_config({"RAGDEMO_MONTHLY_BUDGET_CNY": "800"}).monthly_budget_cny == Decimal(800)
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-1"])
+def test_monthly_budget_rejects_non_positive_or_non_numeric(value: str) -> None:
+    with pytest.raises(ConfigError, match="RAGDEMO_MONTHLY_BUDGET_CNY"):
+        load_config({"RAGDEMO_MONTHLY_BUDGET_CNY": value})

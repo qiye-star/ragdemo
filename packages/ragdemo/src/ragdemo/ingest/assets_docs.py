@@ -63,6 +63,7 @@ from ragdemo.parse.textin import (
 )
 from ragdemo.parse.tree import build_tree
 from ragdemo.parse.validate import validate_chunks
+from ragdemo.quality.budget import ensure_budget
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo_core.blob import BlobNotFound, BlobStore
 
@@ -346,6 +347,8 @@ def doc_prepared(
     `resolve_retry_pending` 只负责让它们可查，不改变 `prepare_documents`
     本身"不碰数据库"的纯函数边界。
     """
+    # 月度预算（04 §5.3）：用尽就在发起任何计费解析之前停下。
+    ensure_budget(conn, now=datetime.now(UTC), cap_cny=load_config().monthly_budget_cny)
     budget = PageBudget(MAX_PAGES_PER_PREPARE_RUN)
     prepared = prepare_documents(doc_normalized, parser, blob, budget, owner_user=None)
     record_parse_snapshots(
@@ -517,6 +520,7 @@ def tier_c_reparse(
     parser = tier_c_parser
     cost_per_page = cfg.require_textin_cost_per_page_cny()
     now = datetime.now(UTC)
+    ensure_budget(conn, now=now, cap_cny=cfg.monthly_budget_cny)  # 月度总预算，先于 C 档预算
     month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
     month_end = _next_month(month_start)
     describer = MockTableDescriber()

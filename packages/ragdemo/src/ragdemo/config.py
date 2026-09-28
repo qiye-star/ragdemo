@@ -32,6 +32,10 @@ DEFAULT_SILICONFLOW_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 _TRUTHY = frozenset({"1", "true", "TRUE", "True", "yes", "YES", "on", "ON"})
 
 
+# 起步期数据 + 模型每月预算上限（docs/00-overview.md §3 约束，docs/04-ingestion.md §5.3）。
+DEFAULT_MONTHLY_BUDGET_CNY = Decimal(5000)
+
+
 class ConfigError(RuntimeError):
     """必填的环境配置缺失或格式不合法。"""
 
@@ -46,6 +50,7 @@ class RagdemoConfig:
     siliconflow_base_url: str | None
     siliconflow_embed_model: str
     siliconflow_rerank_model: str
+    monthly_budget_cny: Decimal = DEFAULT_MONTHLY_BUDGET_CNY
 
     def validate(self) -> None:
         if self.textin_max_pages_per_run <= 0:
@@ -126,6 +131,16 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
         source.get("SILICONFLOW_RERANK_MODEL") or DEFAULT_SILICONFLOW_RERANK_MODEL
     )
 
+    raw_budget = (source.get("RAGDEMO_MONTHLY_BUDGET_CNY") or "").strip()
+    try:
+        monthly_budget_cny = Decimal(raw_budget) if raw_budget else DEFAULT_MONTHLY_BUDGET_CNY
+    except InvalidOperation as exc:
+        raise ConfigError(
+            f"环境变量 RAGDEMO_MONTHLY_BUDGET_CNY 必须是数字，收到 {raw_budget!r}"
+        ) from exc
+    if monthly_budget_cny <= 0:
+        raise ConfigError(f"环境变量 RAGDEMO_MONTHLY_BUDGET_CNY 必须为正数，收到 {raw_budget!r}")
+
     cfg = RagdemoConfig(
         blob_root=blob_root,
         textin_base_url=textin_base_url,
@@ -135,6 +150,7 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
         siliconflow_base_url=siliconflow_base_url,
         siliconflow_embed_model=siliconflow_embed_model,
         siliconflow_rerank_model=siliconflow_rerank_model,
+        monthly_budget_cny=monthly_budget_cny,
     )
     cfg.validate()
     return cfg

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import psycopg
 
@@ -68,6 +69,7 @@ def ingest_edgar_filings(
             response_ref=blob_key,
             ingest_run_id=ingest_run_id,
             fetched_at=fetched_at,
+            cost_cents=Decimal(0),  # SEC 公开数据免费；NULL 在成本账本里表示"单价未知"
         )
         doc = NormalizedDocument(
             provider_doc_id=ref.accession,

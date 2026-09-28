@@ -61,6 +61,7 @@ from ragdemo.parse.textin import (
     MockDocumentParser,
     TextInParser,
 )
+from ragdemo.quality.budget_asset import monthly_cost
 from ragdemo.quality.checks import ALL_CHECKS
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
@@ -205,6 +206,7 @@ def new_document_sensor(ctx: SensorEvaluationContext) -> RunRequest | SkipReason
 
 defs = Definitions(
     assets=[
+        monthly_cost,
         fact_normalized,
         fin_fact_loaded,
         doc_normalized,
