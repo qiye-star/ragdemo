@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,9 @@ from ragdemo.ingest.assets import (
     price_daily_loaded,
     price_normalized,
 )
+from ragdemo.ingest.snapshot import MAX_INLINE_PAYLOAD_BYTES
 from ragdemo.ingest.writer import PointInTimeWriter
+from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
 MIGRATIONS = Path("db/migrations")
@@ -61,14 +64,24 @@ def conn(temp_db: str) -> psycopg.Connection:
     return c
 
 
-def _snapshot_as_raw(conn: psycopg.Connection, snapshot_id: int) -> RawResponse:
+@pytest.fixture
+def blob(tmp_path: Path) -> LocalBlobStore:
+    return LocalBlobStore(tmp_path)
+
+
+def _snapshot_as_raw(
+    conn: psycopg.Connection, snapshot_id: int, blob: LocalBlobStore
+) -> RawResponse:
     row = conn.execute(
-        "SELECT provider, endpoint, params, response, http_status, fetched_at"
+        "SELECT provider, endpoint, params, response, response_ref, http_status, fetched_at"
         "  FROM core.provider_snapshot WHERE snapshot_id = %s",
         (snapshot_id,),
     ).fetchone()
     assert row is not None, f"snapshot {snapshot_id} 不存在"
-    provider, endpoint, params, response, status, fetched_at = row
+    provider, endpoint, params, response, response_ref, status, fetched_at = row
+    if response is None:
+        assert response_ref is not None, "既无内联响应也无 response_ref——原始响应丢了"
+        response = json.loads(blob.get(cast(str, response_ref)))
     return RawResponse(
         provider=cast(str, provider),
         endpoint=cast(str, endpoint),
@@ -89,20 +102,24 @@ def _count(conn: psycopg.Connection, sql: str) -> int:
 
 
 @pytest.mark.db
-def test_fact_fetch_writes_a_snapshot_before_parsing(conn: psycopg.Connection) -> None:
+def test_fact_fetch_writes_a_snapshot_before_parsing(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
     before = _count(conn, "SELECT count(*) FROM core.provider_snapshot")
     ctx = build_asset_context(partition_key=PARTITION)
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn, blob))
 
     assert _count(conn, "SELECT count(*) FROM core.provider_snapshot") == before + 1
     assert records and all(r.snapshot_id is not None for r in records)
 
 
 @pytest.mark.db
-def test_every_loaded_fact_points_at_a_replayable_snapshot(conn: psycopg.Connection) -> None:
+def test_every_loaded_fact_points_at_a_replayable_snapshot(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
     ctx = build_asset_context(partition_key=PARTITION)
     adapter = MockFactAdapter()
-    records = cast(list[FactRecord], fact_normalized(ctx, adapter, conn))
+    records = cast(list[FactRecord], fact_normalized(ctx, adapter, conn, blob))
     fin_fact_loaded(ctx, records, PointInTimeWriter(conn, ingest_run_id="r1", source="mock"))
 
     rows = conn.execute(
@@ -113,7 +130,7 @@ def test_every_loaded_fact_points_at_a_replayable_snapshot(conn: psycopg.Connect
     assert all(r[4] is not None for r in rows), "每一行事实都必须带 snapshot_id"
 
     for ts_code, metric_id, period, value, snapshot_id in rows:
-        replayed = adapter.parse(_snapshot_as_raw(conn, cast(int, snapshot_id)))
+        replayed = adapter.parse(_snapshot_as_raw(conn, cast(int, snapshot_id), blob))
         assert any(
             r.entity_ref == ts_code
             and r.metric_field == metric_id
@@ -124,10 +141,10 @@ def test_every_loaded_fact_points_at_a_replayable_snapshot(conn: psycopg.Connect
 
 
 @pytest.mark.db
-def test_snapshot_survives_a_failed_load(conn: psycopg.Connection) -> None:
+def test_snapshot_survives_a_failed_load(conn: psycopg.Connection, blob: LocalBlobStore) -> None:
     """快照在解析之前就提交：下游写库失败，原始响应也不能跟着丢。"""
     ctx = build_asset_context(partition_key=PARTITION)
-    fact_normalized(ctx, MockFactAdapter(), conn)
+    fact_normalized(ctx, MockFactAdapter(), conn, blob)
     conn.rollback()  # 模拟下游资产在同一连接上失败回滚
     assert _count(conn, "SELECT count(*) FROM core.provider_snapshot") == 1
 
@@ -136,7 +153,9 @@ def test_snapshot_survives_a_failed_load(conn: psycopg.Connection) -> None:
 
 
 @pytest.mark.db
-def test_every_loaded_price_points_at_a_replayable_snapshot(conn: psycopg.Connection) -> None:
+def test_every_loaded_price_points_at_a_replayable_snapshot(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
     gateway = MockMcpGateway(
         responses={
             "daily": [
@@ -145,7 +164,7 @@ def test_every_loaded_price_points_at_a_replayable_snapshot(conn: psycopg.Connec
         }
     )
     ctx = build_asset_context(partition_key=PARTITION)
-    rows = cast(list[PriceRow], price_normalized(ctx, gateway, conn))
+    rows = cast(list[PriceRow], price_normalized(ctx, gateway, conn, blob))
     assert rows and all(r.snapshot_id is not None for r in rows)
 
     price_daily_loaded(
@@ -159,7 +178,7 @@ def test_every_loaded_price_points_at_a_replayable_snapshot(conn: psycopg.Connec
 
     adapter = TushareAdapter()
     for ts_code, trade_date, close, snapshot_id in loaded:
-        replayed = adapter.parse_prices(_snapshot_as_raw(conn, cast(int, snapshot_id)))
+        replayed = adapter.parse_prices(_snapshot_as_raw(conn, cast(int, snapshot_id), blob))
         assert any(
             r.entity_ref == ts_code and r.trade_date == trade_date and r.close == float(close)
             for r in replayed
@@ -174,10 +193,43 @@ class _AdapterLeakingToken(MockFactAdapter):
 
 
 @pytest.mark.db
-def test_snapshot_params_never_contain_credentials(conn: psycopg.Connection) -> None:
+def test_snapshot_params_never_contain_credentials(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
     """凭据只在出网代理层（CLAUDE.md §3）；万一调用参数里混进了 token，也不得落库。"""
     ctx = build_asset_context(partition_key=PARTITION)
-    fact_normalized(ctx, _AdapterLeakingToken(), conn)
+    fact_normalized(ctx, _AdapterLeakingToken(), conn, blob)
     row = conn.execute("SELECT params::text FROM core.provider_snapshot").fetchone()
     assert row is not None
     assert "should-not-be-stored" not in cast(str, row[0])
+
+
+@pytest.mark.db
+def test_oversized_response_is_stored_in_blob_and_replayable(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    """超过内联上限的响应落对象存储；快照行仍然能完整回放出原始数据。"""
+    padding = "x" * (MAX_INLINE_PAYLOAD_BYTES // 10)
+    rows = [
+        {
+            "ts_code": "688256.SH",
+            "field": "revenue_total",
+            "value": float(i),
+            "unit": "CNY",
+            "note": padding,
+        }
+        for i in range(12)
+    ]
+    ctx = build_asset_context(partition_key=PARTITION)
+    adapter = MockFactAdapter(rows)
+    records = cast(list[FactRecord], fact_normalized(ctx, adapter, conn, blob))
+
+    snapshot_id = records[0].snapshot_id
+    assert snapshot_id is not None
+    inline = conn.execute(
+        "SELECT response IS NULL, response_ref FROM core.provider_snapshot WHERE snapshot_id = %s",
+        (snapshot_id,),
+    ).fetchone()
+    assert inline is not None and inline[0] is True and inline[1] is not None
+    replayed = list(adapter.parse(_snapshot_as_raw(conn, snapshot_id, blob)))
+    assert len(replayed) == len(rows)

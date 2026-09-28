@@ -29,6 +29,7 @@ from ragdemo.adapters.tushare import PriceRow, TushareAdapter
 from ragdemo.ingest.reconcile import read_watermark, write_watermark
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
+from ragdemo_core.blob import BlobStore
 
 DAILY = DailyPartitionsDefinition(start_date="2022-01-01", timezone="Asia/Shanghai")
 
@@ -52,13 +53,14 @@ def fact_normalized(
     context: AssetExecutionContext,
     adapter: ResourceParam[FactAdapter],
     conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
 ) -> list[FactRecord]:
     """拉取并归一化。每次原始响应先落 provider_snapshot（CLAUDE.md §1.5）再解析，
     解析出的每条记录带上 snapshot_id；事实本身不在这里写库——那是下一个资产的事。"""
     fetch_ctx = _context_for(context)
     records: list[FactRecord] = []
     for raw in adapter.fetch(fetch_ctx):
-        snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id)
+        snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id, blob=blob)
         records.extend(replace(r, snapshot_id=snapshot_id) for r in adapter.parse(raw))
     context.log.info("normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)})
     return records
@@ -93,6 +95,7 @@ def price_normalized(
     context: AssetExecutionContext,
     gateway: ResourceParam[GatewayClient],
     conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
 ) -> list[PriceRow]:
     """给 `core.entity` 里每个登记了 `tushare_code` 的实体拉一次行情，经
     MCP 网关的 `daily` 工具（`TushareAdapter.fetch_daily`，见该方法 docstring
@@ -119,7 +122,9 @@ def price_normalized(
     rows: list[PriceRow] = []
     for ts_code in ts_codes:
         for raw in adapter.fetch_daily(fetch_ctx, gateway, ts_code=ts_code):
-            snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id)
+            snapshot_id = record_snapshot(
+                conn, raw, ingest_run_id=fetch_ctx.ingest_run_id, blob=blob
+            )
             rows.extend(replace(r, snapshot_id=snapshot_id) for r in adapter.parse_prices(raw))
     context.log.info(
         "price normalized",

@@ -14,6 +14,7 @@ from ragdemo.adapters.base import FactRecord
 from ragdemo.adapters.mock.facts import MockFactAdapter
 from ragdemo.ingest.assets import DAILY, fact_normalized, fin_fact_loaded
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
+from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
 MIGRATIONS = Path("db/migrations")
@@ -52,18 +53,22 @@ def test_partition_starts_2022_for_three_years_of_backtest() -> None:
 
 
 @pytest.mark.db
-def test_fact_normalized_produces_records(conn: psycopg.Connection) -> None:
+def test_fact_normalized_produces_records(conn: psycopg.Connection, tmp_path: Path) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
+    records = cast(
+        list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn, LocalBlobStore(tmp_path))
+    )
     assert records
     assert all(r.known_at.tzinfo is not None for r in records)
 
 
 @pytest.mark.db
-def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection) -> None:
+def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection, tmp_path: Path) -> None:
     """同一分区重跑两次，第二次全部 SKIPPED，表里仍只有一份数据。"""
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
+    records = cast(
+        list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn, LocalBlobStore(tmp_path))
+    )
 
     writer = PointInTimeWriter(conn, ingest_run_id="run-1", source="mock")
     first = cast(dict[WriteOutcome, int], fin_fact_loaded(ctx, records, writer))
@@ -82,6 +87,7 @@ def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection) -> None:
 @pytest.mark.db
 def test_backfilling_an_old_partition_keeps_known_at_historical(
     conn: psycopg.Connection,
+    tmp_path: Path,
 ) -> None:
     """回填 2022 年的分区，known_at 必须是 2022 年，不是今天。
 
@@ -93,7 +99,9 @@ def test_backfilling_an_old_partition_keeps_known_at_historical(
     不只是没被异常打断。
     """
     ctx = build_asset_context(partition_key="2022-03-15")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
+    records = cast(
+        list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn, LocalBlobStore(tmp_path))
+    )
     writer = PointInTimeWriter(conn, ingest_run_id="backfill", source="mock")
     fin_fact_loaded(ctx, records, writer)
 

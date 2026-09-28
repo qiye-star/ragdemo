@@ -75,12 +75,15 @@ def record_snapshot(
     raw: RawResponse,
     *,
     ingest_run_id: str,
-    blob: BlobStore | None = None,
+    blob: BlobStore,
 ) -> int:
     """写入原始响应并**立即提交**，返回 snapshot_id。取数路径在解析之前调用它。
 
     立即提交是刻意的：解析失败或下游写库失败回滚时，原始响应不能跟着丢——
     "这次到底拉回来了什么"正是排查那次失败最需要的证据。
+
+    `blob` 必填（不像 save_snapshot 那样可省）：超过内联上限的响应要落到对象
+    存储，省掉它就会只留一个指向空处的 response_ref，原始响应等于没存。
     """
     snapshot_id = save_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=blob)
     conn.commit()
