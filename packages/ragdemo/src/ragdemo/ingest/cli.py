@@ -41,6 +41,8 @@ from ragdemo.adapters.local_manifest import (
     count_pdf_pages,
     load_documents_with_raw,
 )
+from ragdemo.adapters.mcp_gateway import gateway_client_from_env
+from ragdemo.adapters.wind_docs import WindDocsAdapter
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
@@ -66,6 +68,7 @@ from ragdemo.parse.textin import (
     artifact_keys,
     param_fingerprint,
 )
+from ragdemo.quality.announcement_coverage import check_announcement_coverage
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
@@ -698,3 +701,39 @@ def docs_parse_pending(
             f"（{report.parsed_pages} 页），无块 {report.stored_unparsed}，"
             f"预算跳过 {report.skipped_budget}"
         )
+
+
+# --- docs check-coverage（公告双源接入计划 Task 11）--------------------------
+
+
+@docs_group.command("check-coverage")
+@click.option("--since", required=True, help="起始日期 YYYY-MM-DD")
+@click.option("--until", required=True, help="截止日期 YYYY-MM-DD（含）")
+def docs_check_coverage(since: str, until: str) -> None:
+    """A 股公告漏收核对：按月问 Wind，与巨潮目录比对，把疑似漏收清单写进
+    `quality.quality_metric`（`announcement_coverage_gap`）。不写目录——这只是
+    一次核对，不是又一条数据入库路径。港股/美股走官方渠道，不在这个核对范围内。
+    """
+    since_d = date.fromisoformat(since)
+    until_d = date.fromisoformat(until)
+    blob = LocalBlobStore(_load_config().blob_root)
+    gateway = gateway_client_from_env(provider="wind")
+    wind = WindDocsAdapter(gateway)
+
+    with psycopg.connect(_dsn()) as conn:
+        gaps = check_announcement_coverage(
+            conn,
+            wind=wind,
+            blob=blob,
+            since=since_d,
+            until=until_d,
+            partition_date=until_d,
+            ingest_run_id="cli:docs-check-coverage",
+        )
+
+    if not gaps:
+        click.echo("未发现疑似漏收")
+        return
+    click.echo(f"疑似漏收 {len(gaps)} 份：")
+    for gap in gaps:
+        click.echo(f"  - {gap.entity_ref} {gap.publish_date} {gap.title}")
