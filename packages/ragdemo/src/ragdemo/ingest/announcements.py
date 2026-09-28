@@ -1,0 +1,396 @@
+"""公告路由编排（公告双源接入计划 Task 9）：按市场分派到 A 股 / 港股 / 美股三条
+能力，A 股走 `SourceRouter` 的三层降级（cninfo → wind-docs → ifind-notice），
+待补清单与游标管理都在这里，各层本身（`run_cninfo_layer` 等）不关心跨层的事。
+
+区间语义：游标 `core.ingest_watermark(source_id=f"announcements:{group}:{entity_ref}")`
+记"这个实体处理到哪一天了"；下一次的 `since` = 游标次日，没有游标就用 `backfill_since`
+（首次回填）。待补清单里如果这个实体还有未解决项，`since` 改用待补项的 `since`
+（更早）——巨潮恢复后要把缺口一次性补上，不是只从游标继续。
+
+只有 A 股的主源（cninfo）成功才推进游标、解决待补；降级层（wind/ifind）成功只写
+目录、把全文记入待补，**不推进游标**——全文还没到，不能假装这段时间已经处理完。
+港股 / 美股没有降级层，失败直接进待补、本实体本次跳过。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
+import psycopg
+
+from ragdemo.adapters.base import FetchContext
+from ragdemo.adapters.ifind_notice import IfindNoticeAdapter
+from ragdemo.adapters.wind_docs import WindDocsAdapter
+from ragdemo.ingest.announcement_index import IndexOutcome, IndexWriter
+from ragdemo.ingest.cninfo_docs import CninfoLayerDeps, run_cninfo_layer
+from ragdemo.ingest.edgar_index import EdgarLayerDeps, run_edgar_layer
+from ragdemo.ingest.hkexnews_docs import HkexnewsLayerDeps, run_hkexnews_layer
+from ragdemo.ingest.parse_policy import ParseTier
+from ragdemo.ingest.reconcile import read_watermark, write_watermark
+from ragdemo.ingest.snapshot import record_snapshot
+from ragdemo.parse.textin import PageBudget
+from ragdemo.sources.backlog import Backlog
+from ragdemo.sources.failures import Failure, FailureKind
+from ragdemo.sources.health import SourceHealth
+from ragdemo.sources.router import AllLayersFailed, Layer, SourceRouter
+from ragdemo.sources.routing import Capability
+from ragdemo_core.blob import BlobStore
+
+# D2（负责人 2026-09-28 决定）：只对这两家下载 PDF 并解析，验证效果与成本后再扩大。
+DOWNLOAD_ENTITIES: frozenset[str] = frozenset({"688041.SH", "000977.SZ"})
+
+# entity.market 原样值 → 分组。台积电/日月光这类 TWSE 上市但报 SEC 的公司不在这张
+# 表里——它们靠 EntityRoute.cik 非空直接归 'us'，见 market_group()。
+_MARKET_GROUP: Mapping[str, str] = {
+    "SSE": "cn",
+    "SZSE": "cn",
+    "HKEX": "hk",
+    "NASDAQ": "us",
+    "NYSE": "us",
+}
+
+_CAPABILITY_BY_GROUP: Mapping[str, Capability] = {
+    "cn": Capability.ANNOUNCEMENTS_CN,
+    "hk": Capability.ANNOUNCEMENTS_HK,
+    "us": Capability.ANNOUNCEMENTS_US,
+}
+
+
+@dataclass(frozen=True)
+class EntityRoute:
+    entity_ref: str
+    short_name: str
+    market: str  # core.entity.market 原样值
+    cik: int | None = None
+
+
+def market_group(route: EntityRoute) -> str | None:
+    """返回 'cn' / 'hk' / 'us'，或 `None`（本次跳过：日 / 韩 / 其余台股）。
+    有 `cik` 的实体（含台积电、日月光）一律归 'us'，不看 `market` 字段——它们在
+    港股/台股上市，但同时向 SEC 报送 20-F/6-K（Task 8）。"""
+    if route.cik is not None:
+        return "us"
+    return _MARKET_GROUP.get(route.market)
+
+
+@dataclass(frozen=True)
+class AnnouncementSources:
+    cninfo: CninfoLayerDeps | None = None
+    wind: WindDocsAdapter | None = None
+    ifind: IfindNoticeAdapter | None = None
+    hkexnews: HkexnewsLayerDeps | None = None
+    edgar: EdgarLayerDeps | None = None
+
+
+@dataclass
+class AnnouncementRunReport:
+    by_layer: dict[str, int] = field(default_factory=dict)
+    indexed: int = 0
+    parsed_docs: int = 0
+    parsed_pages: int = 0
+    backlogged: dict[str, str] = field(default_factory=dict)  # entity_ref → 原因
+    failed: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+
+def _months_in(since: date, until: date) -> list[date]:
+    months = []
+    year, month = since.year, since.month
+    while (year, month) <= (until.year, until.month):
+        months.append(date(year, month, 1))
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    return months
+
+
+_NEW_ROW_OUTCOMES = frozenset({IndexOutcome.INSERTED, IndexOutcome.SUPERSEDED_DEGRADED})
+
+
+def _wind_degraded(
+    wind: WindDocsAdapter,
+    index: IndexWriter,
+    blob: BlobStore,
+    *,
+    route: EntityRoute,
+    since: date,
+    until: date,
+    ingest_run_id: str,
+) -> int:
+    """按月问、逐月都可能重复命中同一份公告（尤其查询窗口横跨多个月时）——
+    `IndexWriter.write` 本身会跳过重复的 (source, source_ref)，这里只数真正
+    新增的行，不是"处理过几条"。"""
+    ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=until)
+    written = 0
+    for month in _months_in(since, until):
+        raw = wind.fetch_month(ctx, short_name=route.short_name, month=month)
+        record_snapshot(index.conn, raw, ingest_run_id=ingest_run_id, blob=blob)
+        for entry in wind.parse_entries(
+            raw,
+            entity_ref=route.entity_ref,
+            short_names=[route.short_name],
+            since=since,
+            until=until,
+        ):
+            outcome, _ = index.write(entry)
+            if outcome in _NEW_ROW_OUTCOMES:
+                written += 1
+    return written
+
+
+def _ifind_degraded(
+    ifind: IfindNoticeAdapter,
+    index: IndexWriter,
+    blob: BlobStore,
+    *,
+    route: EntityRoute,
+    since: date,
+    until: date,
+    ingest_run_id: str,
+) -> int:
+    ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=until)
+    raw = ifind.fetch(ctx, short_name=route.short_name, since=since, until=until)
+    record_snapshot(index.conn, raw, ingest_run_id=ingest_run_id, blob=blob)
+    written = 0
+    for entry in ifind.parse_entries(
+        raw, entity_ref=route.entity_ref, short_names=[route.short_name]
+    ):
+        outcome, _ = index.write(entry)
+        if outcome in _NEW_ROW_OUTCOMES:
+            written += 1
+    return written
+
+
+def ingest_announcements(
+    conn: psycopg.Connection,
+    *,
+    entities: Sequence[EntityRoute],
+    sources: AnnouncementSources,
+    blob: BlobStore,
+    health: SourceHealth,
+    backlog: Backlog,
+    partition_date: date,
+    backfill_since: date,
+    download_entities: frozenset[str] = DOWNLOAD_ENTITIES,
+    tiers: frozenset[ParseTier],
+    budget: PageBudget,
+    ingest_run_id: str,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> AnnouncementRunReport:
+    report = AnnouncementRunReport()
+    index = IndexWriter(conn, ingest_run_id=ingest_run_id, now=now)
+    router = SourceRouter(health, clock=now)
+
+    for route in entities:
+        group = market_group(route)
+        if group is None:
+            report.warnings.append(
+                f"{route.entity_ref}: 市场 {route.market!r} 暂不支持（日/韩需要 API key，"
+                "其余台股缺官方历史/PDF 接口），本次跳过"
+            )
+            continue
+
+        capability = _CAPABILITY_BY_GROUP[group]
+        watermark_source = f"announcements:{group}:{route.entity_ref}"
+        cursor = read_watermark(conn, watermark_source, partition_date)
+        since = date.fromisoformat(cursor) + timedelta(days=1) if cursor else backfill_since
+
+        open_items = {i.entity_ref: i for i in backlog.open_items(capability)}
+        if route.entity_ref in open_items:
+            since = min(since, open_items[route.entity_ref].since)
+        if since > partition_date:
+            continue  # 已经处理到这个分区，没有新区间
+
+        download = route.entity_ref in download_entities
+        layers = _layers_for(
+            group,
+            route,
+            sources,
+            index=index,
+            blob=blob,
+            since=since,
+            until=partition_date,
+            tiers=tiers,
+            budget=budget,
+            download=download,
+            ingest_run_id=ingest_run_id,
+        )
+        if not layers:
+            report.warnings.append(f"{route.entity_ref}: 没有配置任何可用来源，本次跳过")
+            continue
+
+        try:
+            routed = router.run(capability, layers)
+        except AllLayersFailed as exc:
+            failure = _last_failure(exc)
+            report.failed[route.entity_ref] = str(exc)
+            backlog.add(capability, route.entity_ref, since=since, failure=failure, now=now())
+            report.backlogged[route.entity_ref] = f"{failure.kind.value}: {failure.message[:200]}"
+            continue
+
+        report.by_layer[routed.layer] = report.by_layer.get(routed.layer, 0) + 1
+        if isinstance(routed.value, int):  # 降级层：只返回写了几条目录
+            report.indexed += routed.value
+        else:  # 主源：LayerReport
+            report.indexed += routed.value.indexed
+            report.parsed_docs += routed.value.parsed_docs
+            report.parsed_pages += routed.value.parsed_pages
+
+        if routed.degraded:
+            # 降级层成功：目录有了，全文还没到——记入待补，不推进游标。
+            backlog.add(
+                capability,
+                route.entity_ref,
+                since=since,
+                failure=_degraded_placeholder_failure(),
+                now=now(),
+            )
+            report.backlogged[route.entity_ref] = "degraded: 全文待主源恢复后补齐"
+        else:
+            backlog.resolve(capability, route.entity_ref, covered_since=since, now=now())
+            write_watermark(conn, watermark_source, partition_date, partition_date.isoformat())
+
+    return report
+
+
+def _layers_for(
+    group: str,
+    route: EntityRoute,
+    sources: AnnouncementSources,
+    *,
+    index: IndexWriter,
+    blob: BlobStore,
+    since: date,
+    until: date,
+    tiers: frozenset[ParseTier],
+    budget: PageBudget,
+    download: bool,
+    ingest_run_id: str,
+) -> list[Layer[Any]]:
+    layers: list[Layer[Any]] = []
+    if group == "cn":
+        cn_since_dt = datetime.combine(since, datetime.min.time(), tzinfo=UTC)
+        cn_until_dt = datetime.combine(until, datetime.min.time(), tzinfo=UTC)
+        cninfo_deps = sources.cninfo
+        if cninfo_deps is not None:
+            layers.append(
+                Layer(
+                    "cninfo",
+                    "cninfo",
+                    False,
+                    lambda: run_cninfo_layer(
+                        index.conn,
+                        deps=cninfo_deps,
+                        index=index,
+                        entity_ref=route.entity_ref,
+                        stock_code=route.entity_ref.split(".")[0],
+                        since=cn_since_dt,
+                        until=cn_until_dt,
+                        tiers=tiers,
+                        budget=budget,
+                        download=download,
+                        ingest_run_id=ingest_run_id,
+                        dry_run=False,
+                    ),
+                )
+            )
+        wind = sources.wind
+        if wind is not None:
+            layers.append(
+                Layer(
+                    "wind-docs",
+                    "wind",
+                    True,
+                    lambda: _wind_degraded(
+                        wind,
+                        index,
+                        blob,
+                        route=route,
+                        since=since,
+                        until=until,
+                        ingest_run_id=ingest_run_id,
+                    ),
+                )
+            )
+        ifind = sources.ifind
+        if ifind is not None:
+            layers.append(
+                Layer(
+                    "ifind-notice",
+                    "ifind",
+                    True,
+                    lambda: _ifind_degraded(
+                        ifind,
+                        index,
+                        blob,
+                        route=route,
+                        since=since,
+                        until=until,
+                        ingest_run_id=ingest_run_id,
+                    ),
+                )
+            )
+    elif group == "hk" and sources.hkexnews is not None:
+        hkexnews_deps = sources.hkexnews
+        since_dt = datetime.combine(since, datetime.min.time(), tzinfo=UTC)
+        until_dt = datetime.combine(until, datetime.min.time(), tzinfo=UTC)
+        layers.append(
+            Layer(
+                "hkexnews",
+                "hkexnews",
+                False,
+                lambda: run_hkexnews_layer(
+                    index.conn,
+                    deps=hkexnews_deps,
+                    index=index,
+                    entity_ref=route.entity_ref,
+                    stock_code=route.entity_ref.split(".")[0],
+                    since=since_dt,
+                    until=until_dt,
+                    tiers=tiers,
+                    budget=budget,
+                    download=download,
+                    ingest_run_id=ingest_run_id,
+                    dry_run=False,
+                ),
+            )
+        )
+    elif group == "us" and sources.edgar is not None and route.cik is not None:
+        edgar_deps = sources.edgar
+        cik = route.cik
+        layers.append(
+            Layer(
+                "edgar",
+                "edgar",
+                False,
+                lambda: run_edgar_layer(
+                    index.conn,
+                    deps=edgar_deps,
+                    index=index,
+                    entity_ref=route.entity_ref,
+                    cik=cik,
+                    tiers=tiers,
+                    budget=budget,
+                    download=download,
+                    ingest_run_id=ingest_run_id,
+                    dry_run=False,
+                ),
+            )
+        )
+    return layers
+
+
+def _last_failure(exc: AllLayersFailed) -> Failure:
+    failures = [f for _, f in exc.attempts if f is not None]
+    if failures:
+        return failures[-1]
+    return Failure(FailureKind.UNAVAILABLE, str(exc)[:500], timedelta(0))
+
+
+def _degraded_placeholder_failure() -> Failure:
+    """降级层本身成功了（有目录），只是没有全文——用一个中性的"待补"记号复用
+    `Backlog.add` 的接口，不代表任何真实的失败分类。"""
+    return Failure(FailureKind.REJECTED, "主源不可用，降级层已写目录，全文待补", timedelta(0))
