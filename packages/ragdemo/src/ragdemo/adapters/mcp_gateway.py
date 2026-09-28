@@ -143,23 +143,77 @@ class GatewayClient(Protocol):
     def call_tool(self, name: str, arguments: Mapping[str, Any]) -> ToolCall: ...
 
 
+_SESSION_EXPIRED_MARKERS = ("session", "会话")
+
+
 class McpGatewayClient:
-    """只做两件事：列工具、调工具。"""
+    """只做两件事：列工具、调工具。
+
+    `sessions=True`（iFind）：网关按 MCP 规范的有状态会话运行，`initialize` 会返回
+    一个 `Mcp-Session-Id`，后续每次调用都要带上，否则被当成一个全新客户端处理。
+    Tushare/Wind 网关是 `StreamableHTTPSessionManager(stateless=True)`（模块文档坑
+    1-3 说的就是它们），`sessions=False`（默认）时完全不碰这一套，行为与此前一致。
+    """
 
     def __init__(
-        self, http: HttpClient, *, endpoint: str = MCP_ENDPOINT, provider: str = PROVIDER
+        self,
+        http: HttpClient,
+        *,
+        endpoint: str = MCP_ENDPOINT,
+        provider: str = PROVIDER,
+        sessions: bool = False,
     ) -> None:
         self._http = http
         self._endpoint = endpoint
         self.provider = provider
+        self._sessions = sessions
+        self._session_id: str | None = None
 
-    def _rpc(self, method: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], RawResponse]:
-        raw = self._http.post_text(
+    def _post(self, method: str, params: Mapping[str, Any]) -> RawResponse:
+        headers = {"Accept": "application/json, text/event-stream"}
+        if self._session_id is not None:
+            headers["Mcp-Session-Id"] = self._session_id
+        return self._http.post_text(
             self._endpoint,
             {"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params)},
-            # 少了 text/event-stream，服务端不会用 SSE 应答。
-            headers={"Accept": "application/json, text/event-stream"},
+            headers=headers,
         )
+
+    def _ensure_session(self) -> None:
+        if not self._sessions or self._session_id is not None:
+            return
+        raw = self._post(
+            "initialize",
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "ragdemo", "version": "0"},
+            },
+        )
+        session_id = raw.response_headers.get("mcp-session-id")
+        if not session_id:
+            raise McpProtocolError(
+                f"{self.provider}: sessions=True 但 initialize 响应没有 Mcp-Session-Id"
+            )
+        self._session_id = session_id
+        self._post("notifications/initialized", {})
+
+    def _rpc(self, method: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], RawResponse]:
+        self._ensure_session()
+        raw = self._post(method, params)
+        try:
+            return self._parse_rpc(method, raw), raw
+        except UpstreamUnavailable as exc:
+            if not self._sessions or not any(m in str(exc) for m in _SESSION_EXPIRED_MARKERS):
+                raise
+            # 会话失效：重建一次再试一次，仍失败就把第二次的错误原样抛出去——
+            # 不无限重试，那只会在一个坏掉的会话上反复打转。
+            self._session_id = None
+            self._ensure_session()
+            raw = self._post(method, params)
+            return self._parse_rpc(method, raw), raw
+
+    def _parse_rpc(self, method: str, raw: RawResponse) -> dict[str, Any]:
         frame = _decode_frame(str(raw.payload))
 
         if "error" in frame:
@@ -172,7 +226,7 @@ class McpGatewayClient:
         result = frame.get("result")
         if not isinstance(result, dict):
             raise McpProtocolError(f"{method} 响应缺少 result: {str(raw.payload)[:120]!r}")
-        return result, raw
+        return result
 
     def health(self) -> bool:
         """能列出工具就算通。/admin/health 不在 MCP 协议里，不依赖它。"""
@@ -233,6 +287,7 @@ def gateway_client_from_env(
     provider: str = PROVIDER,
     timeout_s: float = 60.0,
     transport: httpx.BaseTransport | None = None,
+    sessions: bool = False,
 ) -> McpGatewayClient:
     """按环境变量构造客户端。**没有默认地址，也不会去猜。**
 
@@ -281,7 +336,9 @@ def gateway_client_from_env(
         transport=transport,
     )
     # 端点路径取自 URL 本身：各服务路径不同（/mcp/、/vserver_stock_data/mcp/ ……）。
-    return McpGatewayClient(http, endpoint=parsed.path or MCP_ENDPOINT, provider=provider)
+    return McpGatewayClient(
+        http, endpoint=parsed.path or MCP_ENDPOINT, provider=provider, sessions=sessions
+    )
 
 
 __all__: Sequence[str] = (

@@ -268,6 +268,136 @@ def test_url_without_a_path_falls_back_to_the_default_endpoint(
     assert seen == ["/mcp/"]
 
 
+def _client_with_session(handler: httpx.MockTransport) -> McpGatewayClient:
+    http = HttpClient(
+        provider="ifind-mcp",
+        base_url="http://gateway.test",
+        policy=RetryPolicy(max_attempts=2, backoff_base_s=0.0),
+        bucket=TokenBucket(rate_per_minute=10_000),
+        transport=handler,
+    )
+    return McpGatewayClient(http, sessions=True)
+
+
+# --- 会话支持（公告双源接入计划 Task 5：iFind 需要 Mcp-Session-Id）------------------
+
+
+def test_session_id_from_initialize_is_sent_on_every_call() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        method = body["method"]
+        seen.append((method, request.headers.get("mcp-session-id")))
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                text=_sse({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                headers={"Mcp-Session-Id": "sess-1"},
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(200, text="")
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            ),
+        )
+
+    client = _client_with_session(httpx.MockTransport(handler))
+    client.call_tool("search_notice", {"query": "x"})
+    client.call_tool("search_notice", {"query": "y"})
+
+    methods = [m for m, _ in seen]
+    assert methods == ["initialize", "notifications/initialized", "tools/call", "tools/call"]
+    assert [sid for _, sid in seen[2:]] == ["sess-1", "sess-1"], "会话 ID 只握手一次，后续复用"
+
+
+def test_expired_session_is_rebuilt_once_then_gives_up() -> None:
+    calls = {"init": 0, "call": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        method = body["method"]
+        if method == "initialize":
+            calls["init"] += 1
+            return httpx.Response(
+                200,
+                text=_sse({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                headers={"Mcp-Session-Id": f"sess-{calls['init']}"},
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(200, text="")
+        calls["call"] += 1
+        # 每次调用都报会话失效——用来断言"只重建一次就放弃"，不是无限重试。
+        return httpx.Response(
+            200,
+            text=json.dumps(
+                {"jsonrpc": "2.0", "id": 2, "error": {"code": -1, "message": "session expired"}}
+            ),
+        )
+
+    client = _client_with_session(httpx.MockTransport(handler))
+    with pytest.raises(UpstreamUnavailable):
+        client.call_tool("search_notice", {"query": "x"})
+    assert calls["init"] == 2, "第一次握手 + 失效后重建一次，不是无限重试"
+    assert calls["call"] == 2, "原始调用 + 重建后重试一次"
+
+
+def test_stateless_servers_never_initialize() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        method = json.loads(request.content)["method"]
+        seen.append(method)
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            ),
+        )
+
+    _client(httpx.MockTransport(handler)).call_tool("daily", {})
+    assert seen == ["tools/call"], "Tushare/Wind 是无状态服务，不该多发 initialize"
+
+
+def test_other_response_headers_are_not_kept() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["method"] == "initialize":
+            return httpx.Response(
+                200,
+                text=_sse({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                headers={"Mcp-Session-Id": "sess-1", "Set-Cookie": "secret=abc"},
+            )
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(200, text="")
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            ),
+            headers={"Set-Cookie": "secret=abc", "Mcp-Session-Id": "sess-1"},
+        )
+
+    result = _client_with_session(httpx.MockTransport(handler)).call_tool("search_notice", {})
+    assert dict(result.raw.response_headers) == {"mcp-session-id": "sess-1"}, (
+        "白名单头（会话 ID）要保留，任意其他响应头（这里是 Set-Cookie）不该出现在快照里"
+    )
+
+
 def test_raw_responses_carry_the_configured_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """快照里的 provider 要能区分是哪个数据源，不能全记成 mcp-gateway。"""
     monkeypatch.setenv("RAGDEMO_TUSHARE_MCP_URL", "http://127.0.0.1:8083/mcp/")

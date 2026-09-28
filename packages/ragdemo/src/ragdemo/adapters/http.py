@@ -395,7 +395,17 @@ class HttpClient:
             http_status=last_response.status_code,
             fetched_at=datetime.now(UTC),
             cost_cents=self.cost_per_call_cents,
+            response_headers=_whitelisted_headers(last_response.headers),
         )
+
+
+# 会话型 MCP 服务器（iFind）靠这个头保活；其余任何响应头（Set-Cookie 之类）
+# 都不进快照——快照是要长期留存、可能被人翻看的证据，不是转发管道。
+_HEADER_WHITELIST = frozenset({"mcp-session-id"})
+
+
+def _whitelisted_headers(headers: httpx.Headers) -> dict[str, str]:
+    return {k.lower(): v for k, v in headers.items() if k.lower() in _HEADER_WHITELIST}
 
 
 def _error_for(response: httpx.Response) -> Exception:

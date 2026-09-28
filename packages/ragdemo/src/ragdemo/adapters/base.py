@@ -67,6 +67,10 @@ class RawResponse:
     external_id: str | None = None
     publish_time: datetime | None = None
     checksum: str | None = None
+    # 白名单响应头（目前只有 mcp-session-id，公告双源接入计划 Task 5）。刻意不是
+    # "整份响应头"：巨潮/iFind 这类响应可能带 Set-Cookie 之类不该进快照的内容，
+    # HttpClient 只挑白名单里的键放进来，这里原样存，不再二次过滤。
+    response_headers: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         require_aware(self.fetched_at, "fetched_at")
