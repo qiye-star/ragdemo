@@ -22,3 +22,8 @@ class QuotaExceeded(AdapterError):
 class UpstreamUnavailable(AdapterError):
     """重试耗尽后仍失败。抛出它会让 Dagster 分区失败，这是刻意的：
     部分数据入库比没数据更糟，下游会以为数据完整。"""
+
+
+class ProviderRefused(AdapterError):
+    """供应商收到了请求并明确拒绝（无权限、限频）。与 `UpstreamUnavailable` 分开：
+    拒绝原因在报文里，决定了该冷却多久（ADR-0012），而且重试同一请求没有用。"""

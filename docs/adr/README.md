@@ -37,6 +37,7 @@
 | [0009](0009-chroma-as-vector-candidate-generator.md) | Chroma 承担向量召回，pgvector 保留为时点权威 | 已接受 | 2026-09-21 |
 | [0010](0010-internal-diagnostic-web-ui-in-p1.md) | 内部诊断 Web 界面提前到 P1，产品前端仍在 P4 | 已接受 | 2026-09-22 |
 | [0011](0011-entity-ids-single-value-pending-pushdown-test.md) | `doc_block.entity_id` 暂维持单值，不改数组（待实测数组下推） | 已接受 | 2026-09-22 |
+| [0012](0012-data-source-roles-and-degradation.md) | 数据源分工与降级：Tushare 管行情，Wind 管财务与公告，iFind 只做降级与核对 | 已接受 | 2026-09-28 |
 
 ## 什么时候要写新 ADR
 
