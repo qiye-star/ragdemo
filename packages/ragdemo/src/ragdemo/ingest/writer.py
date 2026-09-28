@@ -137,8 +137,8 @@ class PointInTimeWriter:
             self.conn.execute(
                 "INSERT INTO core.fin_fact (entity_id, metric_id, period, period_end,"
                 " value, unit, currency, valid_from, known_at, source, source_ref,"
-                " ingest_run_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                " ingest_run_id, snapshot_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     entity_id,
                     metric_id,
@@ -152,6 +152,7 @@ class PointInTimeWriter:
                     self.source,
                     record.source_ref,
                     self.ingest_run_id,
+                    record.snapshot_id,
                 ),
             )
         return outcome
@@ -201,8 +202,8 @@ class PointInTimeWriter:
             self.conn.execute(
                 "INSERT INTO core.price_daily (entity_id, trade_date, open, high, low,"
                 " close, pre_close, volume, amount, adj_factor, is_suspended, valid_from,"
-                " known_at, source, source_ref, ingest_run_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                " known_at, source, source_ref, ingest_run_id, snapshot_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     entity_id,
                     record.trade_date,
@@ -220,6 +221,7 @@ class PointInTimeWriter:
                     self.source,
                     f"{record.entity_ref}:{record.trade_date.isoformat()}",
                     self.ingest_run_id,
+                    record.snapshot_id,
                 ),
             )
         return outcome

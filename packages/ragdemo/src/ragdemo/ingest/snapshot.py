@@ -68,3 +68,20 @@ def save_snapshot(
     ).fetchone()
     assert row is not None
     return int(row[0])
+
+
+def record_snapshot(
+    conn: psycopg.Connection,
+    raw: RawResponse,
+    *,
+    ingest_run_id: str,
+    blob: BlobStore | None = None,
+) -> int:
+    """写入原始响应并**立即提交**，返回 snapshot_id。取数路径在解析之前调用它。
+
+    立即提交是刻意的：解析失败或下游写库失败回滚时，原始响应不能跟着丢——
+    "这次到底拉回来了什么"正是排查那次失败最需要的证据。
+    """
+    snapshot_id = save_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=blob)
+    conn.commit()
+    return snapshot_id

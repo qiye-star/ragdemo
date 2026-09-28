@@ -90,6 +90,9 @@ class FactRecord:
     known_at: datetime
     source_ref: str | None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    # 解析出这一行的那次原始响应（core.provider_snapshot）。适配器 parse() 不知道
+    # 它——快照由调用方在解析前写入，再把 id 盖到解析结果上。
+    snapshot_id: int | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.known_at, "known_at")

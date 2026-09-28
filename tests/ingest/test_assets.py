@@ -54,7 +54,7 @@ def test_partition_starts_2022_for_three_years_of_backtest() -> None:
 @pytest.mark.db
 def test_fact_normalized_produces_records(conn: psycopg.Connection) -> None:
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
     assert records
     assert all(r.known_at.tzinfo is not None for r in records)
 
@@ -63,7 +63,7 @@ def test_fact_normalized_produces_records(conn: psycopg.Connection) -> None:
 def test_asset_is_idempotent_across_reruns(conn: psycopg.Connection) -> None:
     """同一分区重跑两次，第二次全部 SKIPPED，表里仍只有一份数据。"""
     ctx = build_asset_context(partition_key="2024-10-28")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
 
     writer = PointInTimeWriter(conn, ingest_run_id="run-1", source="mock")
     first = cast(dict[WriteOutcome, int], fin_fact_loaded(ctx, records, writer))
@@ -93,7 +93,7 @@ def test_backfilling_an_old_partition_keeps_known_at_historical(
     不只是没被异常打断。
     """
     ctx = build_asset_context(partition_key="2022-03-15")
-    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter()))
+    records = cast(list[FactRecord], fact_normalized(ctx, MockFactAdapter(), conn))
     writer = PointInTimeWriter(conn, ingest_run_id="backfill", source="mock")
     fin_fact_loaded(ctx, records, writer)
 

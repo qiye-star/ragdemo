@@ -48,6 +48,7 @@ class PriceRow:
     adj_factor: float
     is_suspended: bool
     known_at: datetime
+    snapshot_id: int | None = None  # 同 FactRecord.snapshot_id
 
     def __post_init__(self) -> None:
         require_aware(self.known_at, "known_at")

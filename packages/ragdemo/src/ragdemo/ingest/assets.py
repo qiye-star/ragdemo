@@ -17,6 +17,7 @@ Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注
 `Definitions(resources=...)` 注入的资源，`definitions.py` 里的装配会校验失败。
 """
 
+from dataclasses import replace
 from datetime import date
 
 import psycopg
@@ -26,6 +27,7 @@ from ragdemo.adapters.base import FactAdapter, FactRecord, FetchContext
 from ragdemo.adapters.mcp_gateway import GatewayClient
 from ragdemo.adapters.tushare import PriceRow, TushareAdapter
 from ragdemo.ingest.reconcile import read_watermark, write_watermark
+from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
 
 DAILY = DailyPartitionsDefinition(start_date="2022-01-01", timezone="Asia/Shanghai")
@@ -47,13 +49,17 @@ def _context_for(context: AssetExecutionContext) -> FetchContext:
 
 @asset(partitions_def=DAILY, group_name="ingest")
 def fact_normalized(
-    context: AssetExecutionContext, adapter: ResourceParam[FactAdapter]
+    context: AssetExecutionContext,
+    adapter: ResourceParam[FactAdapter],
+    conn: ResourceParam[psycopg.Connection],
 ) -> list[FactRecord]:
-    """拉取并归一化。不写库——入库是下一个资产的事。"""
+    """拉取并归一化。每次原始响应先落 provider_snapshot（CLAUDE.md §1.5）再解析，
+    解析出的每条记录带上 snapshot_id；事实本身不在这里写库——那是下一个资产的事。"""
     fetch_ctx = _context_for(context)
     records: list[FactRecord] = []
     for raw in adapter.fetch(fetch_ctx):
-        records.extend(adapter.parse(raw))
+        snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id)
+        records.extend(replace(r, snapshot_id=snapshot_id) for r in adapter.parse(raw))
     context.log.info("normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)})
     return records
 
@@ -113,7 +119,8 @@ def price_normalized(
     rows: list[PriceRow] = []
     for ts_code in ts_codes:
         for raw in adapter.fetch_daily(fetch_ctx, gateway, ts_code=ts_code):
-            rows.extend(adapter.parse_prices(raw))
+            snapshot_id = record_snapshot(conn, raw, ingest_run_id=fetch_ctx.ingest_run_id)
+            rows.extend(replace(r, snapshot_id=snapshot_id) for r in adapter.parse_prices(raw))
     context.log.info(
         "price normalized",
         extra={
