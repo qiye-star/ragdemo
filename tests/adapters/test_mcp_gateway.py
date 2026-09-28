@@ -223,3 +223,58 @@ def test_insecure_override_is_explicit_and_logged(
         gateway_client_from_env()
 
     assert any("明文" in r.message for r in caplog.records)
+
+
+# --- 按服务配置（2026-09-28：Tushare 官方 MCP / 万得 / 同花顺各一个端点）----------
+
+
+def test_factory_reads_the_named_env_var_and_uses_the_url_path_as_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAGDEMO_WIND_MCP_URL", "http://127.0.0.1:8084/vserver_stock_data/mcp/")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
+
+    client = gateway_client_from_env(
+        url_env="RAGDEMO_WIND_MCP_URL", provider="wind-mcp", transport=httpx.MockTransport(handler)
+    )
+    assert client.provider == "wind-mcp"
+    client.list_tools()
+    assert seen == ["/vserver_stock_data/mcp/"]
+
+
+def test_factory_error_names_the_env_var_it_was_asked_to_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RAGDEMO_TUSHARE_MCP_URL", raising=False)
+    with pytest.raises(ValueError, match="RAGDEMO_TUSHARE_MCP_URL"):
+        gateway_client_from_env(url_env="RAGDEMO_TUSHARE_MCP_URL", provider="tushare-mcp")
+
+
+def test_url_without_a_path_falls_back_to_the_default_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAGDEMO_MCP_GATEWAY_URL", "http://127.0.0.1:8766")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
+
+    gateway_client_from_env(transport=httpx.MockTransport(handler)).list_tools()
+    assert seen == ["/mcp/"]
+
+
+def test_raw_responses_carry_the_configured_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """快照里的 provider 要能区分是哪个数据源，不能全记成 mcp-gateway。"""
+    monkeypatch.setenv("RAGDEMO_TUSHARE_MCP_URL", "http://127.0.0.1:8083/mcp/")
+    body = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "[]"}]}}
+    client = gateway_client_from_env(
+        url_env="RAGDEMO_TUSHARE_MCP_URL",
+        provider="tushare-mcp",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)),
+    )
+    assert client.call_tool("daily", {"ts_code": "688041.SH"}).raw.provider == "tushare-mcp"

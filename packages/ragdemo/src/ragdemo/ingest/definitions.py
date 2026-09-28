@@ -104,16 +104,17 @@ def tushare_writer_resource(_context: InitResourceContext) -> PointInTimeWriter:
     return PointInTimeWriter(_conn(), ingest_run_id="dagster", source="tushare")
 
 
+TUSHARE_MCP_URL_ENV = "RAGDEMO_TUSHARE_MCP_URL"
+
+
 @resource
 def gateway_resource(_context: InitResourceContext) -> GatewayClient:
-    """按 `RAGDEMO_MCP_GATEWAY_URL` 是否设置选择真实网关客户端还是 Mock——
-    与 `parser_resource` 判断 `TEXTIN_BASE_URL` 同一套规则，不重新发明一套
-    开关。地址缺失时退回 Mock：本地开发与测试都不该被逼着配一个真实网关
-    地址（网关地址属于部署配置，见 adapters/mcp_gateway.py 的
-    `gateway_client_from_env` docstring）。"""
-    if not os.environ.get("RAGDEMO_MCP_GATEWAY_URL", "").strip():
+    """行情取数用的 MCP 客户端：Tushare 官方 MCP（2026-09-28 选定，经出网代理 8083 端口，
+    token 由代理注入）。`RAGDEMO_TUSHARE_MCP_URL` 未设置时退回 Mock——与 `parser_resource`
+    判断 `TEXTIN_BASE_URL` 同一套规则，本地开发与测试不该被逼着配真实地址。"""
+    if not os.environ.get(TUSHARE_MCP_URL_ENV, "").strip():
         return MockMcpGateway()
-    return gateway_client_from_env()
+    return gateway_client_from_env(url_env=TUSHARE_MCP_URL_ENV, provider="tushare-mcp")
 
 
 @resource

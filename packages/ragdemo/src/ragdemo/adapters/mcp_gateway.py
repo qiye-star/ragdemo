@@ -45,6 +45,8 @@ from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
+import httpx
+
 from ragdemo.adapters.base import RawResponse
 from ragdemo.adapters.errors import AdapterError, UpstreamUnavailable
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
@@ -144,11 +146,12 @@ class GatewayClient(Protocol):
 class McpGatewayClient:
     """只做两件事：列工具、调工具。"""
 
-    provider = PROVIDER
-
-    def __init__(self, http: HttpClient, *, endpoint: str = MCP_ENDPOINT) -> None:
+    def __init__(
+        self, http: HttpClient, *, endpoint: str = MCP_ENDPOINT, provider: str = PROVIDER
+    ) -> None:
         self._http = http
         self._endpoint = endpoint
+        self.provider = provider
 
     def _rpc(self, method: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], RawResponse]:
         raw = self._http.post_text(
@@ -162,7 +165,7 @@ class McpGatewayClient:
         if "error" in frame:
             err = frame["error"] or {}
             raise UpstreamUnavailable(
-                f"{PROVIDER} {method} 失败：{err.get('message', '未知错误')}"
+                f"{self.provider} {method} 失败：{err.get('message', '未知错误')}"
                 f"（code={err.get('code')}, http={raw.http_status}）"
             )
 
@@ -194,7 +197,7 @@ class McpGatewayClient:
         text = _text_of(result)
 
         if result.get("isError"):
-            raise McpToolFailed(f"{PROVIDER} 工具 {name} 业务失败：{text[:300]}")
+            raise McpToolFailed(f"{self.provider} 工具 {name} 业务失败：{text[:300]}")
 
         try:
             payload: Any = json.loads(text)
@@ -224,7 +227,13 @@ def _is_private_host(host: str) -> bool:
         return False
 
 
-def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
+def gateway_client_from_env(
+    *,
+    url_env: str = URL_ENV,
+    provider: str = PROVIDER,
+    timeout_s: float = 60.0,
+    transport: httpx.BaseTransport | None = None,
+) -> McpGatewayClient:
     """按环境变量构造客户端。**没有默认地址，也不会去猜。**
 
     不给默认值是刻意的：把一个明文公网端点写死进仓库，等于让任何 clone 这份代码
@@ -238,10 +247,10 @@ def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
     超时默认 60s 而不是沿用 30s：实测经网关转一次上游要 2.4-3.6s，
     Wind/iFind 的重接口更慢，30s 在批量取数时会把正常请求切断。
     """
-    url = os.environ.get(URL_ENV, "").strip()
+    url = os.environ.get(url_env, "").strip()
     if not url:
         raise ValueError(
-            f"{URL_ENV} 未设置。MCP 网关地址属于部署配置，仓库里不提供默认值——"
+            f"{url_env} 未设置。MCP 网关地址属于部署配置，仓库里不提供默认值——"
             "写死一个明文公网端点会让任何一份 clone 默认把查询发过去。"
         )
 
@@ -250,7 +259,7 @@ def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
     if parsed.scheme == "http" and not _is_private_host(host):
         if os.environ.get(INSECURE_ENV, "").strip() not in _TRUTHY:
             raise ValueError(
-                f"{URL_ENV} 指向公网地址 {host!r} 却用明文 HTTP——查询与实体财务数据会在"
+                f"{url_env} 指向公网地址 {host!r} 却用明文 HTTP——查询与实体财务数据会在"
                 f"链路上裸奔。请给网关加 TLS；确实要放行就显式设 {INSECURE_ENV}=1。"
             )
         logger.warning(
@@ -261,7 +270,7 @@ def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
         )
 
     http = HttpClient(
-        provider=PROVIDER,
+        provider=provider,
         base_url=f"{parsed.scheme}://{parsed.netloc}",
         policy=RetryPolicy(max_attempts=3, backoff_base_s=1.0),
         # 网关自己不限速，但 iFind 有套餐并发硬限（免费 2 / 个人 5 / 企业 10），
@@ -269,8 +278,10 @@ def gateway_client_from_env(*, timeout_s: float = 60.0) -> McpGatewayClient:
         bucket=TokenBucket(rate_per_minute=120),
         timeout_s=timeout_s,
         cost_per_call_cents=Decimal(0),
+        transport=transport,
     )
-    return McpGatewayClient(http)
+    # 端点路径取自 URL 本身：各服务路径不同（/mcp/、/vserver_stock_data/mcp/ ……）。
+    return McpGatewayClient(http, endpoint=parsed.path or MCP_ENDPOINT, provider=provider)
 
 
 __all__: Sequence[str] = (
