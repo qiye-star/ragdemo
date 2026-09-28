@@ -180,6 +180,27 @@ class BlockDetail:
     document: DocumentInfo
 
 
+# --- 公告目录（v1.1，公告双源接入计划 Task 14）------------------------------------
+
+
+@dataclass(frozen=True)
+class AnnouncementInfo:
+    """`core.announcement_index` 的只读投影——目录条目不一定有全文（Wind/iFind
+    降级层、暂不下载的实体都只建目录），`has_full_text` 与 `doc_id` 必须一致：
+    `has_full_text = False` 时 `doc_id` 恒为 `None`，没有全文就没有可关联的文档。
+    `known_at` 由各来源按自己的时间精度算好（cninfo 到日、披露易到分钟、EDGAR 到
+    秒），这里原样暴露，不重算——第二条契约规则要求的溯源就是这个字段本身。"""
+
+    entity_id: str
+    source: str  # cninfo / wind / ifind / hkexnews / edgar
+    title: str
+    publish_date: date
+    has_full_text: bool
+    doc_id: int | None
+    url: str | None
+    known_at: datetime
+
+
 # --- 产业链 -----------------------------------------------------------------------
 
 
@@ -277,4 +298,17 @@ class DataApi(Protocol):
         self, event_type: str, trigger_node: str, *, as_of: datetime
     ) -> list[PropagationRule]:
         """某环节发生某类事件时适用的传导规则（只返回启用中的）。"""
+        ...
+
+    def list_announcements(
+        self,
+        entity_id: str,
+        *,
+        as_of: datetime,
+        since: date | None = None,
+        until: date | None = None,
+    ) -> list[AnnouncementInfo]:
+        """`entity_id` 的公告目录（v1.1），按 `publish_date` 升序。只返回 `as_of`
+        时刻已知、未被取代的现行行——降级层（Wind/iFind）的行被主源（cninfo 等）
+        取代后不再出现；`since`/`until` 按 `publish_date` 收窄，不传则不限制。"""
         ...

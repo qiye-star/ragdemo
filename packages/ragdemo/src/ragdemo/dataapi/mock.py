@@ -12,6 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from ragdemo.dataapi.contract import (
+    AnnouncementInfo,
     BlockCitation,
     BlockDetail,
     BlockHit,
@@ -296,3 +297,33 @@ class MockDataApi:
             and s.rule.trigger_event == event_type
             and s.rule.trigger_node == trigger_node
         ]
+
+    # --- 公告目录（v1.1）-----------------------------------------------------------
+
+    def list_announcements(
+        self,
+        entity_id: str,
+        *,
+        as_of: datetime,
+        since: date | None = None,
+        until: date | None = None,
+    ) -> list[AnnouncementInfo]:
+        require_as_of(as_of)
+        rows = [
+            AnnouncementInfo(
+                a.entity_id,
+                a.source,
+                a.title,
+                a.publish_date,
+                a.has_full_text,
+                a.doc_id,
+                a.url,
+                a.known_at,
+            )
+            for a in self._d.announcements
+            if a.entity_id == entity_id
+            and (since is None or a.publish_date >= since)
+            and (until is None or a.publish_date <= until)
+            and _visible(a.known_at, a.superseded_at, as_of)
+        ]
+        return sorted(rows, key=lambda r: r.publish_date)

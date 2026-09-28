@@ -38,6 +38,12 @@ T_DEFINITION_V2 = datetime(2024, 12, 1, 10, 0, tzinfo=CST)
 T_NEW_RELATION = datetime(2025, 1, 1, tzinfo=CST)
 T_FUTURE_DOC = _eod(date(2025, 3, 1))
 
+# --- v1.1 公告目录（Task 14）：降级层被主源取代、日精度 vs 秒精度 known_at -------
+ANNOUNCEMENT_DAY = date(2025, 3, 31)
+T_ANNOUNCEMENT_WIND_KNOWN = datetime(2025, 3, 28, 9, 0, tzinfo=CST)  # 降级层先到
+T_ANNOUNCEMENT_CNINFO_KNOWN = _eod(ANNOUNCEMENT_DAY)  # 主源到达/取代降级行，日精度上界
+T_ANNOUNCEMENT_EDGAR_KNOWN = datetime(2025, 3, 31, 14, 30, tzinfo=CST)  # 秒精度，同一天更早已知
+
 
 @dataclass(frozen=True)
 class SampleEntity:
@@ -124,6 +130,24 @@ class SampleBlock:
 
 
 @dataclass(frozen=True)
+class SampleAnnouncement:
+    """`core.announcement_index` 的示意行——覆盖 v1.1 契约要守的三种情形：
+    降级层（Wind）被主源（cninfo）取代、`has_full_text=False` 时 `doc_id` 恒为
+    `None`、以及日精度（cninfo，当日 23:59:59 上界）与秒精度（EDGAR）来源的
+    `known_at` 差异。"""
+
+    entity_id: str
+    source: str
+    title: str
+    publish_date: date
+    has_full_text: bool
+    doc_id: int | None
+    known_at: datetime
+    superseded_at: datetime | None
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class SampleRelation:
     from_entity: str
     to_entity: str
@@ -151,6 +175,7 @@ class SampleDataset:
     blocks: tuple[SampleBlock, ...]
     relations: tuple[SampleRelation, ...]
     rules: tuple[SampleRule, ...]
+    announcements: tuple[SampleAnnouncement, ...] = ()
 
 
 HYGON = "CN.688041"
@@ -449,6 +474,38 @@ SAMPLE = SampleDataset(
                 "founder",
             ),
             enabled=True,
+        ),
+    ),
+    announcements=(
+        SampleAnnouncement(
+            HYGON,
+            "wind",
+            "海光信息:2025年年度报告",
+            ANNOUNCEMENT_DAY,
+            False,
+            None,
+            T_ANNOUNCEMENT_WIND_KNOWN,
+            T_ANNOUNCEMENT_CNINFO_KNOWN,  # 巨潮到达时取代
+        ),
+        SampleAnnouncement(
+            HYGON,
+            "cninfo",
+            "海光信息:2025年年度报告",
+            ANNOUNCEMENT_DAY,
+            True,
+            100,
+            T_ANNOUNCEMENT_CNINFO_KNOWN,
+            None,
+        ),
+        SampleAnnouncement(
+            HYGON,
+            "edgar",
+            "示意-同日另一份公告（秒精度来源）",
+            ANNOUNCEMENT_DAY,
+            True,
+            101,
+            T_ANNOUNCEMENT_EDGAR_KNOWN,
+            None,
         ),
     ),
 )

@@ -17,12 +17,15 @@ import pytest
 
 from ragdemo.dataapi.contract import DataApi
 from ragdemo.dataapi.sample import (
+    ANNOUNCEMENT_DAY,
     CST,
     HYGON,
     INSPUR,
     PRIVATE_MARKER,
     SUGON,
     T_2024Q3,
+    T_ANNOUNCEMENT_CNINFO_KNOWN,
+    T_ANNOUNCEMENT_WIND_KNOWN,
     T_CORRECTION,
     T_DEFINITION_V2,
     T_FUTURE_DOC,
@@ -63,6 +66,7 @@ class DataApiContract:
             lambda: api.get_document(1, as_of=naive),
             lambda: api.get_relations(HYGON, as_of=naive),
             lambda: api.match_rules("capacity_expansion", "先进封装", as_of=naive),
+            lambda: api.list_announcements(HYGON, as_of=naive),
         ]
         for call in calls:
             with pytest.raises(ValueError, match="as_of"):
@@ -267,4 +271,56 @@ class DataApiContract:
     def test_match_rules_returns_only_enabled_rules(self) -> None:
         rules = self.make_api().match_rules("capacity_expansion", "先进封装", as_of=LATER)
         assert [r.rule_id for r in rules] == [1]
+
+    # --- 公告目录（v1.1）-----------------------------------------------------------
+
+    def test_degraded_row_is_superseded_by_the_primary_source(self) -> None:
+        api = self.make_api()
+        before = api.list_announcements(HYGON, as_of=T_ANNOUNCEMENT_WIND_KNOWN + timedelta(hours=1))
+        assert [(a.source, a.has_full_text, a.doc_id) for a in before] == [("wind", False, None)]
+
+        after = api.list_announcements(
+            HYGON, as_of=T_ANNOUNCEMENT_CNINFO_KNOWN + timedelta(hours=1)
+        )
+        sources = {a.source: a for a in after}
+        assert "wind" not in sources, "巨潮到达后，降级层的行不该再出现"
+        assert sources["cninfo"].has_full_text and sources["cninfo"].doc_id == 100
+
+    def test_has_full_text_false_always_has_no_doc_id(self) -> None:
+        api = self.make_api()
+        rows = api.list_announcements(HYGON, as_of=T_ANNOUNCEMENT_WIND_KNOWN + timedelta(hours=1))
+        assert all(a.doc_id is None for a in rows if not a.has_full_text)
+
+    def test_day_precision_and_second_precision_known_at_differ(self) -> None:
+        """cninfo（日精度）当日 23:59:59 之前不可见；EDGAR（秒精度）同一天更早的
+        真实受理时刻一到就可见——两者不该被同一条"当日"规则误判。"""
+        api = self.make_api()
+        mid_afternoon = datetime(2025, 3, 31, 20, 0, tzinfo=CST)
+        rows = api.list_announcements(HYGON, as_of=mid_afternoon)
+        sources = {a.source for a in rows}
+        assert "edgar" in sources, "EDGAR 是秒级真实受理时刻，14:30 已过，20:00 该可见"
+        assert "cninfo" not in sources, "cninfo 是日精度，当日 23:59:59 之前不可见"
+
+        end_of_day = T_ANNOUNCEMENT_CNINFO_KNOWN + timedelta(minutes=1)
+        rows = api.list_announcements(HYGON, as_of=end_of_day)
+        assert "cninfo" in {a.source for a in rows}
+
+    def test_list_announcements_filters_by_since_and_until(self) -> None:
+        api = self.make_api()
+        rows = api.list_announcements(
+            HYGON, as_of=LATER, since=ANNOUNCEMENT_DAY, until=ANNOUNCEMENT_DAY
+        )
+        assert rows and all(a.publish_date == ANNOUNCEMENT_DAY for a in rows)
+        assert (
+            api.list_announcements(
+                HYGON,
+                as_of=LATER,
+                since=ANNOUNCEMENT_DAY + timedelta(days=1),
+            )
+            == []
+        )
+
+    def test_list_announcements_orders_by_publish_date(self) -> None:
+        rows = self.make_api().list_announcements(HYGON, as_of=LATER)
+        assert [r.publish_date for r in rows] == sorted(r.publish_date for r in rows)
         assert self.make_api().match_rules("no_such_event", "先进封装", as_of=LATER) == []
