@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import psycopg
 import pytest
@@ -99,6 +102,58 @@ def test_older_known_at_is_rejected(writer: PointInTimeWriter) -> None:
     writer.write_fact(_record(12500.0, datetime(2025, 1, 15, 19, 0, tzinfo=UTC)))
     with pytest.raises(OutOfOrderCorrection):
         writer.write_fact(_record(12340.5, datetime(2024, 10, 28, 18, 32, tzinfo=UTC)))
+
+
+def _observed(value: float, known_at: datetime, observed_at: datetime) -> FactRecord:
+    return replace(_record(value, known_at), observed_at=observed_at)
+
+
+DISCLOSED = datetime(2024, 10, 16, 15, 59, 59, tzinfo=UTC)
+
+
+@pytest.mark.db
+def test_restated_value_with_the_same_disclosure_date_becomes_a_correction_when_observed(
+    writer: PointInTimeWriter,
+) -> None:
+    """只给当前值的供应商（Wind）：同一期后来被追溯调整，重新取数时值变了、披露日期
+    没变。这次变化只能从观察到的那一刻起算已知——回填到原披露日就是前视偏差。"""
+    first_seen = datetime(2025, 1, 1, tzinfo=UTC)
+    restated_seen = datetime(2025, 6, 1, tzinfo=UTC)
+    assert writer.write_fact(_observed(100.0, DISCLOSED, first_seen)) is WriteOutcome.INSERTED
+    assert writer.write_fact(_observed(105.0, DISCLOSED, restated_seen)) is WriteOutcome.CORRECTED
+
+    rows = writer.conn.execute(
+        "SELECT value, known_at, superseded_at FROM core.fin_fact ORDER BY known_at"
+    ).fetchall()
+    assert [(float(cast(Decimal, v)), k, s) for v, k, s in rows] == [
+        (100.0, DISCLOSED, restated_seen),
+        (105.0, restated_seen, None),
+    ]
+
+
+@pytest.mark.db
+def test_same_value_observed_again_is_skipped(writer: PointInTimeWriter) -> None:
+    writer.write_fact(_observed(100.0, DISCLOSED, datetime(2025, 1, 1, tzinfo=UTC)))
+    again = _observed(100.0, DISCLOSED, datetime(2025, 6, 1, tzinfo=UTC))
+    assert writer.write_fact(again) is WriteOutcome.SKIPPED_IDENTICAL
+
+
+@pytest.mark.db
+def test_changed_value_with_the_same_known_at_and_no_observation_time_is_rejected(
+    writer: PointInTimeWriter,
+) -> None:
+    """没有 observed_at 就无从知道这次变化是何时可知的：明确拒绝，而不是撞上数据库约束。"""
+    writer.write_fact(_record(100.0, DISCLOSED))
+    with pytest.raises(OutOfOrderCorrection):
+        writer.write_fact(_record(105.0, DISCLOSED))
+
+
+@pytest.mark.db
+def test_observation_not_later_than_the_live_row_is_rejected(writer: PointInTimeWriter) -> None:
+    writer.write_fact(_record(100.0, datetime(2025, 3, 1, tzinfo=UTC)))
+    stale = _observed(105.0, DISCLOSED, datetime(2025, 2, 1, tzinfo=UTC))
+    with pytest.raises(OutOfOrderCorrection):
+        writer.write_fact(stale)
 
 
 @pytest.mark.db

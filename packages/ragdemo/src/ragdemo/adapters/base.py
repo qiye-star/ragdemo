@@ -93,6 +93,9 @@ class FactRecord:
     # 解析出这一行的那次原始响应（core.provider_snapshot）。适配器 parse() 不知道
     # 它——快照由调用方在解析前写入，再把 id 盖到解析结果上。
     snapshot_id: int | None = None
+    # 取数时刻。供应商只给"当前值"（如 Wind）时，同一期后来变了、披露日期却没变——
+    # 写入中间件据此把变化记成"在 observed_at 才知道的更正"，而不是回填到原披露日。
+    observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.known_at, "known_at")

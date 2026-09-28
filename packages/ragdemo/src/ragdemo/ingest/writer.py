@@ -103,6 +103,7 @@ class PointInTimeWriter:
         entity_id = self._entity_id(record.entity_ref)
         metric_id, scale_factor = self._metric_lookup(record.metric_field)
         scaled_value = record.value * float(scale_factor)
+        effective_known_at = record.known_at
 
         with self.conn.transaction():
             live = self.conn.execute(
@@ -117,18 +118,24 @@ class PointInTimeWriter:
                 # 是已知的、受约束的：这两列在 schema 里就是 numeric / timestamptz。
                 existing_value = cast(Decimal, live[1])
                 existing_known_at = cast(datetime, live[2])
-                if record.known_at < existing_known_at:
-                    raise OutOfOrderCorrection(
-                        f"{entity_id}/{metric_id}/{record.period}: 新数据 known_at "
-                        f"{record.known_at} 早于现有 {existing_known_at}"
-                    )
                 if abs(float(existing_value) - scaled_value) < _VALUE_EPSILON:
                     return WriteOutcome.SKIPPED_IDENTICAL
+                if record.known_at <= existing_known_at:
+                    # 值变了，但数据自带的 known_at 不晚于现有行。只给"当前值"的供应商
+                    # （Wind）会这样：某期被追溯调整，披露日期不变。这次变化只能从观察到
+                    # 它的那一刻起算已知；没有观察时刻就无从判断，明确拒绝。
+                    if record.observed_at is None or record.observed_at <= existing_known_at:
+                        raise OutOfOrderCorrection(
+                            f"{entity_id}/{metric_id}/{record.period}: 新数据 known_at "
+                            f"{record.known_at} 不晚于现有 {existing_known_at}，"
+                            "且没有更晚的观察时刻"
+                        )
+                    effective_known_at = record.observed_at
                 self.conn.execute(
                     "UPDATE core.fin_fact SET superseded_at = %s "
                     " WHERE entity_id = %s AND metric_id = %s AND period = %s"
                     "   AND superseded_at IS NULL",
-                    (record.known_at, entity_id, metric_id, record.period),
+                    (effective_known_at, entity_id, metric_id, record.period),
                 )
                 outcome = WriteOutcome.CORRECTED
             else:
@@ -148,7 +155,7 @@ class PointInTimeWriter:
                     record.unit,
                     record.currency,
                     record.valid_from,
-                    record.known_at,
+                    effective_known_at,
                     self.source,
                     record.source_ref,
                     self.ingest_run_id,

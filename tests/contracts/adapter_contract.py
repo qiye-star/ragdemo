@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
-from ragdemo.adapters.base import Adapter, FetchContext
+from ragdemo.adapters.base import Adapter, FetchContext, RawResponse
 
 
 class AdapterContract:
@@ -19,6 +19,11 @@ class AdapterContract:
 
     def make_context(self, partition_date: date) -> FetchContext:
         return FetchContext(ingest_run_id="contract-run", partition_date=partition_date)
+
+    def known_at_inputs(self, raw: RawResponse) -> list[object]:
+        """从一次原始响应里取出可交给 `adapter.known_at()` 的条目。默认：payload 本身
+        （或其中每一项）就是记录；payload 是整张表的适配器（如 Wind）覆盖这个钩子。"""
+        return _iter_records(raw.payload)
 
     def test_provider_is_a_nonempty_string(self) -> None:
         assert isinstance(self.make_adapter().provider, str)
@@ -32,7 +37,7 @@ class AdapterContract:
         ctx = self.make_context(date(2024, 10, 28))
         now = datetime.now(UTC)
         for raw in adapter.fetch(ctx):
-            for item in _iter_records(raw.payload):
+            for item in self.known_at_inputs(raw):
                 ka = adapter.known_at(item)
                 assert ka.tzinfo is not None and ka.utcoffset() is not None
                 assert ka <= now
@@ -53,7 +58,7 @@ class AdapterContract:
         adapter = self.make_adapter()
         old = date.today() - timedelta(days=730)
         for raw in adapter.fetch(self.make_context(old)):
-            for item in _iter_records(raw.payload):
+            for item in self.known_at_inputs(raw):
                 assert adapter.known_at(item).date() <= old + timedelta(days=90)
 
 
