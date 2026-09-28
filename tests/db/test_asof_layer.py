@@ -28,6 +28,8 @@ BITEMPORAL_VIEWS = {
     "node_metric_version",
     "metric_source_map_version",
     "ai_revenue_rule",
+    # 021_announcement_index：公告目录（公告双源接入计划 Task 2）。
+    "announcement_index",
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。
