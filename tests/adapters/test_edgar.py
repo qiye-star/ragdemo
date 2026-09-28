@@ -38,6 +38,13 @@ def test_only_tracked_forms_are_returned() -> None:
     assert "DEF 14A" not in TRACKED_FORMS
 
 
+def test_foreign_private_issuer_forms_are_tracked() -> None:
+    """20-F/6-K 是台积电、阿里巴巴、百度、金山云、日月光这些 ADR 发行人报的表，
+    不是 10-K/10-Q——不追踪这两种，这五家公司的 EDGAR 目录永远是空的
+    （公告双源接入计划 Task 8）。"""
+    assert {"20-F", "6-K"} <= TRACKED_FORMS
+
+
 def test_known_at_is_acceptance_datetime_to_the_second() -> None:
     """EDGAR 给出精确到秒的受理时间，直接用，不要退化成日期。
 

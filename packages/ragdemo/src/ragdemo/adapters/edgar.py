@@ -37,7 +37,11 @@ from zoneinfo import ZoneInfo
 from ragdemo.adapters.base import FetchContext, RawResponse, require_aware
 from ragdemo.adapters.http import HttpClient
 
-TRACKED_FORMS = frozenset({"10-K", "10-Q", "8-K"})
+TRACKED_FORMS = frozenset({"10-K", "10-Q", "8-K", "20-F", "6-K"})
+# 20-F（外国私人发行人年报）/ 6-K（外国私人发行人临时报告）是 10-K/10-Q 在
+# ADR 发行人身上的对应形式——台积电、阿里巴巴、百度、金山云、日月光都是
+# 报这两种，不是 10-K/10-Q（公告双源接入计划 Task 8：这几家同时在 SEC 报送）。
+# 不加它们，这五家公司的 EDGAR 目录会一直是空的。
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data"
 _EASTERN = ZoneInfo("America/New_York")
 

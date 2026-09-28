@@ -64,3 +64,17 @@ ESTIMATED_PAGES: dict[ParseTier, int] = {
     ParseTier.SECOND: 180,
     ParseTier.NONE: 5,
 }
+
+
+# EDGAR 申报没有中文标题可判——按 form_type 直接映射（公告双源接入计划 Task 8）。
+_FORM_TIER: dict[str, ParseTier] = {
+    "10-K": ParseTier.SECOND,  # 年报，篇幅大
+    "20-F": ParseTier.SECOND,  # 外国私人发行人年报，等价于 10-K
+    "10-Q": ParseTier.FIRST,
+    "6-K": ParseTier.FIRST,  # 外国私人发行人临时报告，等价于 8-K/10-Q 量级
+    "8-K": ParseTier.FIRST,
+}
+
+
+def parse_tier_for_form(form_type: str) -> ParseTier:
+    return _FORM_TIER.get(form_type, ParseTier.NONE)
