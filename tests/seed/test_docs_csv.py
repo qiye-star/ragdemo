@@ -49,6 +49,19 @@ def test_wind_code_is_carried_from_curation(built) -> None:  # type: ignore[no-u
     assert by_id["HK.9988"]["wind_code"] == "9988.HK"
 
 
+def test_edgar_cik_is_carried_for_sec_filers(built) -> None:  # type: ignore[no-untyped-def]  # noqa: ANN001
+    """美股与向 SEC 报送 20-F/6-K 的 ADR 发行人（台积电、日月光、阿里巴巴、百度、
+    金山云——Task 8 的 `TRACKED_FORMS` 扩展针对的正是这五家）解析出的 CIK，
+    经 `resolve_cik`（`ingest/edgar_index.py`）对 SEC `company_tickers.json` 实测
+    得到，写进 `entity_curation.csv` 的 `edgar_cik` 列——不在这份 CSV 里的实体
+    该保持空，不该被随手编一个假值。"""
+    by_id = {e["entity_id"]: e for e in built.files["entity.csv"]}
+    assert by_id["US.NVDA"]["edgar_cik"] == "1045810"
+    assert by_id["TW.2330"]["edgar_cik"] == "1046179", "台积电以 ADR 身份在 SEC 报送 20-F/6-K"
+    assert by_id["HK.9988"]["edgar_cik"] == "1577552", "阿里巴巴同理"
+    assert by_id["CN.688041"]["edgar_cik"] == "", "境内 A 股不在 SEC 报送，不该有 CIK"
+
+
 def test_listed_entities_have_provider_listing_dates(built) -> None:  # type: ignore[no-untyped-def]  # noqa: ANN001
     listed = [e for e in built.files["entity.csv"] if e["entity_type"] == "listed"]
     assert all(e["listed_date"] for e in listed)

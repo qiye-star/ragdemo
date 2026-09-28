@@ -42,6 +42,7 @@ NULLABLE_ENTITY_COLUMNS = frozenset(
         "market",
         "tushare_code",
         "wind_code",
+        "edgar_cik",
         "hq_country",
         "currency",
         "notes",
@@ -118,8 +119,8 @@ def _validate_entities(rows: list[dict[str, str]], taxonomy: Taxonomy) -> list[d
 
 _ENTITY_COLUMNS = (
     "entity_id", "name_full", "name_short", "name_en", "entity_type", "market", "tushare_code",
-    "wind_code", "l1_layer", "l2_segment", "l3_node", "primary_node", "hq_country", "status",
-    "listed_date", "currency", "fiscal_year_end", "notes",
+    "wind_code", "edgar_cik", "l1_layer", "l2_segment", "l3_node", "primary_node", "hq_country",
+    "status", "listed_date", "currency", "fiscal_year_end", "notes",
 )  # fmt: skip
 
 

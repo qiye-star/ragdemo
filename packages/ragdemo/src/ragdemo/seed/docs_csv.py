@@ -43,8 +43,8 @@ METRICS = "AI产业链_04_指标字典.csv"
 
 ENTITY_FIELDS = (
     "entity_id", "name_full", "name_short", "name_en", "entity_type", "market", "tushare_code",
-    "wind_code", "l1_layer", "l2_segment", "l3_node", "primary_node", "hq_country", "status",
-    "listed_date", "valid_from", "currency", "fiscal_year_end", "notes",
+    "wind_code", "edgar_cik", "l1_layer", "l2_segment", "l3_node", "primary_node", "hq_country",
+    "status", "listed_date", "valid_from", "currency", "fiscal_year_end", "notes",
 )  # fmt: skip
 ALIAS_FIELDS = ("alias", "entity_id", "alias_type", "source", "confidence")
 RELATION_FIELDS = (
@@ -203,6 +203,7 @@ def _entity(
         "market": row["market"],
         "tushare_code": row["tushare_code"],
         "wind_code": row["wind_code"],
+        "edgar_cik": row["edgar_cik"],
         "l1_layer": row["l1_layer"],
         "l2_segment": row["l2_segment"],
         "l3_node": row["l3_node"],

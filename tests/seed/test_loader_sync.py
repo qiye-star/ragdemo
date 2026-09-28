@@ -30,6 +30,7 @@ ENTITY_HEADER = [
     "market",
     "tushare_code",
     "wind_code",
+    "edgar_cik",
     "l1_layer",
     "l2_segment",
     "l3_node",
