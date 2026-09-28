@@ -76,6 +76,42 @@ def market_group(route: EntityRoute) -> str | None:
     return _MARKET_GROUP.get(route.market)
 
 
+def entity_routes(conn: psycopg.Connection) -> list[EntityRoute]:
+    """把 `core.entity` 的每一行翻成一条 `EntityRoute`——`ingest_announcements`
+    与 `docs announcements` CLI 共用同一份枚举逻辑，不各写一套。
+
+    代码列不是按供应商名字取的，是按"这条路由归哪个市场分组"取的：`edgar_cik`
+    优先（决定 `market_group` 恒为 'us'，与该函数自己的判定规则一致）；否则按
+    `market` 落在 A 股集合时取 `tushare_code`；落在 'HKEX' 时取 `wind_code`——
+    这两列都是 `DocumentWriter._resolve_entity_id` 认的四选一，只是港股这一列
+    目前多半还没有种子数据（P0 已知缺口，见计划文档），到位之前这些实体的路由
+    会被下面的 `None` 分支自然跳过，不是这里的判断有问题。没有任何一列能定出
+    市场分组的实体（数据还没补全，或者本来就不在这次接入范围内，比如日股/韩股）
+    直接跳过，不是错误。
+    """
+    rows = conn.execute(
+        "SELECT name_short, name_full, market, tushare_code, wind_code, edgar_cik"
+        "  FROM core.entity"
+    ).fetchall()
+    routes: list[EntityRoute] = []
+    for name_short, name_full, market, tushare_code, wind_code, edgar_cik in rows:
+        short_name = name_short or name_full
+        if edgar_cik:
+            routes.append(
+                EntityRoute(
+                    entity_ref=str(edgar_cik),
+                    short_name=short_name,
+                    market=market or "",
+                    cik=int(edgar_cik),
+                )
+            )
+        elif market in _MARKET_GROUP and _MARKET_GROUP[market] == "cn" and tushare_code:
+            routes.append(EntityRoute(entity_ref=tushare_code, short_name=short_name, market=market))
+        elif market == "HKEX" and wind_code:
+            routes.append(EntityRoute(entity_ref=wind_code, short_name=short_name, market=market))
+    return routes
+
+
 @dataclass(frozen=True)
 class AnnouncementSources:
     cninfo: CninfoLayerDeps | None = None

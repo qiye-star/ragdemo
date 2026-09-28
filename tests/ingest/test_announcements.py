@@ -23,6 +23,7 @@ from ragdemo.ingest.announcements import (
     AnnouncementRunReport,
     AnnouncementSources,
     EntityRoute,
+    entity_routes,
     ingest_announcements,
     market_group,
 )
@@ -313,6 +314,31 @@ def test_market_group_maps_by_market_or_cik() -> None:
 
 def test_download_entities_pilot_scope() -> None:
     assert {"688041.SH", "000977.SZ"} == DOWNLOAD_ENTITIES
+
+
+@pytest.mark.db
+def test_entity_routes_picks_the_right_code_column_per_market(conn: psycopg.Connection) -> None:
+    """CN.688041/HK.9988 由 `conn` 夹具预先插入；这里再补一家 edgar_cik 优先于
+    market 判断的实体，和一家两列都没有、该被跳过的实体。"""
+    conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, entity_type, market, l1_layer,"
+        " l2_segment, l3_node, primary_node, edgar_cik) VALUES"
+        " ('US.NVDA', 'NVIDIA', 'listed', 'NASDAQ', '算力', 'AI芯片', ARRAY['GPU'], 'GPU',"
+        "  '1045810')"
+    )
+    conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, entity_type, market, l1_layer,"
+        " l2_segment, l3_node, primary_node) VALUES"
+        " ('KR.005930', '三星电子', 'listed', 'KRX', '算力', '存储芯片', ARRAY['DRAM'], 'DRAM')"
+    )
+    conn.commit()
+
+    routes = {r.entity_ref: r for r in entity_routes(conn)}
+    assert routes["688041.SH"].market == "SSE"
+    assert routes["09988.HK"].market == "HKEX"
+    assert routes["1045810"].cik == 1045810
+    # 三星既没有 tushare_code 也没有 wind_code——两列都缺，该被跳过，不是错误。
+    assert len(routes) == 3
 
 
 CN_ANNOUNCEMENT_SAME_AS_WIND = {

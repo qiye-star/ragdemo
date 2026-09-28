@@ -147,3 +147,33 @@ def test_new_document_sensor_cursor_comparison_excludes_already_seen_doc_id(
 
     assert isinstance(result2, RunRequest)
     assert result2.run_key == "docs-2"
+
+
+def test_announcement_assets_and_resources_are_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公告双源接入计划 Task 12：`announcements_daily`/`announcement_coverage_check`
+    两个资产、`announcement_sources`/`announcement_health`/`announcement_backlog`
+    三个资源、以及每周核对的 schedule 都要真正接进 `Definitions`——`dagster
+    definitions validate` 覆盖不到"接没接"这件事本身漏了哪个名字，这里按名字断言。
+    """
+    monkeypatch.delenv("RAGDEMO_DSN", raising=False)
+    import importlib
+
+    import ragdemo.ingest.definitions as definitions_module
+
+    importlib.reload(definitions_module)
+    defs = definitions_module.defs
+
+    asset_keys = {key.to_user_string() for key in defs.resolve_all_asset_keys()}
+    assert "announcements_daily" in asset_keys
+    assert "announcement_coverage_check" in asset_keys
+
+    resources = defs.resources
+    assert resources is not None
+    for name in ("announcement_sources", "announcement_health", "announcement_backlog"):
+        assert name in resources
+
+    assert defs.schedules is not None
+    schedule_names = {s.name for s in defs.schedules}
+    assert "announcement_coverage_schedule" in schedule_names

@@ -560,3 +560,93 @@ def test_ingest_cninfo_refuses_without_a_user_agent_and_does_not_call_cninfo() -
     )
     assert result.exit_code != 0
     assert "RAGDEMO_CNINFO_USER_AGENT" in result.output
+
+
+# --- docs announcements（公告双源接入计划 Task 12）----------------------------
+
+
+@pytest.fixture
+def announcements_conn(temp_db: str) -> psycopg.Connection:
+    c = psycopg.connect(temp_db)
+    migrate(c, MIGRATIONS)
+    c.execute(
+        "INSERT INTO core.entity (entity_id, name_full, name_short, entity_type, market,"
+        " l1_layer, l2_segment, l3_node, primary_node, tushare_code) VALUES"
+        " ('CN.688041', '海光信息技术股份有限公司', '海光信息', 'listed', 'SSE', '算力',"
+        "  'AI芯片', ARRAY['云端训练芯片'], '云端训练芯片', '688041.SH')"
+    )
+    c.commit()
+    return c
+
+
+def test_docs_announcements_dry_run_never_calls_ingest_announcements(
+    announcements_conn: psycopg.Connection, temp_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dry run 只查 core.entity 枚举实体、打印估算，绝不发起任何 PDF / 全文请求——
+    用"根本没调用 `ingest_announcements`"这个事实断言，而不是去数网络请求，
+    因为 dry run 分支在设计上就该在构造任何 HTTP 客户端之前 return。"""
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("dry run 不该调用 ingest_announcements")
+
+    monkeypatch.setattr(docs_cli, "ingest_announcements", _boom)
+
+    result = CliRunner().invoke(
+        main,
+        ["docs", "announcements", "--since", "2025-01-01", "--until", "2025-12-31"],
+        env={"RAGDEMO_DSN": temp_db},
+    )
+    assert result.exit_code == 0, result.output
+    assert "688041.SH" in result.output
+    assert "dry run" in result.output
+
+
+def test_docs_announcements_dry_run_reports_download_and_tier_estimate(
+    announcements_conn: psycopg.Connection, temp_db: str
+) -> None:
+    result = CliRunner().invoke(
+        main,
+        [
+            "docs",
+            "announcements",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-12-31",
+            "--download",
+        ],
+        env={"RAGDEMO_DSN": temp_db},
+    )
+    assert result.exit_code == 0, result.output
+    assert "下载全文" in result.output  # 688041.SH 在 DOWNLOAD_ENTITIES 试点范围内
+    assert "first 档估算页数" in result.output
+
+
+def test_docs_announcements_market_filter_excludes_other_groups(
+    announcements_conn: psycopg.Connection, temp_db: str
+) -> None:
+    announcements_conn.execute(
+        "INSERT INTO core.entity (entity_id, name_full, name_short, entity_type, market,"
+        " l1_layer, l2_segment, l3_node, primary_node, wind_code) VALUES"
+        " ('HK.9988', '阿里巴巴集团控股有限公司', '阿里巴巴', 'listed', 'HKEX', '应用',"
+        "  '电商', ARRAY['电商平台'], '电商平台', '09988.HK')"
+    )
+    announcements_conn.commit()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "docs",
+            "announcements",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-12-31",
+            "--market",
+            "cn",
+        ],
+        env={"RAGDEMO_DSN": temp_db},
+    )
+    assert result.exit_code == 0, result.output
+    assert "688041.SH" in result.output
+    assert "09988.HK" not in result.output

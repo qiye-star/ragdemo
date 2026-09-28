@@ -13,20 +13,30 @@
 `ragdemo.config.load_config()` 判断，见 `parser_resource`；真实嵌入器留给
 Phase 1.4，与 `ingest/cli.py` 的 `embed` 命令是同一个处境），`blob` /
 `document_writer` / `conn` 是真实资源。
+
+本文件刻意不用 `from __future__ import annotations`——与 `ingest/assets_docs.py`
+同样的原因：Dagster 在 `@asset` 装饰期对 `context` 参数做类型校验时直接比较
+`Parameter.annotation`，不解析 PEP 563 的延迟字符串注解，开着这行会让
+`announcements_daily`/`announcement_coverage_check` 这两个资产在 import 期就
+抛 `DagsterInvalidDefinitionError`。Python 3.11 原生支持 `list[X]` / `X | None`，
+去掉这行不影响其余注解写法。
 """
 
-from __future__ import annotations
-
 import os
+from datetime import date, timedelta
 
 import psycopg
 from dagster import (
+    AssetExecutionContext,
     DefaultSensorStatus,
     Definitions,
     InitResourceContext,
+    ResourceParam,
     RunRequest,
+    ScheduleDefinition,
     SensorEvaluationContext,
     SkipReason,
+    asset,
     define_asset_job,
     resource,
     sensor,
@@ -41,7 +51,16 @@ from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
 from ragdemo.config import load_config
 from ragdemo.embed.base import Embedder
 from ragdemo.embed.mock import MockEmbedder
+from ragdemo.ingest.announcement_sources import build_announcement_sources
+from ragdemo.ingest.announcements import (
+    DOWNLOAD_ENTITIES,
+    AnnouncementRunReport,
+    AnnouncementSources,
+    entity_routes,
+    ingest_announcements,
+)
 from ragdemo.ingest.assets import (
+    DAILY,
     fact_normalized,
     fin_fact_loaded,
     price_daily_loaded,
@@ -55,17 +74,21 @@ from ragdemo.ingest.assets_docs import (
     tier_c_reparse,
 )
 from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.ingest.parse_policy import ParseTier
 from ragdemo.ingest.prices import PriceSources
 from ragdemo.ingest.writer import PointInTimeWriter
 from ragdemo.parse.textin import (
     XPARSE_PARAMS_HIGH_PRECISION,
     DocumentParser,
     MockDocumentParser,
+    PageBudget,
     TextInParser,
 )
+from ragdemo.quality.announcement_coverage import check_announcement_coverage
 from ragdemo.quality.budget_asset import monthly_cost
 from ragdemo.quality.checks import ALL_CHECKS
-from ragdemo.sources.health import MemorySourceHealth, PgSourceHealth
+from ragdemo.sources.backlog import Backlog
+from ragdemo.sources.health import MemorySourceHealth, PgSourceHealth, SourceHealth
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 TRACKED_DOC_TYPES = ("quarterly", "annual_report", "announcement", "10-K", "10-Q", "8-K")
@@ -203,6 +226,129 @@ def embedder_resource(_context: InitResourceContext) -> Embedder:
     return MockEmbedder()
 
 
+# --- 公告（公告双源接入计划 Task 12）-----------------------------------------
+
+
+@resource
+def announcement_sources_resource(_context: InitResourceContext) -> AnnouncementSources:
+    """五个来源层各自独立按环境变量判断是否配置齐全，理由见
+    `ingest/announcement_sources.py` 模块 docstring。"""
+    return build_announcement_sources(load_config())
+
+
+@resource
+def announcement_health_resource(_context: InitResourceContext) -> SourceHealth:
+    """与 `price_sources_resource` 同一条理由：冷却状态存 `core.source_health`，
+    autocommit 连接——入库回滚撤销不了它，也不该被撤销（冷却是"这一层最近失败过"
+    这一事实本身，不是这次 run 的一部分）。"""
+    return PgSourceHealth(psycopg.connect(os.environ["RAGDEMO_DSN"], autocommit=True))
+
+
+@resource
+def announcement_backlog_resource(_context: InitResourceContext) -> Backlog:
+    return Backlog(_conn())
+
+
+# 首次为某实体建目录时的回填起点；此后每个实体走自己的 `core.ingest_watermark`
+# 增量水位线，不会重复回填到这么早——与 D1-D5 计划的 2025 全年试点范围一致。
+ANNOUNCEMENTS_BACKFILL_SINCE = date(2025, 1, 1)
+
+# 单次 run 的页数预算上限，与 `assets_docs.py::MAX_PAGES_PER_PREPARE_RUN` 同一个
+# 理由：TextIn 按页计费，回填历史分区时没有这道闸门会一次性把预算烧穿。
+MAX_PAGES_PER_ANNOUNCEMENTS_RUN = 2000
+
+
+@asset(partitions_def=DAILY, group_name="documents")
+def announcements_daily(
+    context: AssetExecutionContext,
+    announcement_sources: ResourceParam[AnnouncementSources],
+    announcement_health: ResourceParam[SourceHealth],
+    announcement_backlog: ResourceParam[Backlog],
+    conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
+) -> AnnouncementRunReport:
+    """公告双源接入计划 Task 9（`ingest_announcements`）接成真正的资产。解析档位
+    固定只请求 `ParseTier.FIRST`——`ParseTier.SECOND`（年报/半年报全文）与更多
+    实体的下载范围是 `docs parse-pending` / 调整 `DOWNLOAD_ENTITIES` 之后才
+    扩大的范围（Task 10），不在这个每日资产里悄悄多做。"""
+    partition_date = date.fromisoformat(context.partition_key)
+    routes = entity_routes(conn)
+    run_id = context.op_execution_context.run_id
+    report = ingest_announcements(
+        conn,
+        entities=routes,
+        sources=announcement_sources,
+        blob=blob,
+        health=announcement_health,
+        backlog=announcement_backlog,
+        partition_date=partition_date,
+        backfill_since=ANNOUNCEMENTS_BACKFILL_SINCE,
+        download_entities=DOWNLOAD_ENTITIES,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(MAX_PAGES_PER_ANNOUNCEMENTS_RUN),
+        ingest_run_id=run_id,
+    )
+    context.log.info(
+        "announcements ingested",
+        extra={
+            "run_id": run_id,
+            "as_of": partition_date.isoformat(),
+            "entity_count": len(routes),
+            "indexed": report.indexed,
+            "parsed_docs": report.parsed_docs,
+            "parsed_pages": report.parsed_pages,
+            "by_layer": report.by_layer,
+            "backlogged": len(report.backlogged),
+            "failed": len(report.failed),
+        },
+    )
+    return report
+
+
+@asset(group_name="documents")
+def announcement_coverage_check(
+    context: AssetExecutionContext,
+    announcement_sources: ResourceParam[AnnouncementSources],
+    conn: ResourceParam[psycopg.Connection],
+    blob: ResourceParam[BlobStore],
+) -> int:
+    """Task 11 的 Wind 漏收核对接成每周资产（见下面的
+    `announcement_coverage_schedule`）。`announcement_sources.wind` 未配置时
+    整体跳过——与 `tier_c_reparse` 对 `tier_c_parser` 为 `None` 的处理同一个
+    模式，本地开发/测试环境不该假装做了核对。"""
+    if announcement_sources.wind is None:
+        context.log.info("coverage check skipped: wind docs gateway not configured")
+        return 0
+    until = date.today()
+    since = until - timedelta(days=7)
+    gaps = check_announcement_coverage(
+        conn,
+        wind=announcement_sources.wind,
+        blob=blob,
+        since=since,
+        until=until,
+        partition_date=until,
+        ingest_run_id=context.op_execution_context.run_id,
+    )
+    context.log.info("announcement coverage check", extra={"gaps": len(gaps)})
+    return len(gaps)
+
+
+_announcement_coverage_job = define_asset_job(
+    "announcement_coverage_job", selection=[announcement_coverage_check]
+)
+
+# 每周一 06:00（Asia/Shanghai，与 `DAILY` 分区同一个时区）触发一次核对——核对
+# 靠的是 Wind 按月问，跑得太勤只是重复付费，一周一次足够发现"巨潮持续漏收"
+# 这种趋势性问题。
+announcement_coverage_schedule = ScheduleDefinition(
+    name="announcement_coverage_schedule",
+    job=_announcement_coverage_job,
+    cron_schedule="0 6 * * 1",
+    execution_timezone="Asia/Shanghai",
+)
+
+
 # 临时目标：传感器发现新文档后，重新物化这两个事实资产。
 # 真正的行为（写 core.event 候选行）留给 Agent 层接入时实现——见模块 docstring。
 _document_reaction_job = define_asset_job(
@@ -248,10 +394,13 @@ defs = Definitions(
         block_embeddings,
         price_normalized,
         price_daily_loaded,
+        announcements_daily,
+        announcement_coverage_check,
     ],
     asset_checks=list(ALL_CHECKS),
-    jobs=[_document_reaction_job],
+    jobs=[_document_reaction_job, _announcement_coverage_job],
     sensors=[new_document_sensor],
+    schedules=[announcement_coverage_schedule],
     resources={
         "adapter": MockFactAdapter(),
         "writer": writer_resource,
@@ -264,5 +413,8 @@ defs = Definitions(
         "tushare_writer": tushare_writer_resource,
         "price_sources": price_sources_resource,
         "tier_c_parser": tier_c_parser_resource,
+        "announcement_sources": announcement_sources_resource,
+        "announcement_health": announcement_health_resource,
+        "announcement_backlog": announcement_backlog_resource,
     },
 )

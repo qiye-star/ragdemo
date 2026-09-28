@@ -41,11 +41,16 @@ from ragdemo.adapters.local_manifest import (
     count_pdf_pages,
     load_documents_with_raw,
 )
-from ragdemo.adapters.mcp_gateway import gateway_client_from_env
-from ragdemo.adapters.wind_docs import WindDocsAdapter
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
+from ragdemo.ingest.announcement_sources import WIND_DOCS_URL_ENV, build_announcement_sources
+from ragdemo.ingest.announcements import (
+    DOWNLOAD_ENTITIES,
+    entity_routes,
+    ingest_announcements,
+    market_group,
+)
 from ragdemo.ingest.assets_docs import (
     build_chunks_and_descriptions,
     prepare_documents,
@@ -55,7 +60,7 @@ from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announc
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
 from ragdemo.ingest.parse_pending import run_parse_pending
-from ragdemo.ingest.parse_policy import ParseTier
+from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber, TableDescriber
@@ -70,6 +75,8 @@ from ragdemo.parse.textin import (
 )
 from ragdemo.quality.announcement_coverage import check_announcement_coverage
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
+from ragdemo.sources.backlog import Backlog
+from ragdemo.sources.health import PgSourceHealth
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 
@@ -716,14 +723,19 @@ def docs_check_coverage(since: str, until: str) -> None:
     """
     since_d = date.fromisoformat(since)
     until_d = date.fromisoformat(until)
-    blob = LocalBlobStore(_load_config().blob_root)
-    gateway = gateway_client_from_env(provider="wind")
-    wind = WindDocsAdapter(gateway)
+    cfg = _load_config()
+    blob = LocalBlobStore(cfg.blob_root)
+    sources = build_announcement_sources(cfg)
+    if sources.wind is None:
+        raise click.ClickException(
+            f"环境变量 {WIND_DOCS_URL_ENV} 未设置——漏收核对靠 Wind 做参照物，"
+            "没有这一层就没有可比对的对象。"
+        )
 
     with psycopg.connect(_dsn()) as conn:
         gaps = check_announcement_coverage(
             conn,
-            wind=wind,
+            wind=sources.wind,
             blob=blob,
             since=since_d,
             until=until_d,
@@ -737,3 +749,137 @@ def docs_check_coverage(since: str, until: str) -> None:
     click.echo(f"疑似漏收 {len(gaps)} 份：")
     for gap in gaps:
         click.echo(f"  - {gap.entity_ref} {gap.publish_date} {gap.title}")
+
+
+# --- docs announcements（公告双源接入计划 Task 12）----------------------------
+
+
+@docs_group.command("announcements")
+@click.option(
+    "--since",
+    required=True,
+    help="首次为某实体建目录时的回填起点 YYYY-MM-DD；此后每个实体走自己在"
+    "core.ingest_watermark 里的增量水位线，不会重复回填到这么早。",
+)
+@click.option("--until", required=True, help="截止日期 YYYY-MM-DD（含），本次 run 的 as_of")
+@click.option(
+    "--entity-ref",
+    "entity_refs",
+    multiple=True,
+    help="只处理这些实体（core.entity 任一代码列，如 688041.SH / 09988.HK / 1045810）；"
+    "可重复传多次；不传则处理全部实体",
+)
+@click.option(
+    "--market",
+    "market_filter",
+    type=click.Choice(["cn", "hk", "us"]),
+    default=None,
+    help="只处理这个市场分组；不传则处理全部",
+)
+@click.option(
+    "--download",
+    is_flag=True,
+    default=False,
+    help="除了建目录，也下载全文 PDF——仍受 DOWNLOAD_ENTITIES 试点范围限制"
+    "（Task 9 的决定：先只对 688041.SH/000977.SZ 两家解析首批档）；不传则只建目录",
+)
+@click.option(
+    "--tier",
+    "tier_names",
+    multiple=True,
+    type=click.Choice([t.value for t in ParseTier]),
+    default=("first",),
+    help="下载后按这些档位解析（可重复传多次）；不传则只解析 ParseTier.FIRST",
+)
+@click.option("--max-pages", "max_pages_opt", type=int, default=None, help="本次 run 的页数预算")
+@click.option("--yes", is_flag=True, default=False, help="真正抓取/建目录/写库；不传则只 dry run")
+def docs_announcements(
+    since: str,
+    until: str,
+    entity_refs: tuple[str, ...],
+    market_filter: str | None,
+    download: bool,
+    tier_names: tuple[str, ...],
+    max_pages_opt: int | None,
+    yes: bool,
+) -> None:
+    """按市场路由抓公告目录（可选下载全文并解析）：A 股巨潮为主、Wind/iFind 降级
+    只写目录；港股披露易；美股/ADR EDGAR。默认 dry run：只报命中多少家实体、
+    哪些会下载全文、按档位估算的页数与费用、月度预算余额，不发起任何抓取。
+    """
+    since_d = date.fromisoformat(since)
+    until_d = date.fromisoformat(until)
+    cfg = _load_config()
+    tiers = frozenset(ParseTier(name) for name in tier_names)
+    max_pages = max_pages_opt if max_pages_opt is not None else cfg.textin_max_pages_per_run
+    download_entities = DOWNLOAD_ENTITIES if download else frozenset()
+
+    with psycopg.connect(_dsn()) as conn:
+        routes = entity_routes(conn)
+        if entity_refs:
+            wanted = set(entity_refs)
+            routes = [r for r in routes if r.entity_ref in wanted]
+        if market_filter:
+            routes = [r for r in routes if market_group(r) == market_filter]
+
+        if not yes:
+            click.echo(f"[dry run] 命中 {len(routes)} 家实体")
+            for route in routes:
+                will_download = route.entity_ref in download_entities
+                click.echo(
+                    f"  - {route.entity_ref} ({market_group(route)}) "
+                    f"{'下载全文' if will_download else '仅建目录'}"
+                )
+            n_download = sum(1 for r in routes if r.entity_ref in download_entities)
+            for tier in sorted(tiers):
+                estimate = n_download * ESTIMATED_PAGES[tier]
+                click.echo(
+                    f"  - {tier.value} 档估算页数：{estimate}"
+                    f"（每家 {ESTIMATED_PAGES[tier]} 页经验值 × {n_download} 家会下载的实体，"
+                    "非真实页数——真实页数要等 --yes 真正取到 PDF 才知道）"
+                )
+            try:
+                budget_status = ensure_budget(
+                    conn, now=datetime.now(UTC), cap_cny=cfg.monthly_budget_cny
+                )
+                click.echo(f"[预算] {budget_status.describe()}")
+            except BudgetExceeded as exc:
+                click.echo(f"[预算] {exc}")
+            click.echo("[dry run] 未发起任何抓取，--yes 才会真正建目录/下载并写库")
+            return
+
+        if cfg.textin_base_url is not None:
+            try:
+                budget_status = ensure_budget(
+                    conn, now=datetime.now(UTC), cap_cny=cfg.monthly_budget_cny
+                )
+            except BudgetExceeded as exc:
+                raise click.ClickException(str(exc)) from None
+            click.echo(f"[预算] {budget_status.describe()}")
+
+        sources = build_announcement_sources(cfg)
+        blob = LocalBlobStore(cfg.blob_root)
+        health = PgSourceHealth(psycopg.connect(_dsn(), autocommit=True))
+        backlog = Backlog(psycopg.connect(_dsn()))
+
+        report = ingest_announcements(
+            conn,
+            entities=routes,
+            sources=sources,
+            blob=blob,
+            health=health,
+            backlog=backlog,
+            partition_date=until_d,
+            backfill_since=since_d,
+            download_entities=download_entities,
+            tiers=tiers,
+            budget=PageBudget(max_pages),
+            ingest_run_id="cli:docs-announcements",
+        )
+        click.echo(
+            f"索引 {report.indexed}，解析 {report.parsed_docs}（{report.parsed_pages} 页），"
+            f"按层：{dict(report.by_layer)}，待补 {len(report.backlogged)}，"
+            f"失败 {len(report.failed)}"
+        )
+        for warning in report.warnings:
+            click.echo(f"[警告] {warning}")
