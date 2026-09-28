@@ -24,8 +24,8 @@ import psycopg
 from dagster import AssetExecutionContext, DailyPartitionsDefinition, ResourceParam, asset
 
 from ragdemo.adapters.base import FactAdapter, FactRecord, FetchContext
-from ragdemo.adapters.mcp_gateway import GatewayClient
-from ragdemo.adapters.tushare import PriceRow, TushareAdapter
+from ragdemo.adapters.tushare import PriceRow
+from ragdemo.ingest.prices import PriceSources
 from ragdemo.ingest.reconcile import read_watermark, write_watermark
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
@@ -93,19 +93,19 @@ TUSHARE_SOURCE_ID = "tushare"
 @asset(partitions_def=DAILY, group_name="ingest")
 def price_normalized(
     context: AssetExecutionContext,
-    gateway: ResourceParam[GatewayClient],
+    price_sources: ResourceParam[PriceSources],
     conn: ResourceParam[psycopg.Connection],
     blob: ResourceParam[BlobStore],
 ) -> list[PriceRow]:
-    """给 `core.entity` 里每个登记了 `tushare_code` 的实体拉一次行情，经
-    MCP 网关的 `daily` 工具（`TushareAdapter.fetch_daily`，见该方法 docstring
-    的三条实测细节）。
+    """给 `core.entity` 里每个登记了 `tushare_code` 的实体拉一次行情，按 ADR-0012 的三层
+    降级取数（Tushare MCP → Tushare REST → Wind 日 K 线，见 `ingest/prices.py`）。
 
-    watermark（F2）：读回这个源截至本分区为止最新的游标，传给
-    `fetch_daily`——没有游标时退化为只拉 partition_date 当天；游标已经
-    覆盖到这一天时（同一分区重跑）不产出任何数据。游标本身在
-    `price_daily_loaded` 写库成功之后才推进，不在这里推进——避免"游标已
-    推进但数据没写成功"这类丢数据窗口。
+    某个实体所有层都不可用时整个分区失败（`AllLayersFailed` 原样抛出）：游标不推进，
+    下次重拉——不交出缺了实体的半份行情，下游会以为数据完整。
+
+    watermark（F2）：读回这个源截至本分区为止最新的游标，传给各层——没有游标时退化为
+    只拉 partition_date 当天；游标已经覆盖到这一天时（同一分区重跑）不产出任何数据。
+    游标本身在 `price_daily_loaded` 写库成功之后才推进，不在这里推进。
     """
     partition_date = date.fromisoformat(context.partition_key)
     watermark = read_watermark(conn, TUSHARE_SOURCE_ID, partition_date)
@@ -118,21 +118,33 @@ def price_normalized(
             "SELECT tushare_code FROM core.entity WHERE tushare_code IS NOT NULL"
         ).fetchall()
     ]
-    adapter = TushareAdapter()
     rows: list[PriceRow] = []
+    layers: dict[str, int] = {}
     for ts_code in ts_codes:
-        for raw in adapter.fetch_daily(fetch_ctx, gateway, ts_code=ts_code):
-            snapshot_id = record_snapshot(
-                conn, raw, ingest_run_id=fetch_ctx.ingest_run_id, blob=blob
+        routed = price_sources.route_daily(fetch_ctx, conn, blob, ts_code)
+        rows.extend(routed.value)
+        layers[routed.layer] = layers.get(routed.layer, 0) + 1
+        if routed.skipped or routed.degraded:
+            context.log.warning(
+                "price source fell back",
+                extra={
+                    "run_id": fetch_ctx.ingest_run_id,
+                    "as_of": partition_date.isoformat(),
+                    "entity_id": ts_code,
+                    "layer": routed.layer,
+                    "degraded": routed.degraded,
+                    "skipped": [f"{name}: {why}" for name, why in routed.skipped],
+                },
             )
-            rows.extend(replace(r, snapshot_id=snapshot_id) for r in adapter.parse_prices(raw))
     context.log.info(
         "price normalized",
         extra={
             "run_id": fetch_ctx.ingest_run_id,
+            "as_of": partition_date.isoformat(),
             "watermark": watermark,
             "entity_count": len(ts_codes),
             "count": len(rows),
+            "layers": layers,
         },
     )
     return rows

@@ -33,12 +33,14 @@ from ragdemo.ingest.assets import (
 )
 from ragdemo.ingest.assets_docs import doc_normalized, prepare_documents, record_parse_snapshots
 from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.ingest.prices import PriceSources
 from ragdemo.ingest.snapshot import MAX_INLINE_PAYLOAD_BYTES
 from ragdemo.ingest.writer import PointInTimeWriter
 from ragdemo.parse.chunker import chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.textin import PageBudget, TextInParser
 from ragdemo.parse.tree import build_tree
+from ragdemo.sources.health import MemorySourceHealth
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
@@ -174,7 +176,8 @@ def test_every_loaded_price_points_at_a_replayable_snapshot(
         }
     )
     ctx = build_asset_context(partition_key=PARTITION)
-    rows = cast(list[PriceRow], price_normalized(ctx, gateway, conn, blob))
+    sources = PriceSources(health=MemorySourceHealth(), tushare_mcp=gateway)
+    rows = cast(list[PriceRow], price_normalized(ctx, sources, conn, blob))
     assert rows and all(r.snapshot_id is not None for r in rows)
 
     price_daily_loaded(

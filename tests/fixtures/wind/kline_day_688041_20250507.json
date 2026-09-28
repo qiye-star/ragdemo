@@ -1,0 +1,64 @@
+{
+ "data": {
+  "columns": [
+   {
+    "name": "TIME",
+    "type": "string"
+   },
+   {
+    "name": "OPEN",
+    "type": "string"
+   },
+   {
+    "name": "MATCH",
+    "type": "string"
+   },
+   {
+    "name": "HIGH",
+    "type": "string"
+   },
+   {
+    "name": "LOW",
+    "type": "string"
+   },
+   {
+    "name": "TURNOVER",
+    "type": "string"
+   },
+   {
+    "name": "VOLUME",
+    "type": "string"
+   },
+   {
+    "name": "CHANGEHANDRATE",
+    "type": "string"
+   },
+   {
+    "name": "AVPRICE",
+    "type": "string"
+   }
+  ],
+  "rows": [
+   [
+    "2025-05-07T00:00:00.000+08:00",
+    "153.41",
+    "150.80",
+    "153.41",
+    "149.40",
+    "1910156347",
+    "12674245",
+    "1.430",
+    "150.71"
+   ]
+  ],
+  "unit": {
+   "HIGH 单位：": "元",
+   "LOW 单位：": "元",
+   "MATCH 单位：": "元",
+   "OPEN 单位：": "元",
+   "TURNOVER 单位：": "元",
+   "VOLUME 单位：": "股"
+  }
+ },
+ "error": null
+}

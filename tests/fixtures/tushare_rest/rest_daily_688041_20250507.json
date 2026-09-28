@@ -1,0 +1,38 @@
+{
+ "request_id": "fad3b351-bacf-4b25-a87d-cb7cbaee7d3f",
+ "code": 0,
+ "data": {
+  "fields": [
+   "ts_code",
+   "trade_date",
+   "open",
+   "high",
+   "low",
+   "close",
+   "pre_close",
+   "change",
+   "pct_chg",
+   "vol",
+   "amount"
+  ],
+  "items": [
+   [
+    "688041.SH",
+    "20250507",
+    153.41,
+    153.41,
+    149.4,
+    150.8,
+    150.01,
+    0.79,
+    0.5266,
+    126742.45,
+    1910156.347
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ },
+ "msg": "",
+ "detail": "..."
+}

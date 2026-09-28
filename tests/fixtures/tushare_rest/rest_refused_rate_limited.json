@@ -1,0 +1,7 @@
+{
+ "request_id": "c74e7a67-564a-4ae1-a00e-783d151604f7",
+ "code": 40203,
+ "data": null,
+ "msg": "抱歉，您访问接口(stock_basic)频率超限(1次/分钟)，具体频次详情：https://tushare.pro/document/1?doc_id=108。",
+ "detail": ""
+}

@@ -225,7 +225,7 @@ class PointInTimeWriter:
                     record.is_suspended,
                     record.trade_date,
                     record.known_at,
-                    self.source,
+                    record.source or self.source,
                     f"{record.entity_ref}:{record.trade_date.isoformat()}",
                     self.ingest_run_id,
                     record.snapshot_id,

@@ -1,0 +1,49 @@
+{
+ "data": {
+  "columns": [
+   {
+    "name": "TIME",
+    "type": "string"
+   },
+   {
+    "name": "OPEN",
+    "type": "string"
+   },
+   {
+    "name": "MATCH",
+    "type": "string"
+   },
+   {
+    "name": "HIGH",
+    "type": "string"
+   },
+   {
+    "name": "LOW",
+    "type": "string"
+   },
+   {
+    "name": "TURNOVER",
+    "type": "string"
+   },
+   {
+    "name": "VOLUME",
+    "type": "string"
+   },
+   {
+    "name": "CHANGEHANDRATE",
+    "type": "string"
+   },
+   {
+    "name": "AVPRICE",
+    "type": "string"
+   },
+   {
+    "name": "_DATE",
+    "type": "string"
+   }
+  ],
+  "rows": [],
+  "unit": null
+ },
+ "error": null
+}

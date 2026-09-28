@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ragdemo.adapters.base import FactRecord, FetchContext, RawResponse, require_aware
+from ragdemo.adapters.errors import ProviderRefused
 from ragdemo.adapters.http import HttpClient
 from ragdemo.adapters.mcp_gateway import GatewayClient
 
@@ -49,6 +50,9 @@ class PriceRow:
     is_suspended: bool
     known_at: datetime
     snapshot_id: int | None = None  # 同 FactRecord.snapshot_id
+    # 这一行实际来自哪个供应商。None = 用写入器自己的 source；降级层（ADR-0012，如
+    # Wind 日 K 线）写入时必须填真实来源，不能挂在 "tushare" 名下。
+    source: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.known_at, "known_at")
@@ -209,20 +213,46 @@ class TushareAdapter:
         `parse_prices()` 早就用 `row.get("adj_factor", 1.0)` 兜底，不需要
         在这里补。
         """
-        if ctx.watermark:
-            next_day = _parse_yyyymmdd(ctx.watermark) + timedelta(days=1)
-            if next_day > ctx.partition_date:
-                return  # 这一天已经在游标覆盖范围内，没有新区间可拉
-            args: dict[str, Any] = {
-                "ts_code": ts_code,
-                "start_date": next_day.strftime("%Y%m%d"),
-                "end_date": ctx.partition_date.strftime("%Y%m%d"),
-            }
-        else:
-            args = {"ts_code": ts_code, "trade_date": ctx.partition_date.strftime("%Y%m%d")}
-
+        args = daily_args(ctx, ts_code)
+        if args is None:
+            return  # 这一天已经在游标覆盖范围内，没有新区间可拉
         call = gateway.call_tool("daily", args)
         yield replace(call.raw, payload=_rows(call.payload), endpoint="daily")
+
+    def fetch_daily_rest(
+        self, ctx: FetchContext, client: HttpClient, *, ts_code: str
+    ) -> Iterator[RawResponse]:
+        """行情第 2 层（ADR-0012）：Tushare Pro REST，同一账号的另一条通道。
+
+        问法与 `fetch_daily` 完全相同（同一个 `daily_args`），数据是同一份，所以不算降级。
+        token 由出网代理注入 JSON body 的 `token` 字段，这里不持有。供应商拒绝
+        （`code != 0`，如 40203 无权限 / 限频）抛 `ProviderRefused`，报文原样带上——
+        冷却多久由报文决定。
+        """
+        args = daily_args(ctx, ts_code)
+        if args is None:
+            return
+        raw = client.post_json("/", {"api_name": "daily", "params": args, "fields": ""})
+        body = raw.payload if isinstance(raw.payload, dict) else {}
+        if body.get("code") != 0:
+            raise ProviderRefused(
+                f"tushare-rest daily 被拒 code={body.get('code')}: {body.get('msg')}"
+            )
+        yield replace(raw, payload=_rows(body), endpoint="daily")
+
+
+def daily_args(ctx: FetchContext, ts_code: str) -> dict[str, Any] | None:
+    """`daily` 的取数区间（见 `fetch_daily` docstring 的游标语义）。None = 没有新区间。"""
+    if ctx.watermark:
+        next_day = _parse_yyyymmdd(ctx.watermark) + timedelta(days=1)
+        if next_day > ctx.partition_date:
+            return None
+        return {
+            "ts_code": ts_code,
+            "start_date": next_day.strftime("%Y%m%d"),
+            "end_date": ctx.partition_date.strftime("%Y%m%d"),
+        }
+    return {"ts_code": ts_code, "trade_date": ctx.partition_date.strftime("%Y%m%d")}
 
 
 def _maybe_float(value: Any) -> float | None:  # noqa: ANN401

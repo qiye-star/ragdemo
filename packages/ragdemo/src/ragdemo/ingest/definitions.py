@@ -33,7 +33,8 @@ from dagster import (
 )
 
 from ragdemo.adapters.announcements import AnnouncementProvider
-from ragdemo.adapters.mcp_gateway import GatewayClient, gateway_client_from_env
+from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
+from ragdemo.adapters.mcp_gateway import gateway_client_from_env
 from ragdemo.adapters.mock.announcements import MockAnnouncementProvider
 from ragdemo.adapters.mock.facts import MockFactAdapter
 from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
@@ -54,6 +55,7 @@ from ragdemo.ingest.assets_docs import (
     tier_c_reparse,
 )
 from ragdemo.ingest.documents import DocumentWriter
+from ragdemo.ingest.prices import PriceSources
 from ragdemo.ingest.writer import PointInTimeWriter
 from ragdemo.parse.textin import (
     XPARSE_PARAMS_HIGH_PRECISION,
@@ -63,6 +65,7 @@ from ragdemo.parse.textin import (
 )
 from ragdemo.quality.budget_asset import monthly_cost
 from ragdemo.quality.checks import ALL_CHECKS
+from ragdemo.sources.health import MemorySourceHealth, PgSourceHealth
 from ragdemo_core.blob import BlobStore, LocalBlobStore
 
 TRACKED_DOC_TYPES = ("quarterly", "annual_report", "announcement", "10-K", "10-Q", "8-K")
@@ -105,16 +108,44 @@ def tushare_writer_resource(_context: InitResourceContext) -> PointInTimeWriter:
 
 
 TUSHARE_MCP_URL_ENV = "RAGDEMO_TUSHARE_MCP_URL"
+TUSHARE_REST_URL_ENV = "RAGDEMO_TUSHARE_REST_URL"
+WIND_STOCK_URL_ENV = "RAGDEMO_WIND_MCP_URL"
+
+
+def _configured(env: str) -> bool:
+    return bool(os.environ.get(env, "").strip())
 
 
 @resource
-def gateway_resource(_context: InitResourceContext) -> GatewayClient:
-    """行情取数用的 MCP 客户端：Tushare 官方 MCP（2026-09-28 选定，经出网代理 8083 端口，
-    token 由代理注入）。`RAGDEMO_TUSHARE_MCP_URL` 未设置时退回 Mock——与 `parser_resource`
-    判断 `TEXTIN_BASE_URL` 同一套规则，本地开发与测试不该被逼着配真实地址。"""
-    if not os.environ.get(TUSHARE_MCP_URL_ENV, "").strip():
-        return MockMcpGateway()
-    return gateway_client_from_env(url_env=TUSHARE_MCP_URL_ENV, provider="tushare-mcp")
+def price_sources_resource(_context: InitResourceContext) -> PriceSources:
+    """行情三层（ADR-0012）：Tushare MCP → Tushare REST → Wind 日 K 线，都经出网代理
+    （8083 / 8083 / 8084 端口，凭据由代理注入）。哪一层的地址没配，哪一层就不参与。
+
+    三个地址一个都没配时退回 Mock 网关——与 `parser_resource` 判断 `TEXTIN_BASE_URL`
+    同一套规则，本地开发与测试不该被逼着配真实地址。冷却状态在配了真实来源时存
+    `core.source_health`（autocommit 连接，入库回滚撤销不了它）。
+    """
+    if not any(map(_configured, (TUSHARE_MCP_URL_ENV, TUSHARE_REST_URL_ENV, WIND_STOCK_URL_ENV))):
+        return PriceSources(health=MemorySourceHealth(), tushare_mcp=MockMcpGateway())
+    rest = None
+    if _configured(TUSHARE_REST_URL_ENV):
+        rest = HttpClient(
+            "tushare-rest",
+            os.environ[TUSHARE_REST_URL_ENV].strip(),
+            policy=RetryPolicy(max_attempts=2, backoff_base_s=1.0),
+            bucket=TokenBucket(rate_per_minute=120),
+            timeout_s=30.0,
+        )
+    return PriceSources(
+        health=PgSourceHealth(psycopg.connect(os.environ["RAGDEMO_DSN"], autocommit=True)),
+        tushare_mcp=gateway_client_from_env(url_env=TUSHARE_MCP_URL_ENV, provider="tushare-mcp")
+        if _configured(TUSHARE_MCP_URL_ENV)
+        else None,
+        tushare_rest=rest,
+        wind_stock=gateway_client_from_env(url_env=WIND_STOCK_URL_ENV, provider="wind-mcp")
+        if _configured(WIND_STOCK_URL_ENV)
+        else None,
+    )
 
 
 @resource
@@ -231,7 +262,7 @@ defs = Definitions(
         "embedder": embedder_resource,
         "conn": conn_resource,
         "tushare_writer": tushare_writer_resource,
-        "gateway": gateway_resource,
+        "price_sources": price_sources_resource,
         "tier_c_parser": tier_c_parser_resource,
     },
 )
