@@ -26,6 +26,7 @@ dev = [
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
     "dagster-webserver>=1.8",
+    "types-openpyxl>=3.1",
 ]
 
 [tool.ruff]

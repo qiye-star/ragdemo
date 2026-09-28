@@ -378,3 +378,54 @@ def ai_revenue_rule_as_of(
         return None
     spec = AiRevenueRuleSpec(**{c: row[c] for c in _RULE_COLS})
     return Versioned(spec, int(row["rule_id"]), row["author"], row["change_note"], row["known_at"])
+
+
+# --- 当前活版本（写入侧工具的差异基准） ------------------------------------------
+# 导入工具要和"现在生效的那一版"做差异对比，读的是写入侧的活版本行（与 publish_*
+# 判断 UNCHANGED 用的是同一份数据），不是某个 as_of 下的视图。
+
+
+def current_metrics(conn: psycopg.Connection) -> dict[str, MetricSpec]:
+    rows = (
+        conn.cursor(row_factory=dict_row)
+        .execute(
+            f"SELECT {', '.join(_METRIC_COLS)} FROM core.node_metric_version"
+            " WHERE superseded_at IS NULL"
+        )
+        .fetchall()
+    )
+    return {
+        r["metric_id"]: MetricSpec(
+            **{c: r[c] for c in _METRIC_COLS if c != "source_entity"},
+            source_entity=tuple(r["source_entity"]),
+        )
+        for r in rows
+    }
+
+
+def current_source_maps(conn: psycopg.Connection) -> dict[tuple[str, str, str], SourceMapSpec]:
+    rows = (
+        conn.cursor(row_factory=dict_row)
+        .execute(
+            f"SELECT {', '.join(_MAP_COLS)} FROM core.metric_source_map_version"
+            " WHERE superseded_at IS NULL"
+        )
+        .fetchall()
+    )
+    return {
+        (r["metric_id"], r["provider"], r["provider_field"]): SourceMapSpec(
+            **{c: r[c] for c in _MAP_COLS}
+        )
+        for r in rows
+    }
+
+
+def current_ai_revenue_rules(conn: psycopg.Connection) -> dict[str, AiRevenueRuleSpec]:
+    rows = (
+        conn.cursor(row_factory=dict_row)
+        .execute(
+            f"SELECT {', '.join(_RULE_COLS)} FROM core.ai_revenue_rule WHERE superseded_at IS NULL"
+        )
+        .fetchall()
+    )
+    return {r["entity_id"]: AiRevenueRuleSpec(**{c: r[c] for c in _RULE_COLS}) for r in rows}
