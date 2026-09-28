@@ -70,9 +70,10 @@ def test_price_and_evidence_tracks_coexist(db: psycopg.Connection[tuple[object, 
 
 
 @pytest.mark.db
-def test_bitemporal_registry_lists_seven_tables(
+def test_bitemporal_registry_lists_every_point_in_time_table(
     db: psycopg.Connection[tuple[object, ...]],
 ) -> None:
+    """005 登记的七张事实表，加上 018 版本化后登记的三张口径表。"""
     rows = db.execute("SELECT table_name::text FROM core.bitemporal_registry").fetchall()
     assert {r[0] for r in rows} == {
         "core.fin_fact",
@@ -82,6 +83,9 @@ def test_bitemporal_registry_lists_seven_tables(
         "core.entity_relation",
         "core.entity_node_membership",
         "core.event",
+        "core.node_metric_version",
+        "core.metric_source_map_version",
+        "core.ai_revenue_rule",
     }
 
 

@@ -165,3 +165,22 @@ def test_blank_optional_cells_become_null_not_empty_string(
     row = db.execute("SELECT count(*) FROM core.entity WHERE tushare_code IS NULL").fetchone()
     assert row is not None
     assert row[0] == 2
+
+
+@pytest.mark.db
+def test_seeded_metrics_get_a_baseline_version_visible_at_any_as_of(
+    db: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """真实种子 node_metric.csv 全量导入后，每个指标都有版本 1，历史 as_of 下可查。"""
+    from datetime import UTC
+
+    from ragdemo.metrics.definitions import METRIC_BASELINE_KNOWN_AT, metric_as_of
+    from ragdemo.seed.loader import load_metrics
+
+    count = load_metrics(db, Path("db/seed/node_metric.csv"))
+    rows = db.execute("SELECT metric_id FROM core.node_metric").fetchall()
+    assert len(rows) == count == 30
+    for (metric_id,) in rows:
+        found = metric_as_of(db, str(metric_id), as_of=datetime(2015, 6, 1, tzinfo=UTC))
+        assert found is not None, metric_id
+        assert found.version == 1 and found.known_at == METRIC_BASELINE_KNOWN_AT

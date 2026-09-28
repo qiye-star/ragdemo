@@ -16,6 +16,7 @@ from typing import Any
 
 import psycopg
 
+from ragdemo.metrics.definitions import METRIC_BASELINE_KNOWN_AT, MetricSpec, publish_metric
 from ragdemo.seed.taxonomy import DEFAULT_TAXONOMY_PATH, Taxonomy, load_taxonomy
 
 ENTITY_ID_RE = re.compile(r"^[A-Z]{2}\.[A-Za-z0-9._-]{1,32}$")
@@ -179,6 +180,9 @@ def load_aliases(conn: Connection, csv_path: Path) -> int:
 
 
 def load_metrics(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = None) -> int:
+    """指标定义经口径版本化入口写入（迁移 018）：每个指标生成版本 1，
+    known_at 取固定基线 METRIC_BASELINE_KNOWN_AT，在任何历史 as_of 下都可见。
+    与种子实体 known_at 取 valid_from 是同一个有意接受的乐观偏差（03 §6.3）。"""
     rows = _read(csv_path)
     tax = _taxonomy_or_default(taxonomy)
     for i, row in enumerate(rows, start=2):
@@ -186,23 +190,46 @@ def load_metrics(conn: Connection, csv_path: Path, taxonomy: Taxonomy | None = N
         unknown = tax.unknown([row.get("l3_node", "")])
         if unknown:
             raise SeedError(f"第 {i} 行 l3_node 不在环节表中: {unknown}（{row.get('metric_id')}）")
-    return _load_simple(
-        conn,
-        csv_path,
-        "core.node_metric",
-        [
-            "metric_id",
-            "l3_node",
-            "metric_name",
-            "metric_role",
-            "frequency",
-            "source_type",
-            "extraction_hint",
-            "direction",
-            "definition",
-            "unit",
-        ],
-    )
+    missing = set(_METRIC_CSV_COLUMNS) - set(rows[0]) if rows else set()
+    if missing:
+        raise SeedError(f"{csv_path.name} 缺少列: {sorted(missing)}")
+    with conn.transaction():
+        for row in rows:
+            spec = MetricSpec(
+                metric_id=row["metric_id"],
+                metric_name=row["metric_name"],
+                metric_role=row["metric_role"],
+                frequency=row["frequency"],
+                source_type=row["source_type"],
+                definition=row["definition"],
+                unit=row["unit"],
+                l3_node=row["l3_node"] or None,
+                extraction_hint=row["extraction_hint"] or None,
+                direction=int(row["direction"]) if row["direction"] else 1,
+            )
+            publish_metric(
+                conn,
+                spec,
+                author="seed",
+                known_at=METRIC_BASELINE_KNOWN_AT,
+                source=SEED_SOURCE,
+                ingest_run_id="seed",
+            )
+    return len(rows)
+
+
+_METRIC_CSV_COLUMNS = (
+    "metric_id",
+    "l3_node",
+    "metric_name",
+    "metric_role",
+    "frequency",
+    "source_type",
+    "extraction_hint",
+    "direction",
+    "definition",
+    "unit",
+)
 
 
 def load_relations(conn: Connection, csv_path: Path) -> int:

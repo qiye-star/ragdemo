@@ -24,6 +24,10 @@ BITEMPORAL_VIEWS = {
     "entity_relation",
     "entity_node_membership",
     "event",
+    # 018_metric_versioning：口径（指标定义、字段映射、AI 收入拆分规则）版本化后登记。
+    "node_metric_version",
+    "metric_source_map_version",
+    "ai_revenue_rule",
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。
