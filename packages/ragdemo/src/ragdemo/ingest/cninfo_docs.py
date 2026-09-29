@@ -14,7 +14,7 @@ CLI 自己构造指向 `www.cninfo.com.cn` / `static.cninfo.com.cn` 的真实客
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -256,9 +256,18 @@ def run_cninfo_layer(
         prepared = prepare_documents(docs_only, deps.parser, deps.blob, budget, owner_user=None)
         record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
         for item, (_, index_id) in zip(prepared, pending, strict=False):
-            chunks, descriptions, _violations = build_chunks_and_descriptions(
+            chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer
             )
+            if violations:
+                # 解析出了块，但校验不合格（最常见：某个表格的 content_desc 生成
+                # 被 describe.py 的违禁词过滤拒绝）——落一行无块 document 留痕，
+                # 不能让一份公告的校验失败炸穿这一整批（真实公告实测发现，
+                # 见 LayerReport.validation_failed 的注释）。
+                result = writer.write_document(replace(item.doc, blocks=[]), [], {})
+                index.link_document(index_id, result.doc_id)
+                report.validation_failed += 1
+                continue
             result = writer.write_document(
                 item.doc,
                 chunks,

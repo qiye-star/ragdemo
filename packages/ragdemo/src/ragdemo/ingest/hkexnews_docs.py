@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -149,9 +149,14 @@ def run_hkexnews_layer(
         prepared = prepare_documents(docs_only, deps.parser, deps.blob, budget, owner_user=None)
         record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
         for item, (_, index_id) in zip(prepared, pending, strict=False):
-            chunks, descriptions, _violations = build_chunks_and_descriptions(
+            chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer
             )
+            if violations:
+                result = writer.write_document(replace(item.doc, blocks=[]), [], {})
+                index.link_document(index_id, result.doc_id)
+                report.validation_failed += 1
+                continue
             result = writer.write_document(
                 item.doc,
                 chunks,

@@ -55,6 +55,10 @@ class LayerReport:
     parsed_pages: int = 0
     stored_unparsed: int = 0
     skipped_budget: int = 0
+    # 解析出了块，但 validate_chunks 判定不合格（最常见：content_desc 生成被
+    # describe.py 的违禁词过滤拒绝）——落一行无块 document 留痕，不能让一份公告
+    # 的校验失败炸穿整批（2026-09-29 对 688041.SH 真实公告实测发现）。
+    validation_failed: int = 0
     estimated_pages: dict[ParseTier, int] = field(default_factory=dict)
 
 

@@ -16,6 +16,7 @@ import httpx
 import psycopg
 import pytest
 
+from ragdemo.adapters.announcements import NormalizedBlock
 from ragdemo.adapters.cninfo import CninfoAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.ingest.announcement_index import IndexWriter
@@ -26,7 +27,7 @@ from ragdemo.ingest.cninfo_docs import (
     run_cninfo_layer,
 )
 from ragdemo.ingest.parse_policy import ParseTier
-from ragdemo.parse.textin import MockDocumentParser, PageBudget
+from ragdemo.parse.textin import MockDocumentParser, PageBudget, ParseResult
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
@@ -425,3 +426,61 @@ def test_index_row_links_the_document(conn: psycopg.Connection, tmp_path: Path) 
         " JOIN core.document d ON d.doc_id = i.doc_id"
     ).fetchone()
     assert row is not None and row[0] == row[1]
+
+
+class _ForbiddenTermParser:
+    """`MockTableDescriber` 从真实表头列名拼描述——像"增持数量"这种股东增减持
+    公告里的真实、合法列名会撞上 `describe.py::FORBIDDEN_PATTERNS`（"增持"）。
+    这个 parser 复现该场景，验证 `run_cninfo_layer` 不会被这一份公告的校验失败
+    炸穿（2026-09-29 对 688041.SH 真实公告实测发现的问题）。"""
+
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+        blocks = [
+            NormalizedBlock(0, "title", "", "股东增持计划", page=1, level=0),
+            NormalizedBlock(
+                1,
+                "table",
+                "股东增持计划",
+                "| 股东名称 | 增持数量 |\n|---|---|\n| 张三 | 100000 |",
+                page=1,
+            ),
+        ]
+        return ParseResult(
+            blocks=blocks, page_count=1, engine_version="mock:1", markdown="", json_ref=None,
+            md_ref=None,
+        )  # fmt: skip
+
+
+@pytest.mark.db
+def test_a_documents_own_validation_failure_does_not_crash_the_whole_batch(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    since, until = _window()
+    report = run_cninfo_layer(
+        conn,
+        deps=CninfoLayerDeps(
+            adapter=CninfoAdapter(_query_client_with(ANNOUNCEMENT_QUARTERLY)),
+            static_client=_static_client([]),
+            parser=_ForbiddenTermParser(),
+            blob=LocalBlobStore(tmp_path),
+        ),
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=True,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    conn.commit()
+    assert report.validation_failed == 1
+    assert report.parsed_docs == 0
+    row = conn.execute(
+        "SELECT d.doc_id FROM core.announcement_index i JOIN core.document d ON d.doc_id = i.doc_id"
+    ).fetchone()
+    assert row is not None, "校验失败的文档也该留一行 document 供目录关联，不能悄悄丢掉"
+    blocks = conn.execute("SELECT count(*) FROM core.doc_block WHERE doc_id = %s", row).fetchone()
+    assert blocks == (0,)

@@ -40,6 +40,8 @@ class ParsePendingReport:
     parsed_pages: int = 0
     stored_unparsed: int = 0
     skipped_budget: int = 0
+    # 重解析结果没通过校验（最常见：content_desc 生成被拒绝）——保留原文档不动。
+    validation_failed: int = 0
     # dry run 专用：真实页数（读得到 PDF 时）或经验估算（读不到时）按档位汇总。
     estimated_pages: dict[ParseTier, int] = field(default_factory=dict)
 
@@ -199,9 +201,16 @@ def run_parse_pending(
             continue
 
         item = prepared[0]
-        chunks, descriptions, _violations = build_chunks_and_descriptions(
+        chunks, descriptions, violations = build_chunks_and_descriptions(
             item.doc, chunk_cfg, describer
         )
+        if violations:
+            # 重解析结果没通过校验（最常见：某个表格的 content_desc 生成被
+            # describe.py 的违禁词过滤拒绝）——保留原来那份无块文档不动，不拿一个
+            # 更差的结果去取代它；下次跑再试一次，与 tier_c_reparse 遇到同样情况
+            # 时的处理一致（见该资产对 validate_chunks 失败的注释）。
+            report.validation_failed += 1
+            continue
         writer = DocumentWriter(conn, ingest_run_id=ingest_run_id, source=row.source)
         result = writer.reparse_document(
             item.doc,
