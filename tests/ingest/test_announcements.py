@@ -494,3 +494,39 @@ def test_legacy_cursor_without_floor_is_refetched_from_backfill_since(
         backfill_since=date(2026, 1, 1),
     )
     assert seen[-1].startswith("2026-01-01")
+
+
+@pytest.mark.db
+def test_refetch_ignores_the_cursor_and_requeries_the_whole_window(
+    conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
+) -> None:
+    """游标已覆盖整段窗口时，普通运行什么都不查；`refetch` 忽略游标整段重取
+    （补下载此前只建了目录的公告全文）。"""
+    health, backlog = MemorySourceHealth(), Backlog(state)
+    seen: list[str] = []
+
+    def deps() -> CninfoLayerDeps:
+        return _cninfo_deps(_recording_handler([CN_ANNOUNCEMENT], seen), LocalBlobStore(tmp_path))
+
+    _run(conn, health, backlog, _sources(cninfo=deps()), tmp_path)
+    calls_after_first = len(seen)
+    _run(conn, health, backlog, _sources(cninfo=deps()), tmp_path)
+    assert len(seen) == calls_after_first  # 游标已覆盖：没有新请求
+
+    ingest_announcements(
+        conn,
+        entities=[_route_cn()],
+        sources=_sources(cninfo=deps()),
+        blob=LocalBlobStore(tmp_path / "degraded-blob"),
+        health=health,
+        backlog=backlog,
+        partition_date=date(2026, 9, 28),
+        backfill_since=date(2026, 1, 1),
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        ingest_run_id="t",
+        refetch=True,
+        now=lambda: NOW,
+    )
+    assert len(seen) > calls_after_first
+    assert seen[-1].startswith("2026-01-01")

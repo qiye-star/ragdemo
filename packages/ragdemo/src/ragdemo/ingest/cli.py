@@ -752,6 +752,13 @@ def docs_parse_pending(
     help="下载后按这些档位解析（可重复传多次）；不传则只解析 ParseTier.FIRST",
 )
 @click.option("--max-pages", "max_pages_opt", type=int, default=None, help="本次 run 的页数预算")
+@click.option(
+    "--refetch",
+    is_flag=True,
+    default=False,
+    help="忽略增量游标，整段 [--since, --until] 重取一遍（补下载此前只建了目录的公告全文；"
+    "已下载的不会重复下载）",
+)
 @click.option("--yes", is_flag=True, default=False, help="真正抓取/建目录/写库；不传则只 dry run")
 def docs_announcements(
     since: str,
@@ -761,6 +768,7 @@ def docs_announcements(
     download: bool,
     tier_names: tuple[str, ...],
     max_pages_opt: int | None,
+    refetch: bool,
     yes: bool,
 ) -> None:
     """按市场路由抓公告目录（可选下载全文并解析）：A 股巨潮为主、Wind/iFind 降级
@@ -836,6 +844,7 @@ def docs_announcements(
             budget=PageBudget(max_pages),
             ingest_run_id=f"cli:docs-announcements:{uuid.uuid4().hex[:12]}",
             cost_per_page_cny=cfg.textin_cost_per_page_cny,
+            refetch=refetch,
         )
         click.echo(
             f"索引 {report.indexed}，解析 {report.parsed_docs}（{report.parsed_pages} 页），"

@@ -181,6 +181,7 @@ def ingest_announcements(
     budget: PageBudget,
     ingest_run_id: str,
     cost_per_page_cny: Decimal | None = None,
+    refetch: bool = False,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> AnnouncementRunReport:
     report = AnnouncementRunReport()
@@ -209,6 +210,10 @@ def ingest_announcements(
             # 已入库的行由 IndexWriter 幂等跳过；没有下界记录的老游标同样重取。
             since = min(since, backfill_since)
 
+        if refetch:
+            # 补下载：目录早已建好（游标已覆盖），但当时没下载全文——忽略游标整段重取，
+            # 已下载并落了 document 的公告由各层的 already_downloaded 规则跳过。
+            since = backfill_since
         open_items = {i.entity_ref: i for i in backlog.open_items(capability)}
         if route.entity_ref in open_items:
             since = min(since, open_items[route.entity_ref].since)
