@@ -650,3 +650,28 @@ def test_docs_announcements_market_filter_excludes_other_groups(
     assert result.exit_code == 0, result.output
     assert "688041.SH" in result.output
     assert "09988.HK" not in result.output
+
+
+def test_docs_announcements_yes_with_no_matching_entities_does_not_crash(
+    announcements_conn: psycopg.Connection, temp_db: str
+) -> None:
+    """回归：`--yes` 路径构造 `Backlog` 时曾经漏传 `autocommit=True`，
+    `Backlog.__init__` 会拒绝非 autocommit 连接直接抛 `ValueError`——这条路径
+    在筛不到任何实体（`entities=[]`）时最先触达，不需要真的连巨潮/Wind/iFind
+    就能验证它不再崩溃（2026-09-29 实盘验收时发现）。"""
+    result = CliRunner().invoke(
+        main,
+        [
+            "docs",
+            "announcements",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-12-31",
+            "--entity-ref",
+            "NOSUCHENTITY",
+            "--yes",
+        ],
+        env={"RAGDEMO_DSN": temp_db},
+    )
+    assert result.exit_code == 0, result.output

@@ -246,7 +246,9 @@ def announcement_health_resource(_context: InitResourceContext) -> SourceHealth:
 
 @resource
 def announcement_backlog_resource(_context: InitResourceContext) -> Backlog:
-    return Backlog(_conn())
+    """autocommit 连接：待补记录不能随入库事务回滚，与 `announcement_health_resource`
+    同一个理由（`Backlog.__init__` 会拒绝非 autocommit 连接）。"""
+    return Backlog(psycopg.connect(os.environ["RAGDEMO_DSN"], autocommit=True))
 
 
 # 首次为某实体建目录时的回填起点；此后每个实体走自己的 `core.ingest_watermark`

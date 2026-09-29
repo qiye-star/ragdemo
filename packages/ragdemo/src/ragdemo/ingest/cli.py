@@ -860,7 +860,7 @@ def docs_announcements(
         sources = build_announcement_sources(cfg)
         blob = LocalBlobStore(cfg.blob_root)
         health = PgSourceHealth(psycopg.connect(_dsn(), autocommit=True))
-        backlog = Backlog(psycopg.connect(_dsn()))
+        backlog = Backlog(psycopg.connect(_dsn(), autocommit=True))
 
         report = ingest_announcements(
             conn,
