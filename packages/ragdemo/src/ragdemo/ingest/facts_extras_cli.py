@@ -50,8 +50,8 @@ def _cfets_adapter() -> CfetsAdapter:
         "cfets",
         "https://www.chinamoney.com.cn",
         policy=RetryPolicy(max_attempts=2, backoff_base_s=5.0),
-        # 该站 WAF 对连续请求返回 403（2026-09-29 实测），保守限速。
-        bucket=TokenBucket(rate_per_minute=6),
+        # 该站 WAF 的 403 由 pageSize 触发、与频率无关（见 adapters/cfets.py），仍限速礼貌取数。
+        bucket=TokenBucket(rate_per_minute=30),
         default_headers={"User-Agent": ua},
     )
     return CfetsAdapter(client)
@@ -97,7 +97,7 @@ def fx_command(since: str, until: str, yes: bool) -> None:
         windows = -(-((end - start).days + 1) // WINDOW_DAYS)
         click.echo(
             f"[dry run] {len(PAIRS)} 个币种对 × {windows} 个窗口（至少 {len(PAIRS) * windows} 次"
-            f"请求，限速 6 次/分钟）：{', '.join(PAIRS)}；加 --yes 执行"
+            f"请求，限速 30 次/分钟）：{', '.join(PAIRS)}；加 --yes 执行"
         )
         return
     blob = LocalBlobStore(load_config().blob_root)

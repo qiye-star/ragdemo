@@ -21,7 +21,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Protocol, runtime_checkable
 
-CONTRACT_VERSION = "1"
+CONTRACT_VERSION = "1.2"
 
 DerivedKind = Literal["yoy"]  # v1 只有累计同比；环比 / TTM 在阶段 2.5 作为增量加入
 
@@ -201,6 +201,60 @@ class AnnouncementInfo:
     known_at: datetime
 
 
+# --- 股东 / 分部 / 汇率（v1.2，阶段二）--------------------------------------------
+
+
+@dataclass(frozen=True)
+class RecordCitation:
+    """结构化记录（股东、分部、汇率）的溯源：来源、可知时刻、回放原始响应用的
+    `snapshot_id`。股东 / 分部的 `known_at_basis` 说明这个时刻怎么来的：
+    `first_periodic_report` = 该期定期报告的最早披露时刻；`revision_observed` = 之后发现
+    值变了、按观察到的时刻追加的更正。汇率没有这个字段（恒为 None）。"""
+
+    source: str
+    known_at: datetime
+    snapshot_id: int | None
+    known_at_basis: str | None = None
+
+    def render(self) -> str:
+        return f"[{self.source} | {self.known_at.isoformat()}]"
+
+
+@dataclass(frozen=True)
+class ShareholderHolding:
+    entity_id: str
+    period: str  # 2024FY / 2025H1 / 2025Q1 / 2025Q3
+    period_end: date
+    rank: int
+    holder_name: str
+    shares: Decimal  # 股
+    ratio: Decimal  # 0~1 小数
+    citation: RecordCitation
+
+
+@dataclass(frozen=True)
+class SegmentValue:
+    entity_id: str
+    period: str  # 2024FY / 2025H1（分部只有年报、中报）
+    period_end: date
+    dimension: str  # product / region / industry
+    segment_name: str
+    revenue: Decimal  # 元
+    gross_profit: Decimal | None  # 元
+    revenue_share: Decimal | None  # 0~1 小数；来源占比自相矛盾时为 None
+    currency: str
+    citation: RecordCitation
+
+
+@dataclass(frozen=True)
+class FxQuote:
+    base_ccy: str  # 1 单位 base = rate 单位 quote
+    quote_ccy: str
+    rate_date: date  # 实际取到的那一天（周末 / 节假日是上一个交易日）
+    rate: Decimal
+    citation: RecordCitation
+
+
 # --- 产业链 -----------------------------------------------------------------------
 
 
@@ -311,4 +365,30 @@ class DataApi(Protocol):
         """`entity_id` 的公告目录（v1.1），按 `publish_date` 升序。只返回 `as_of`
         时刻已知、未被取代的现行行——降级层（Wind/iFind）的行被主源（cninfo 等）
         取代后不再出现；`since`/`until` 按 `publish_date` 收窄，不传则不限制。"""
+        ...
+
+    def query_shareholders(
+        self, entity_id: str, *, as_of: datetime, period: str | None = None
+    ) -> list[ShareholderHolding]:
+        """前十大股东（v1.2），按 period_end 升序、名次升序。`as_of` 时刻已知的现行版本
+        （被更正的取更正后的）；不传 `period` 返回所有已知期别。"""
+        ...
+
+    def query_segments(
+        self,
+        entity_id: str,
+        *,
+        as_of: datetime,
+        period: str | None = None,
+        dimension: str | None = None,
+    ) -> list[SegmentValue]:
+        """主营构成（v1.2），按 period_end 升序、维度、收入降序。可按期别与维度收窄。"""
+        ...
+
+    def get_fx_rate(
+        self, base_ccy: str, quote_ccy: str, *, on: date, as_of: datetime
+    ) -> FxQuote | None:
+        """`on` 当天或之前最近一个交易日的汇率（v1.2）。v1.2 只提供外币兑人民币的
+        直接报价（如 USD→CNY）；最近一条比 `on` 早超过 7 天、或没有，返回 `None`——
+        不静默用陈旧汇率。币种换算请用 `ragdemo.metrics.fx.convert`（含交叉汇率）。"""
         ...

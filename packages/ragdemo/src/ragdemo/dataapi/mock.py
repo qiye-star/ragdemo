@@ -23,10 +23,14 @@ from ragdemo.dataapi.contract import (
     EntityMatch,
     FactCitation,
     FactValue,
+    FxQuote,
     MetricDefinition,
     PriceBar,
     PropagationRule,
+    RecordCitation,
     Relation,
+    SegmentValue,
+    ShareholderHolding,
     SourceCitation,
     require_as_of,
 )
@@ -327,3 +331,82 @@ class MockDataApi:
             and _visible(a.known_at, a.superseded_at, as_of)
         ]
         return sorted(rows, key=lambda r: r.publish_date)
+
+    # --- 股东 / 分部 / 汇率（v1.2）--------------------------------------------------
+
+    def query_shareholders(
+        self, entity_id: str, *, as_of: datetime, period: str | None = None
+    ) -> list[ShareholderHolding]:
+        require_as_of(as_of)
+        rows = [
+            ShareholderHolding(
+                h.entity_id,
+                h.period,
+                h.period_end,
+                h.rank,
+                h.holder_name,
+                h.shares,
+                h.ratio,
+                RecordCitation(h.source, h.known_at, h.snapshot_id, h.known_at_basis),
+            )
+            for h in self._d.holdings
+            if h.entity_id == entity_id
+            and (period is None or h.period == period)
+            and _visible(h.known_at, h.superseded_at, as_of)
+        ]
+        return sorted(rows, key=lambda r: (r.period_end, r.rank))
+
+    def query_segments(
+        self,
+        entity_id: str,
+        *,
+        as_of: datetime,
+        period: str | None = None,
+        dimension: str | None = None,
+    ) -> list[SegmentValue]:
+        require_as_of(as_of)
+        rows = [
+            SegmentValue(
+                s.entity_id,
+                s.period,
+                s.period_end,
+                s.dimension,
+                s.segment_name,
+                s.revenue,
+                s.gross_profit,
+                s.revenue_share,
+                s.currency,
+                RecordCitation(s.source, s.known_at, s.snapshot_id, s.known_at_basis),
+            )
+            for s in self._d.segments
+            if s.entity_id == entity_id
+            and (period is None or s.period == period)
+            and (dimension is None or s.dimension == dimension)
+            and _visible(s.known_at, s.superseded_at, as_of)
+        ]
+        return sorted(rows, key=lambda r: (r.period_end, r.dimension, -r.revenue))
+
+    def get_fx_rate(
+        self, base_ccy: str, quote_ccy: str, *, on: date, as_of: datetime
+    ) -> FxQuote | None:
+        require_as_of(as_of)
+        seen = [
+            f
+            for f in self._d.fx_rates
+            if f.base_ccy == base_ccy
+            and f.quote_ccy == quote_ccy
+            and f.rate_date <= on
+            and _visible(f.known_at, f.superseded_at, as_of)
+        ]
+        if not seen:
+            return None
+        best = max(seen, key=lambda f: f.rate_date)
+        if (on - best.rate_date).days > 7:
+            return None
+        return FxQuote(
+            best.base_ccy,
+            best.quote_ccy,
+            best.rate_date,
+            best.rate,
+            RecordCitation(best.source, best.known_at, best.snapshot_id),
+        )

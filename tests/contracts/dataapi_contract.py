@@ -29,6 +29,10 @@ from ragdemo.dataapi.sample import (
     T_CORRECTION,
     T_DEFINITION_V2,
     T_FUTURE_DOC,
+    T_FX_1,
+    T_FX_2,
+    T_HOLDERS_FIRST,
+    T_HOLDERS_REVISED,
     T_NEW_RELATION,
 )
 
@@ -67,6 +71,9 @@ class DataApiContract:
             lambda: api.get_relations(HYGON, as_of=naive),
             lambda: api.match_rules("capacity_expansion", "先进封装", as_of=naive),
             lambda: api.list_announcements(HYGON, as_of=naive),
+            lambda: api.query_shareholders(HYGON, as_of=naive),
+            lambda: api.query_segments(HYGON, as_of=naive),
+            lambda: api.get_fx_rate("USD", "CNY", on=date(2025, 3, 28), as_of=naive),
         ]
         for call in calls:
             with pytest.raises(ValueError, match="as_of"):
@@ -324,3 +331,63 @@ class DataApiContract:
         rows = self.make_api().list_announcements(HYGON, as_of=LATER)
         assert [r.publish_date for r in rows] == sorted(r.publish_date for r in rows)
         assert self.make_api().match_rules("no_such_event", "先进封装", as_of=LATER) == []
+
+    # --- 股东 / 分部 / 汇率（v1.2）--------------------------------------------------
+
+    def test_shareholders_are_invisible_before_first_disclosure(self) -> None:
+        api = self.make_api()
+        before = T_HOLDERS_FIRST - timedelta(seconds=1)
+        assert api.query_shareholders(HYGON, as_of=before) == []
+
+    def test_shareholder_revision_keeps_history_and_cites_its_basis(self) -> None:
+        api = self.make_api()
+        original = api.query_shareholders(HYGON, as_of=T_HOLDERS_FIRST + timedelta(days=1))
+        assert [(r.rank, r.shares) for r in original] == [
+            (1, Decimal("600000000")),
+            (2, Decimal("250000000")),
+        ]
+        assert {r.citation.known_at_basis for r in original} == {"first_periodic_report"}
+
+        revised = api.query_shareholders(HYGON, as_of=T_HOLDERS_REVISED + timedelta(days=1))
+        second = next(r for r in revised if r.rank == 2)
+        assert second.shares == Decimal("251194546")
+        assert second.citation.known_at_basis == "revision_observed"
+        assert second.citation.known_at == T_HOLDERS_REVISED
+        assert all(0 < r.ratio <= 1 for r in revised)
+
+    def test_shareholders_filter_by_period(self) -> None:
+        api = self.make_api()
+        assert api.query_shareholders(HYGON, as_of=LATER, period="2024FY")
+        assert api.query_shareholders(HYGON, as_of=LATER, period="2023FY") == []
+        assert api.query_shareholders(SUGON, as_of=LATER) == []
+
+    def test_segments_are_time_filtered_and_filterable_by_dimension(self) -> None:
+        api = self.make_api()
+        assert api.query_segments(HYGON, as_of=T_HOLDERS_FIRST - timedelta(seconds=1)) == []
+        rows = api.query_segments(HYGON, as_of=LATER, period="2024FY")
+        assert {r.dimension for r in rows} == {"product", "region"}
+        products = api.query_segments(HYGON, as_of=LATER, dimension="product")
+        assert [r.segment_name for r in products] == ["示意产品A", "示意产品B"]  # 收入降序
+        assert all(r.currency == "CNY" and r.citation.source == "wind" for r in rows)
+
+    def test_fx_rate_uses_the_latest_rate_that_was_already_published(self) -> None:
+        api = self.make_api()
+        on = date(2025, 3, 28)
+        # 09:00 时 3-28 的中间价（09:15 公布）还不可见：只能看到 3-27 的。
+        early = datetime(2025, 3, 28, 9, 0, tzinfo=CST)
+        assert early < T_FX_2
+        quote = api.get_fx_rate("USD", "CNY", on=on, as_of=early)
+        assert quote is not None and quote.rate_date == date(2025, 3, 27)
+        assert quote.rate == Decimal("7.2500") and quote.citation.known_at == T_FX_1
+        later = api.get_fx_rate("USD", "CNY", on=on, as_of=T_FX_2 + timedelta(minutes=1))
+        assert later is not None and later.rate == Decimal("7.2600")
+
+    def test_fx_rate_on_a_weekend_uses_the_previous_trading_day(self) -> None:
+        quote = self.make_api().get_fx_rate("USD", "CNY", on=date(2025, 3, 30), as_of=LATER)
+        assert quote is not None and quote.rate_date == date(2025, 3, 28)
+
+    def test_fx_rate_returns_none_when_missing_or_stale(self) -> None:
+        api = self.make_api()
+        assert api.get_fx_rate("EUR", "CNY", on=date(2025, 3, 28), as_of=LATER) is None
+        assert api.get_fx_rate("USD", "CNY", on=date(2025, 6, 1), as_of=LATER) is None  # 过期
+        assert api.get_fx_rate("USD", "CNY", on=date(2025, 3, 1), as_of=LATER) is None  # 尚无

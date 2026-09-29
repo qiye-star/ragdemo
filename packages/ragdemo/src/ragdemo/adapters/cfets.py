@@ -15,8 +15,9 @@
 
 `known_at` = 该日 09:15（北京时间）：中间价每个交易日 09:15 公布，公布之前不可获知。
 
-接口有 WAF：短时间连续请求会返回 403 HTML 页（2026-09-29 实测，冷却前持续 403），
-所以取数要走限速的 `HttpClient`，并且按半年分窗、跟着 `pageTotal` 翻页，不一次要几年。
+接口有 WAF：`pageSize` 超过 50 就返回 403 HTML 页（2026-09-29 实测：50 正常、100 及以上
+一律 403，与频率无关），所以固定用 50、按半年分窗、跟着 `pageTotal` 翻页；同时走限速的
+`HttpClient`，不连续猛砸。
 403 页不是 JSON——`HttpClient.get_json` 会把它当作解析失败抛出，不会被静默当成"没有数据"。
 """
 
@@ -36,7 +37,8 @@ PROVIDER = "cfets"
 ENDPOINT = "/ags/ms/cm-u-bk-ccpr/CcprHisNew"
 PAIRS = ("USD/CNY", "EUR/CNY", "HKD/CNY", "100JPY/CNY", "CNY/KRW")
 WINDOW_DAYS = 180
-PAGE_SIZE = 100
+# 页大小上限：2026-09-29 实测 pageSize<=50 正常、>=100 一律 403（WAF 规则，与请求频率无关）。
+PAGE_SIZE = 50
 _CST = timezone(timedelta(hours=8))
 _PUBLISH_TIME = time(9, 15)
 _QUANT = Decimal("0.000000000001")  # 12 位小数

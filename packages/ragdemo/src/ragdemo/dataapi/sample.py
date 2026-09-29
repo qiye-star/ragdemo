@@ -147,6 +147,59 @@ class SampleAnnouncement:
     url: str | None = None
 
 
+# --- v1.2 股东 / 分部 / 汇率（阶段二）-------------------------------------------
+T_HOLDERS_FIRST = _eod(date(2025, 3, 1))  # 2024FY 年报首次披露
+T_HOLDERS_REVISED = _eod(date(2025, 5, 20))  # 之后观察到某名股东数据变了（更正）
+T_FX_1 = datetime(2025, 3, 27, 9, 15, tzinfo=CST)  # 中间价当日 09:15 公布
+T_FX_2 = datetime(2025, 3, 28, 9, 15, tzinfo=CST)
+
+
+@dataclass(frozen=True)
+class SampleHolding:
+    entity_id: str
+    period: str
+    period_end: date
+    rank: int
+    holder_name: str
+    shares: Decimal
+    ratio: Decimal
+    known_at: datetime
+    superseded_at: datetime | None
+    known_at_basis: str = "first_periodic_report"
+    source: str = "wind"
+    snapshot_id: int | None = 1
+
+
+@dataclass(frozen=True)
+class SampleSegment:
+    entity_id: str
+    period: str
+    period_end: date
+    dimension: str
+    segment_name: str
+    revenue: Decimal
+    gross_profit: Decimal | None
+    revenue_share: Decimal | None
+    known_at: datetime
+    superseded_at: datetime | None = None
+    currency: str = "CNY"
+    known_at_basis: str = "first_periodic_report"
+    source: str = "wind"
+    snapshot_id: int | None = 1
+
+
+@dataclass(frozen=True)
+class SampleFx:
+    base_ccy: str
+    quote_ccy: str
+    rate_date: date
+    rate: Decimal
+    known_at: datetime
+    superseded_at: datetime | None = None
+    source: str = "cfets"
+    snapshot_id: int | None = 2
+
+
 @dataclass(frozen=True)
 class SampleRelation:
     from_entity: str
@@ -176,6 +229,9 @@ class SampleDataset:
     relations: tuple[SampleRelation, ...]
     rules: tuple[SampleRule, ...]
     announcements: tuple[SampleAnnouncement, ...] = ()
+    holdings: tuple[SampleHolding, ...] = ()
+    segments: tuple[SampleSegment, ...] = ()
+    fx_rates: tuple[SampleFx, ...] = ()
 
 
 HYGON = "CN.688041"
@@ -507,5 +563,80 @@ SAMPLE = SampleDataset(
             T_ANNOUNCEMENT_EDGAR_KNOWN,
             None,
         ),
+    ),
+    holdings=(
+        SampleHolding(
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            1,
+            "示意股东甲",
+            Decimal("600000000"),
+            Decimal("0.2600"),
+            T_HOLDERS_FIRST,
+            None,
+        ),
+        SampleHolding(  # 原值，后被更正
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            2,
+            "示意股东乙",
+            Decimal("250000000"),
+            Decimal("0.1080"),
+            T_HOLDERS_FIRST,
+            T_HOLDERS_REVISED,
+        ),
+        SampleHolding(
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            2,
+            "示意股东乙",
+            Decimal("251194546"),
+            Decimal("0.1081"),
+            T_HOLDERS_REVISED,
+            None,
+            known_at_basis="revision_observed",
+        ),
+    ),
+    segments=(
+        SampleSegment(
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            "product",
+            "示意产品A",
+            Decimal("9134299100"),
+            Decimal("5818376700"),
+            Decimal("0.99696"),
+            T_HOLDERS_FIRST,
+        ),
+        SampleSegment(
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            "product",
+            "示意产品B",
+            Decimal("27849100"),
+            None,
+            None,
+            T_HOLDERS_FIRST,
+        ),
+        SampleSegment(
+            HYGON,
+            "2024FY",
+            date(2024, 12, 31),
+            "region",
+            "示意地区X",
+            Decimal("9162150000"),
+            None,
+            Decimal("1"),
+            T_HOLDERS_FIRST,
+        ),
+    ),
+    fx_rates=(
+        SampleFx("USD", "CNY", date(2025, 3, 27), Decimal("7.2500"), T_FX_1),
+        SampleFx("USD", "CNY", date(2025, 3, 28), Decimal("7.2600"), T_FX_2),
     ),
 )
