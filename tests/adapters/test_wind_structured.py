@@ -239,3 +239,38 @@ def test_check_against_revenue_boundaries() -> None:
         check_against_revenue(rows, Decimal("1020"))  # 2% 偏差（错配的期别）
     with pytest.raises(WindResponseRejected):
         check_against_revenue(rows, Decimal("0"))
+
+
+def test_third_quarter_column_spelled_as_3jimo_is_accepted() -> None:
+    """2026-09-29 实测：同一期别的列名写法会变（三季报 / 3季末）。"""
+    payload, code = _holders()
+    alt = copy.deepcopy(payload)
+    for c in alt["data"]["data"][0]["columns"]:
+        c["name"] = c["name"].replace("2024年前十大", "2024年3季末的前十大")
+    result = WindHoldersAdapter(MockMcpGateway()).parse(
+        _raw("holders_688041_2024fy", code, "2024Q3", alt)
+    )
+    assert len(result.rows) == 10
+
+
+def test_mismatched_period_word_is_still_rejected() -> None:
+    payload, code = _holders()
+    alt = copy.deepcopy(payload)
+    for c in alt["data"]["data"][0]["columns"]:
+        c["name"] = c["name"].replace("2024年前十大", "2024年3季末的前十大")
+    with pytest.raises(WindResponseRejected):
+        WindHoldersAdapter(MockMcpGateway()).parse(
+            _raw("holders_688041_2024fy", code, "2024H1", alt)
+        )
+
+
+def test_column_spelled_without_the_top_ten_words_is_accepted() -> None:
+    """同一只股票同一期，Wind 还给过"2024年3季末股东名称"（没有"前十大"三个字）。"""
+    payload, code = _holders()
+    alt = copy.deepcopy(payload)
+    for c in alt["data"]["data"][0]["columns"]:
+        c["name"] = c["name"].replace("2024年前十大股东", "2024年3季末股东")
+    result = WindHoldersAdapter(MockMcpGateway()).parse(
+        _raw("holders_688041_2024fy", code, "2024Q3", alt)
+    )
+    assert len(result.rows) == 10

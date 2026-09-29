@@ -42,6 +42,14 @@ FUNDAMENTALS_TOOL = "get_stock_fundamentals"
 
 # 期别 → Wind 列名里的报告名。
 _REPORT_WORD = {"FY": "年报", "H1": "中报", "Q1": "一季报", "Q3": "三季报"}
+# 股东列名里同一期别不止一种写法（2026-09-29 实测：三季报既出现过"2024年三季报前十大…"，
+# 也出现过"2024年3季末的前十大…"）。都带明确的期别字样，全部接受；年报另外允许只写年份。
+_LABEL_WORDS = {
+    "FY": ("年报", "4季末"),
+    "H1": ("中报", "2季末"),
+    "Q1": ("一季报", "1季末"),
+    "Q3": ("三季报", "3季末"),
+}
 _PERIOD = re.compile(r"^(\d{4})(FY|H1|Q1|Q3)$")
 _DIMENSIONS = {"产品": "product", "地区": "region", "行业": "industry"}
 
@@ -143,12 +151,12 @@ class WindHoldersAdapter:
         table = tables[0]
         columns = table["columns"]
         # 年报允许列名只写年份；其它期别必须写明报告名且与请求一致。
-        word = _REPORT_WORD[kind]
-        label = rf"{year}年{word}" if kind != "FY" else rf"{year}年(?:{word})?"
+        words = "|".join(_LABEL_WORDS[kind])
+        label = rf"{year}年(?:{words})" if kind != "FY" else rf"{year}年(?:{words})?"
 
         def col(suffix: str) -> int:
             return _column_index(
-                columns, re.compile(rf"^{label}前十大股东{suffix}$"), f"股东{suffix}"
+                columns, re.compile(rf"^{label}(?:的)?(?:前十大)?股东{suffix}$"), f"股东{suffix}"
             )
 
         name_i, shares_i, ratio_i = col("名称"), col("持股数量"), col("持股比例")
