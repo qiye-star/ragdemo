@@ -130,3 +130,32 @@ def test_publication_far_from_period_end_is_rejected(conn: psycopg.Connection) -
 @pytest.mark.db
 def test_missing_returns_none(conn: psycopg.Connection) -> None:
     assert first_disclosure(conn, "CN.688041", "2024FY") is None
+
+
+@pytest.mark.db
+def test_quarter_report_without_the_ordinal_prefix(conn: psycopg.Connection) -> None:
+    """浪潮信息的标题写"2025年一季度报告"（没有"第"字）。"""
+    _ann(conn, "2025年一季度报告", "2025-04-29")
+    _ann(conn, "2025年三季度报告", "2025-10-30")
+    q1 = first_disclosure(conn, "CN.688041", "2025Q1")
+    q3 = first_disclosure(conn, "CN.688041", "2025Q3")
+    assert q1 is not None and q1.known_at.date() == date(2025, 4, 29)
+    assert q3 is not None and q3.known_at.date() == date(2025, 10, 30)
+
+
+@pytest.mark.db
+def test_ancillary_announcements_are_not_the_report_itself(conn: psycopg.Connection) -> None:
+    _ann(conn, "海光信息关于2024年年度报告的专项说明", "2025-02-20")
+    _ann(conn, "海光信息2024年半年度财务报告", "2024-08-01")
+    _ann(conn, "海光信息2024年度提质增效重回报专项行动方案的半年度评估报告", "2024-08-02")
+    assert first_disclosure(conn, "CN.688041", "2024FY") is None
+    assert first_disclosure(conn, "CN.688041", "2024H1") is None
+
+
+@pytest.mark.db
+def test_bracketed_update_notes_and_summaries_still_match(conn: psycopg.Connection) -> None:
+    _ann(conn, "浪潮电子信息产业股份有限公司2023年年度报告（更新前）", "2024-04-20")
+    d = first_disclosure(conn, "CN.688041", "2023FY")
+    assert d is not None and d.known_at.date() == date(2024, 4, 20)
+    _ann(conn, "海光信息2022年年度报告摘要", "2023-04-18")
+    assert first_disclosure(conn, "CN.688041", "2022FY") is not None

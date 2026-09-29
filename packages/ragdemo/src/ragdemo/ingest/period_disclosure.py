@@ -21,12 +21,16 @@ import psycopg
 _PERIOD = re.compile(r"^(\d{4})(FY|H1|Q1|Q3)$")
 _PERIOD_END = {"FY": (12, 31), "H1": (6, 30), "Q1": (3, 31), "Q3": (9, 30)}
 # 期别 → 标题里的报告名。`年度报告` 前面不能是"半"（避开"半年度报告"）。
+# 一季报 / 三季报有"第一季度报告"和"一季度报告"两种写法（浪潮信息用后者）。
 _REPORT_NAME = {
-    "FY": r"(?<!半)年度报告",
+    "FY": r"年度报告",
     "H1": r"半年度报告",
-    "Q1": r"第一季度报告",
-    "Q3": r"第三季度报告",
+    "Q1": r"第?一季度报告",
+    "Q3": r"第?三季度报告",
 }
+# 报告名之后只允许摘要 / 全文 / 括号说明 / 更正修订更新——挡住"…年度报告的专项说明"、
+# "…半年度报告披露的…"这类同一天发布、但不是报告本身的附属公告。
+_TITLE_TAIL = r"(?:摘要|全文|[（(][^）)]*[）)]|的?(?:更正|修订|更新).*)?$"
 _EXCLUDED = re.compile(r"英文版|English|取消|提示性")
 # 报告期结束后合理的披露窗口：晚于此的多半是往年报告的重发/转载。
 _MAX_MONTHS_AFTER_PERIOD_END = 15
@@ -59,7 +63,7 @@ def first_disclosure(conn: psycopg.Connection, entity_id: str, period: str) -> D
         raise ValueError(f"不支持的期别 {period!r}")
     year, kind = m.group(1), m.group(2)
     end = period_end_of(period)
-    title_re = re.compile(f"{year}年{_REPORT_NAME[kind]}")
+    title_re = re.compile(f"{year}年{_REPORT_NAME[kind]}{_TITLE_TAIL}")
     rows = conn.execute(
         "SELECT index_id, title, known_at FROM core.announcement_index"
         " WHERE entity_id = %s AND source IN ('cninfo', 'hkexnews')"
