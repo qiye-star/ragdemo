@@ -9,17 +9,18 @@
    的行**恰好等于**它；`revision_observed` 的行晚于它；
 4. 溯源：每一行的 `snapshot_id` 存在，且快照里真有原始响应（`response` 或 `response_ref`）；
 5. 汇率：数值落在各币种的合理区间（捕捉 100JPY / CNY/KRW 口径换算错误）、相邻交易日波动
-   ≤ 5%（捕捉倒数写反）、相邻记录间隔 ≤ 10 天（春节/国庆最长休市，超过就是漏取）；
+   ≤ 5%（捕捉倒数写反）、相邻记录间隔 ≤ 12 天、且各币种对的交易日集合一致（CFETS 对所有
+   币种同日公布，某一对独有的缺口就是漏取）；
 6. 复现：同一个 `as_of` 连续查两次，三张表的结果逐行完全一致。
 """
 
 from __future__ import annotations
 
 import hashlib
-from itertools import pairwise
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Literal
 
 import psycopg
@@ -36,7 +37,8 @@ FX_RANGES: dict[str, tuple[Decimal, Decimal]] = {
     "KRW": (Decimal("0.003"), Decimal("0.009")),
 }
 MAX_DAILY_MOVE = Decimal("0.05")
-MAX_GAP_DAYS = 10
+# 春节 / 国庆连调休最长休市 11 天（实测 2023-09-28→10-09、2026-02-13→02-24），留 1 天余量。
+MAX_GAP_DAYS = 12
 REVENUE_TOLERANCE = Decimal("0.005")
 
 
@@ -163,7 +165,7 @@ def _check_fx(conn: psycopg.Connection) -> list[Finding]:
         "SELECT base_ccy, rate_date, rate FROM core.fx_rate"
         " WHERE superseded_at IS NULL AND quote_ccy = 'CNY' ORDER BY base_ccy, rate_date"
     ).fetchall()
-    series: dict[str, list[tuple[object, Decimal]]] = {}
+    series: dict[str, list[tuple[date, Decimal]]] = {}
     for base, rate_date, rate in rows:
         series.setdefault(base, []).append((rate_date, Decimal(rate)))
     for base, points in series.items():
@@ -176,9 +178,22 @@ def _check_fx(conn: psycopg.Connection) -> list[Finding]:
                 out.append(
                     Finding("error", "fx", f"{base}/CNY {d0}→{d1}：波动 {abs(r1 - r0) / r0:.1%}")
                 )
-            gap = (d1 - d0).days  # type: ignore[operator]
+            gap = (d1 - d0).days
             if gap > MAX_GAP_DAYS:
                 out.append(Finding("error", "fx", f"{base}/CNY {d0}→{d1}：间隔 {gap} 天，疑似漏取"))
+    dates = {base: {d for d, _ in points} for base, points in series.items()}
+    if dates:
+        union = set().union(*dates.values())
+        for base, have in dates.items():
+            missing = union - have
+            if missing:
+                out.append(
+                    Finding(
+                        "error",
+                        "fx",
+                        f"{base}/CNY 缺 {len(missing)} 个其它币种对都有的交易日，如 {min(missing)}",
+                    )
+                )
     return out
 
 

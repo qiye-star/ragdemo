@@ -157,3 +157,18 @@ def test_fx_daily_jump_and_long_gap(conn: psycopg.Connection) -> None:
     assert any("波动" in e for e in errors)
     _fx(conn, "EUR", [(date(2026, 8, 1), "8.0"), (date(2026, 8, 20), "8.0")])  # 19 天没有记录
     assert any("疑似漏取" in e for e in _errors(verify_stage2(conn, as_of=NOW)))
+
+
+@pytest.mark.db
+def test_eleven_day_holiday_gap_is_fine_but_a_pair_specific_hole_is_not(
+    conn: psycopg.Connection,
+) -> None:
+    days = [(date(2023, 9, 28), "7.0"), (date(2023, 10, 9), "7.0"), (date(2023, 10, 10), "7.0")]
+    _fx(conn, "USD", days)
+    _fx(conn, "EUR", [(d, "8.0") for d, _ in days])
+    assert _errors(verify_stage2(conn, as_of=NOW)) == []  # 国庆 11 天间隔：两个币种对一致，放行
+
+    _fx(conn, "HKD", [(d, "0.9") for d, _ in days[:2]])  # HKD 缺 10-10，其它币种有
+    assert any(
+        "缺 1 个其它币种对都有的交易日" in e for e in _errors(verify_stage2(conn, as_of=NOW))
+    )
