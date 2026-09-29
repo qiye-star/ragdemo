@@ -67,16 +67,20 @@ from typing import Protocol, Iterator, Any
 from datetime import datetime, date
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class FetchContext:
     """一次拉取的上下文。ingest_run_id 贯穿整条链路进入每一行数据。"""
+
     ingest_run_id: str
     partition_date: date
     dry_run: bool = False
 
+
 @dataclass(frozen=True)
 class RawResponse:
     """原始响应，入库 provider_snapshot 后才进入解析。"""
+
     provider: str
     endpoint: str
     params: dict[str, Any]
@@ -84,6 +88,7 @@ class RawResponse:
     http_status: int
     fetched_at: datetime
     cost_cents: float | None = None
+
 
 class Adapter(Protocol):
     provider: str
@@ -107,8 +112,8 @@ class Adapter(Protocol):
 ```python
 @dataclass(frozen=True)
 class FactRecord:
-    entity_ref: str          # 供应商侧代码，尚未解析为 entity_id
-    metric_field: str        # 供应商侧字段名，尚未映射为 metric_id
+    entity_ref: str  # 供应商侧代码，尚未解析为 entity_id
+    metric_field: str  # 供应商侧字段名，尚未映射为 metric_id
     period: str
     period_end: date
     value: float
@@ -117,6 +122,7 @@ class FactRecord:
     valid_from: date
     known_at: datetime
     source_ref: str | None
+
 
 class FactAdapter(Adapter, Protocol):
     def parse(self, raw: RawResponse) -> Iterator[FactRecord]: ...
@@ -135,13 +141,15 @@ class FactAdapter(Adapter, Protocol):
 @dataclass(frozen=True)
 class NormalizedBlock:
     """归一化后的文档块。所有供应商的返回都要映射到这个形状。"""
-    ordinal: int                    # 文档内顺序，从 0 开始，连续
-    block_type: str                 # paragraph | table | figure | title
-    section_path: str               # '第三节 主营业务 > 3.2 分部收入'；未知填 ''
-    content: str                    # 表格块用 Markdown 表格文本
+
+    ordinal: int  # 文档内顺序，从 0 开始，连续
+    block_type: str  # paragraph | table | figure | title
+    section_path: str  # '第三节 主营业务 > 3.2 分部收入'；未知填 ''
+    content: str  # 表格块用 Markdown 表格文本
     page: int | None
     bbox: tuple[float, float, float, float] | None
-    level: int | None               # title 块的层级，用于重建章节树
+    level: int | None  # title 块的层级，用于重建章节树
+
 
 @dataclass(frozen=True)
 class NormalizedDocument:
@@ -150,20 +158,25 @@ class NormalizedDocument:
     doc_type: str
     title: str
     period: str | None
-    publish_at: datetime            # 必须带时区
+    publish_at: datetime  # 必须带时区
     language: str
     source_url: str | None
-    raw_bytes_ref: str | None       # 原始 PDF 的对象存储 key
-    content_hash: str               # 原始字节 sha256
+    raw_bytes_ref: str | None  # 原始 PDF 的对象存储 key
+    content_hash: str  # 原始字节 sha256
     is_correction: bool
     supersedes_provider_doc_id: str | None
     page_count: int | None
     blocks: list[NormalizedBlock]
 
+
 class AnnouncementProvider(Adapter, Protocol):
-    def list_documents(self, ctx: FetchContext,
-                       since: datetime, until: datetime,
-                       entity_refs: list[str] | None = None) -> Iterator[RawResponse]: ...
+    def list_documents(
+        self,
+        ctx: FetchContext,
+        since: datetime,
+        until: datetime,
+        entity_refs: list[str] | None = None,
+    ) -> Iterator[RawResponse]: ...
 
     def fetch_document(self, ctx: FetchContext, provider_doc_id: str) -> RawResponse: ...
 
@@ -196,9 +209,14 @@ class AnnouncementProvider(Adapter, Protocol):
 class McpShell:
     """包裹外部 MCP 服务：参数校验 → 限流 → 缓存 → 调用 → 规范化 → 日志。"""
 
-    def __init__(self, server: str, allowed_tools: set[str],
-                 rate_limit_qps: float, cache_ttl_s: int,
-                 budget_cents_per_run: float): ...
+    def __init__(
+        self,
+        server: str,
+        allowed_tools: set[str],
+        rate_limit_qps: float,
+        cache_ttl_s: int,
+        budget_cents_per_run: float,
+    ): ...
 
     def call(self, ctx: FetchContext, tool: str, params: dict) -> RawResponse:
         """未在 allowed_tools 中的工具直接拒绝；

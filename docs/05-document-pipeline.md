@@ -128,10 +128,11 @@ key 的构成方式让它同时承担三个职责，这是这段设计里唯一�
 class ParseResult:
     blocks: list[NormalizedBlock]
     page_count: int
-    engine_version: str        # textin:<result.version>+<param_fp>
+    engine_version: str  # textin:<result.version>+<param_fp>
     markdown: str
     raw_json: bytes
     warnings: list[str]
+
 
 class DocumentParser(Protocol):
     def parse(self, file_bytes: bytes, *, lang: str = "zh") -> ParseResult: ...

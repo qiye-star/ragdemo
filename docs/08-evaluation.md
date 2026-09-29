@@ -52,13 +52,13 @@ case_id | doc_id | field              | gold_value | unit | gold_block_id
 
 ```python
 {
-  "scenario": "台积电宣布 2025 年 CoWoS 产能较 2024 年翻倍",
-  "as_of": "2024-10-17T20:00:00+08:00",
-  "input_ref": {"event_id": 331, "entity_ids": ["TW.2330"]},
-  "gold_direction": "bull",
-  "gold_reasoning": "CoWoS 是 AI 加速卡封装的主要瓶颈，产能扩张直接利好上游"
-                    "封装设备、测试设备与载板环节，A 股对应 ... 时滞约 1-2 个季度",
-  "acceptable_alternatives": ["neutral（若论证扩产已被市场充分预期）"]
+    "scenario": "台积电宣布 2025 年 CoWoS 产能较 2024 年翻倍",
+    "as_of": "2024-10-17T20:00:00+08:00",
+    "input_ref": {"event_id": 331, "entity_ids": ["TW.2330"]},
+    "gold_direction": "bull",
+    "gold_reasoning": "CoWoS 是 AI 加速卡封装的主要瓶颈，产能扩张直接利好上游"
+    "封装设备、测试设备与载板环节，A 股对应 ... 时滞约 1-2 个季度",
+    "acceptable_alternatives": ["neutral（若论证扩产已被市场充分预期）"],
 }
 ```
 

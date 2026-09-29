@@ -265,6 +265,7 @@ SELECT block_id,
 ```python
 class Reranker(Protocol):
     model: str
+
     def rerank(self, query: str, docs: list[str], top_k: int) -> list[tuple[int, float]]:
         """返回 (原索引, 相关度分) 列表，按分数降序，长度 ≤ top_k。"""
 ```
@@ -282,10 +283,10 @@ class Reranker(Protocol):
 ```python
 @dataclass(frozen=True)
 class EvidenceBlock:
-    block_id: int            # 叶子块 id，用于引用标注（精确到句子级）
+    block_id: int  # 叶子块 id，用于引用标注（精确到句子级）
     parent_block_id: int | None
-    content: str             # 父块内容（无父块时为自身内容），供生成使用
-    matched_child_ids: list[int]   # 同一父块下全部命中的叶子块
+    content: str  # 父块内容（无父块时为自身内容），供生成使用
+    matched_child_ids: list[int]  # 同一父块下全部命中的叶子块
     doc_id: int
     doc_title: str
     section_path: str
@@ -335,10 +336,11 @@ class RetrievalConfig:
     rewrite_enabled: bool = False
     rerank_enabled: bool = True
 
+
 @dataclass(frozen=True)
 class RetrievalRequest:
     query: str
-    as_of: datetime                      # 必填，无默认值
+    as_of: datetime  # 必填，无默认值
     entity_ids: list[str] | None = None
     doc_types: list[str] | None = None
     published_after: datetime | None = None
@@ -346,10 +348,12 @@ class RetrievalRequest:
     user: str | None = None
     config: RetrievalConfig = RetrievalConfig()
 
+
 @dataclass(frozen=True)
 class RetrievalResult:
     blocks: list[EvidenceBlock]
-    stats: RetrievalStats                # 各阶段耗时、候选数、是否降级
+    stats: RetrievalStats  # 各阶段耗时、候选数、是否降级
+
 
 class RetrievalService(Protocol):
     def search(self, req: RetrievalRequest) -> RetrievalResult: ...

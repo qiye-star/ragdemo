@@ -73,6 +73,7 @@
 
 ```python
 """工具链自检：包可导入，且关键约束已配置。"""
+
 from __future__ import annotations
 
 import tomllib
@@ -240,6 +241,7 @@ git commit -m "chore: 初始化项目骨架与工具链"
 
 ```python
 """测试夹具：为每个需要数据库的测试提供一个全新的临时库。"""
+
 from __future__ import annotations
 
 import os
@@ -278,6 +280,7 @@ def temp_db() -> Iterator[str]:
 
 ```python
 """容器与扩展的连通性自检。"""
+
 from __future__ import annotations
 
 import psycopg
@@ -391,6 +394,7 @@ git commit -m "chore: 加入 ParadeDB 容器与连通性测试"
 
 ```python
 """迁移执行器：顺序执行、幂等、拒绝修改已执行的迁移。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -478,6 +482,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.db'`
 BM25 索引选项），ORM 迁移工具的自动生成能力用不上，反而增加一层抽象。
 换来的是「迁移只加不改」可以用校验和强制（docs/11-sdlc.md §4.2）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -536,8 +541,7 @@ def migrate(conn: psycopg.Connection, directory: Path) -> list[str]:
         if m.version in already:
             if already[m.version] != m.checksum:
                 raise MigrationChecksumMismatch(
-                    f"迁移 {m.version} 已执行但文件内容被修改。"
-                    f"迁移只加不改，请新增一条迁移来纠正。"
+                    f"迁移 {m.version} 已执行但文件内容被修改。迁移只加不改，请新增一条迁移来纠正。"
                 )
             continue
         with conn.transaction():
@@ -579,6 +583,7 @@ git commit -m "feat: 加入 SQL 迁移执行器，校验和强制迁移只加不
 
 ```python
 """迁移 001：扩展、schema、枚举。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -591,9 +596,16 @@ from ragdemo.db.migrate import migrate
 MIGRATIONS = Path("db/migrations")
 EXPECTED_SCHEMAS = {"core", "asof", "evals", "audit", "orchestration"}
 EXPECTED_ENUMS = {
-    "entity_type", "entity_status", "relation_type", "metric_role",
-    "block_type", "opinion_direction", "score_horizon", "score_track",
-    "scorer", "confidence",
+    "entity_type",
+    "entity_status",
+    "relation_type",
+    "metric_role",
+    "block_type",
+    "opinion_direction",
+    "score_horizon",
+    "score_track",
+    "scorer",
+    "confidence",
 }
 
 
@@ -616,10 +628,7 @@ def test_schemas_and_enums_created(temp_db: str) -> None:
                 "WHERE n.nspname = 'core' AND t.typtype = 'e'"
             ).fetchall()
         }
-        exts = {
-            r[0]
-            for r in conn.execute("SELECT extname FROM pg_extension").fetchall()
-        }
+        exts = {r[0] for r in conn.execute("SELECT extname FROM pg_extension").fetchall()}
 
     assert schemas == EXPECTED_SCHEMAS
     assert enums == EXPECTED_ENUMS
@@ -691,6 +700,7 @@ git commit -m "feat(db): 迁移 001 扩展、schema 与枚举"
 
 ```python
 """迁移 002：实体层与指标规则层的关键约束。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -710,7 +720,9 @@ def db(temp_db: str) -> psycopg.Connection:
     return conn
 
 
-def _insert_entity(conn: psycopg.Connection, entity_id: str, primary: str, nodes: list[str]) -> None:
+def _insert_entity(
+    conn: psycopg.Connection, entity_id: str, primary: str, nodes: list[str]
+) -> None:
     conn.execute(
         "INSERT INTO core.entity "
         "(entity_id, name_full, entity_type, l1_layer, l2_segment, l3_node, primary_node) "
@@ -802,6 +814,7 @@ git commit -m "feat(db): 迁移 002 实体层与指标规则层"
 
 ```python
 """迁移 003：时点事实层。重点验证「更正必须走 superseded_at」是数据库强制的。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -927,6 +940,7 @@ git commit -m "feat(db): 迁移 003 时点事实层，唯一索引强制更正�
 重点验证 docs/02-data-model.md §5.5 记录的那个陷阱不会复发：
 entity_id 必须用 keyword 分词器（大小写敏感），用 raw 会静默匹配 0 行。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1086,6 +1100,7 @@ git commit -m "feat(db): 迁移 004 文档层与 BM25/HNSW 索引"
 
 ```python
 """迁移 005：观点、评测、审计。重点是「观点必须有依据」与「两轨不合并」。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1154,8 +1169,13 @@ def test_price_and_evidence_tracks_coexist(db: psycopg.Connection) -> None:
 def test_bitemporal_registry_lists_seven_tables(db: psycopg.Connection) -> None:
     rows = db.execute("SELECT table_name::text FROM core.bitemporal_registry").fetchall()
     assert {r[0] for r in rows} == {
-        "core.fin_fact", "core.price_daily", "core.document", "core.doc_block",
-        "core.entity_relation", "core.entity_node_membership", "core.event",
+        "core.fin_fact",
+        "core.price_daily",
+        "core.document",
+        "core.doc_block",
+        "core.entity_relation",
+        "core.entity_node_membership",
+        "core.event",
     }
 ```
 
@@ -1210,6 +1230,7 @@ git commit -m "feat(db): 迁移 005 观点、评测与审计层"
 这组测试是 P0 的核心验收项（docs/10-roadmap.md P0 最后两行）。
 它们证明时点防泄漏是物理生效的，而不只是写在文档里。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1221,8 +1242,13 @@ from ragdemo.db.migrate import migrate
 
 MIGRATIONS = Path("db/migrations")
 BITEMPORAL_VIEWS = {
-    "fin_fact", "price_daily", "document", "doc_block",
-    "entity_relation", "entity_node_membership", "event",
+    "fin_fact",
+    "price_daily",
+    "document",
+    "doc_block",
+    "entity_relation",
+    "entity_node_membership",
+    "event",
 }
 
 
@@ -1342,6 +1368,7 @@ git commit -m "feat(db): 迁移 006 时点安全层，未设 as_of 读取直接�
 
 ```python
 """as_of_session：把时点绑定在事务上，退出即失效。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -1413,6 +1440,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.db.session'`
 时点随事务结束自动清除，连接池复用时不会把上一个请求的 as_of 泄漏给下一个。
 SET LOCAL 本身不支持参数占位符，所以走 set_config()。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -1487,6 +1515,7 @@ git commit -m "feat(db): 加入 as_of_session，时点绑定事务且不跨请�
 
 ```python
 """docs/02-data-model.md §9 的五条不变量。任何一条失败即 CI 红灯。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1513,12 +1542,8 @@ def test_invariant_detects_a_missing_column(temp_db: str) -> None:
     """检查器本身要能发现问题，否则它只是个永远返回空列表的摆设。"""
     with psycopg.connect(temp_db) as conn:
         migrate(conn, MIGRATIONS)
-        conn.execute(
-            "CREATE TABLE core.broken (id int, known_at timestamptz NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO core.bitemporal_registry (table_name) VALUES ('core.broken')"
-        )
+        conn.execute("CREATE TABLE core.broken (id int, known_at timestamptz NOT NULL)")
+        conn.execute("INSERT INTO core.bitemporal_registry (table_name) VALUES ('core.broken')")
         violations = check_schema_invariants(conn)
     assert any("core.broken" in v for v in violations)
 ```
@@ -1527,6 +1552,7 @@ def test_invariant_detects_a_missing_column(temp_db: str) -> None:
 
 ```python
 """docs/03-point-in-time.md §5 的五条泄漏自检 + 视图的时点过滤行为。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -1616,6 +1642,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.db.invariants'
 这些检查比文档更能防止时点语义被悄悄破坏：文档会被忽略，CI 红灯不会。
 不变量来自 docs/02-data-model.md §9，泄漏自检来自 docs/03-point-in-time.md §5。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -1624,8 +1651,13 @@ import psycopg
 
 BITEMPORAL_COLUMNS = frozenset(
     {
-        "valid_from", "known_at", "superseded_at",
-        "source", "source_ref", "ingest_run_id", "ingested_at",
+        "valid_from",
+        "known_at",
+        "superseded_at",
+        "source",
+        "source_ref",
+        "ingest_run_id",
+        "ingested_at",
     }
 )
 
@@ -1720,9 +1752,7 @@ def check_schema_invariants(conn: psycopg.Connection) -> list[str]:
     return violations
 
 
-def check_point_in_time_leaks(
-    conn: psycopg.Connection, probe_as_of: datetime
-) -> dict[str, int]:
+def check_point_in_time_leaks(conn: psycopg.Connection, probe_as_of: datetime) -> dict[str, int]:
     """跑 docs/03-point-in-time.md §5 的自检查询，返回有违规的项与行数。
 
     返回空字典表示没有泄漏。
@@ -1772,6 +1802,7 @@ git commit -m "feat(db): 加入 schema 不变量与时点泄漏自检"
 
 ```python
 """种子导入：校验优先于写入，坏数据不能进库。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1815,16 +1846,12 @@ def test_loads_entity_and_node_membership(db: psycopg.Connection, tmp_path: Path
     """实体的环节归属必须同时写进时点表，否则回测基准不可复现。"""
     n = load_entities(db, _csv(tmp_path, GOOD_ROW))
     (entities,) = db.execute("SELECT count(*) FROM core.entity").fetchone()  # type: ignore[misc]
-    (memberships,) = db.execute(
-        "SELECT count(*) FROM core.entity_node_membership"
-    ).fetchone()  # type: ignore[misc]
+    (memberships,) = db.execute("SELECT count(*) FROM core.entity_node_membership").fetchone()  # type: ignore[misc]
     assert (n, entities, memberships) == (1, 1, 2)
 
 
 @pytest.mark.db
-def test_membership_known_at_comes_from_listed_date(
-    db: psycopg.Connection, tmp_path: Path
-) -> None:
+def test_membership_known_at_comes_from_listed_date(db: psycopg.Connection, tmp_path: Path) -> None:
     """手工数据的 known_at 取 valid_from 当日 00:00（docs/03-point-in-time.md §6.3）。
 
     绝不能取 now()——那样这条归属在任何历史回测中都不可见。
@@ -1897,6 +1924,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.seed'`
 部分导入的种子数据比没有种子数据更糟——它看起来成功了，实际缺了一批实体，
 而下游的关系导入会因为外键失败得莫名其妙。
 """
+
 from __future__ import annotations
 
 import csv
@@ -1996,9 +2024,7 @@ def load_entities(conn: psycopg.Connection, csv_path: Path) -> int:
     return len(records)
 
 
-def _load_simple(
-    conn: psycopg.Connection, csv_path: Path, table: str, columns: list[str]
-) -> int:
+def _load_simple(conn: psycopg.Connection, csv_path: Path, table: str, columns: list[str]) -> int:
     """按列名直插的简单导入，用于别名 / 指标 / 规则等无派生逻辑的表。
 
     空单元格对应的列会被整个省略，而不是写入 NULL——这样数据库的 DEFAULT 才会生效。
@@ -2024,16 +2050,30 @@ def _load_simple(
 
 def load_aliases(conn: psycopg.Connection, csv_path: Path) -> int:
     return _load_simple(
-        conn, csv_path, "core.entity_alias",
+        conn,
+        csv_path,
+        "core.entity_alias",
         ["alias", "entity_id", "alias_type", "source", "confidence"],
     )
 
 
 def load_metrics(conn: psycopg.Connection, csv_path: Path) -> int:
     return _load_simple(
-        conn, csv_path, "core.node_metric",
-        ["metric_id", "l3_node", "metric_name", "metric_role", "frequency",
-         "source_type", "extraction_hint", "direction", "definition", "unit"],
+        conn,
+        csv_path,
+        "core.node_metric",
+        [
+            "metric_id",
+            "l3_node",
+            "metric_name",
+            "metric_role",
+            "frequency",
+            "source_type",
+            "extraction_hint",
+            "direction",
+            "definition",
+            "unit",
+        ],
     )
 
 
@@ -2050,10 +2090,17 @@ def load_relations(conn: psycopg.Connection, csv_path: Path) -> int:
                 " known_at, source, ingest_run_id, confidence) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
-                    row["from_entity"], row["to_entity"], row["relation_type"],
-                    row["strength"] or None, row["share_estimate"] or None,
-                    row["direction_note"] or None, row.get("evidence_type") or "expert",
-                    vf, _known_at_for(vf), "manual:seed", SEED_RUN_ID,
+                    row["from_entity"],
+                    row["to_entity"],
+                    row["relation_type"],
+                    row["strength"] or None,
+                    row["share_estimate"] or None,
+                    row["direction_note"] or None,
+                    row.get("evidence_type") or "expert",
+                    vf,
+                    _known_at_for(vf),
+                    "manual:seed",
+                    SEED_RUN_ID,
                     row.get("confidence") or "medium",
                 ),
             )
@@ -2062,9 +2109,20 @@ def load_relations(conn: psycopg.Connection, csv_path: Path) -> int:
 
 def load_propagation_rules(conn: psycopg.Connection, csv_path: Path) -> int:
     return _load_simple(
-        conn, csv_path, "core.propagation_rule",
-        ["trigger_node", "trigger_event", "affected_node", "direction", "lag_days",
-         "mechanism", "weight_field", "confidence", "author"],
+        conn,
+        csv_path,
+        "core.propagation_rule",
+        [
+            "trigger_node",
+            "trigger_event",
+            "affected_node",
+            "direction",
+            "lag_days",
+            "mechanism",
+            "weight_field",
+            "confidence",
+            "author",
+        ],
     )
 
 
@@ -2140,6 +2198,7 @@ git commit -m "feat(seed): 种子 CSV 导入，先校验后写入且 known_at �
 
 ```python
 """CLI：三个子命令存在且 check 在有违规时以非零码退出。"""
+
 from __future__ import annotations
 
 from click.testing import CliRunner
@@ -2171,6 +2230,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.cli'`
 
 ```python
 """ragdemo 命令行入口。"""
+
 from __future__ import annotations
 
 import os
@@ -2292,6 +2352,7 @@ git commit -m "feat(cli): 加入 db migrate/seed/check 与 Makefile 目标"
 
 这个文件跑绿 = P0 可以收。跑红 = 不能进 P1，没有商量余地。
 """
+
 from __future__ import annotations
 
 import os
@@ -2337,9 +2398,7 @@ def test_app_read_denied_on_base_table(conn: psycopg.Connection) -> None:
 
 @pytest.mark.db
 def test_asof_view_raises_without_as_of(conn: psycopg.Connection) -> None:
-    with conn.transaction(force_rollback=True), pytest.raises(
-        psycopg.errors.InvalidParameterValue
-    ):
+    with conn.transaction(force_rollback=True), pytest.raises(psycopg.errors.InvalidParameterValue):
         conn.execute("SELECT count(*) FROM asof.fin_fact").fetchone()
 ```
 

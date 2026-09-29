@@ -29,26 +29,30 @@
 @dataclass(frozen=True)
 class Citation:
     """输出中每个事实的来源。二选一，不允许都为空。"""
+
     block_id: int | None = None
     fact_id: int | None = None
     page: int | None = None
     known_at: datetime | None = None
 
+
 @dataclass(frozen=True)
 class Claim:
     text: str
     citations: list[Citation]
-    is_inferred: bool = False     # 无来源时必须为 True，且 text 中标注「推断」
+    is_inferred: bool = False  # 无来源时必须为 True，且 text 中标注「推断」
+
 
 @dataclass(frozen=True)
 class FundamentalOutput:
     entity_id: str
     as_of: datetime
     highlights: list[Claim]
-    metrics: list[MetricChange]    # 每项含 metric_id、期间、数值、同比、来源
+    metrics: list[MetricChange]  # 每项含 metric_id、期间、数值、同比、来源
     anomalies: list[Claim]
     prompt_version: str
     model: str
+
 
 @dataclass(frozen=True)
 class DebateOutput:
@@ -57,7 +61,7 @@ class DebateOutput:
     verdict: Literal["bull", "bear", "neutral"]
     confidence: Literal["high", "medium", "low"]
     reasoning: str
-    unresolved: list[str]          # 辩论中未能证实/证伪的关键分歧
+    unresolved: list[str]  # 辩论中未能证实/证伪的关键分歧
 ```
 
 `DebateOutput.unresolved` 是刻意设计的：**多空辩论最有价值的产出往往不是结论，
@@ -76,23 +80,36 @@ Agent **只能**通过这些工具访问数据（`01-architecture.md` §5 的依
 ```python
 # src/tools/interface.py
 class AgentTools(Protocol):
-
-    def query_fin_fact(self, *, entity_id: str, metric_id: str,
-                       period: str | None = None,
-                       period_range: tuple[date, date] | None = None,
-                       as_of: datetime) -> list[FactRow]:
+    def query_fin_fact(
+        self,
+        *,
+        entity_id: str,
+        metric_id: str,
+        period: str | None = None,
+        period_range: tuple[date, date] | None = None,
+        as_of: datetime,
+    ) -> list[FactRow]:
         """查结构化财务/指标数据。period 与 period_range 二选一。"""
 
-    def search_blocks(self, *, query: str, as_of: datetime,
-                      entity_ids: list[str] | None = None,
-                      doc_types: list[str] | None = None,
-                      k: int = 10) -> list[EvidenceBlock]:
+    def search_blocks(
+        self,
+        *,
+        query: str,
+        as_of: datetime,
+        entity_ids: list[str] | None = None,
+        doc_types: list[str] | None = None,
+        k: int = 10,
+    ) -> list[EvidenceBlock]:
         """文本检索，转调 RetrievalService。"""
 
-    def get_relations(self, *, entity_id: str,
-                      relation_type: str | None = None,
-                      as_of: datetime,
-                      min_confidence: str = "medium") -> list[RelationRow]:
+    def get_relations(
+        self,
+        *,
+        entity_id: str,
+        relation_type: str | None = None,
+        as_of: datetime,
+        min_confidence: str = "medium",
+    ) -> list[RelationRow]:
         """查实体关系图。低于 min_confidence 的关系不返回。"""
 
     def match_rules(self, *, event_type: str, trigger_node: str) -> list[PropagationRule]:
@@ -114,8 +131,7 @@ class AgentTools(Protocol):
 class ToolShell:
     """所有工具调用的统一入口：校验 → 权限 → 预算 → 缓存 → 执行 → 审计。"""
 
-    def invoke(self, run_id: str, agent_name: str,
-               tool: str, params: dict) -> ToolResult:
+    def invoke(self, run_id: str, agent_name: str, tool: str, params: dict) -> ToolResult:
         # 1. 参数校验：类型、必填、as_of 带时区、k 在合理范围
         # 2. 权限：按 run 上下文的 tenant/user 注入过滤条件
         # 3. 预算：累计成本超过 run 预算时抛 BudgetExceeded
@@ -168,8 +184,9 @@ LangGraph StateGraph + PostgresSaver (schema: orchestration)
 ```python
 # src/agents/orchestrator.py
 class Orchestrator(Protocol):
-    def run(self, graph_name: str, initial_state: dict,
-            run_id: str, as_of: datetime) -> RunHandle: ...
+    def run(
+        self, graph_name: str, initial_state: dict, run_id: str, as_of: datetime
+    ) -> RunHandle: ...
     def resume(self, run_id: str, decision: HumanDecision) -> RunHandle: ...
     def get_state(self, run_id: str) -> RunState: ...
 ```

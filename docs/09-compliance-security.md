@@ -222,12 +222,22 @@ log: full          # 记录 host、path、状态码、字节数、耗时；不�
 ```python
 def chain_hash(prev_hash: str, record: dict) -> str:
     """canonical_json 保证字段顺序、数值格式、空白字符稳定。"""
-    payload = canonical_json({
-        k: record[k] for k in (
-            "run_id", "agent_name", "tool_name", "params", "as_of",
-            "result_hash", "ok", "started_at", "ended_at",
-        )
-    })
+    payload = canonical_json(
+        {
+            k: record[k]
+            for k in (
+                "run_id",
+                "agent_name",
+                "tool_name",
+                "params",
+                "as_of",
+                "result_hash",
+                "ok",
+                "started_at",
+                "ended_at",
+            )
+        }
+    )
     return sha256((prev_hash + payload).encode("utf-8")).hexdigest()
 ```
 

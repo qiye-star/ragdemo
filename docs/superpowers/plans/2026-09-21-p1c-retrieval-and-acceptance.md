@@ -93,6 +93,7 @@
 
 ```python
 """检索请求与配置的不变量。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -141,6 +142,7 @@ def test_weights_must_be_positive() -> None:
 
 ```python
 """过滤条件：时点谓词必须出现在 SQL 里（冗余谓词，06 §3.4）。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -188,7 +190,9 @@ def test_no_entity_filter_means_no_entity_clause() -> None:
 def test_doc_type_and_published_after_are_supported() -> None:
     sql, params = build_filters(
         RetrievalRequest(
-            query="算力", as_of=AS_OF, doc_types=["quarterly"],
+            query="算力",
+            as_of=AS_OF,
+            doc_types=["quarterly"],
             published_after=datetime(2024, 1, 1, tzinfo=UTC),
         )
     )
@@ -214,6 +218,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval'`
 
 ```python
 """检索的请求、配置与结果。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -306,6 +311,7 @@ class RetrievalResult:
 PL/pgSQL 函数调用，很可能阻止优化器把谓词下推进 tantivy 或 HNSW 的过滤
 （docs/06-retrieval.md §3.4）。冗余不改变结果集，只影响执行计划。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -373,6 +379,7 @@ git commit -m "feat(retrieval): 检索数据结构与冗余时点谓词的过滤
 
 ```python
 """检索测试的共享语料：两家公司、三份文档、含表格与历史时点。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -402,18 +409,52 @@ _DOCS = (
 # (doc_id, ordinal, block_type, section_path, content, is_leaf, parent_ordinal)
 _BLOCKS = (
     (1, 0, "paragraph", "第三节 主营业务", "第三节 主营业务\n（父块）", False, None),
-    (1, 1, "paragraph", "第三节 主营业务",
-     "第三节 主营业务\n报告期内云端训练芯片出货量提升，智能计算集群系统业务收入 12,340 万元，"
-     "同比增长 58.2%。", True, 0),
-    (1, 2, "paragraph", "第三节 主营业务",
-     "第三节 主营业务\n研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。",
-     True, 0),
-    (1, 3, "table", "第三节 主营业务",
-     "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |", True, None),
-    (2, 0, "paragraph", "正文",
-     "正文\n公司与某云计算厂商签订云端训练芯片采购合同，合同金额 8.5 亿元。", True, None),
-    (3, 0, "paragraph", "第三节 主营业务",
-     "第三节 主营业务\n特种集成电路业务收入 4,021 万元，智能安全芯片需求平稳。", True, None),
+    (
+        1,
+        1,
+        "paragraph",
+        "第三节 主营业务",
+        "第三节 主营业务\n报告期内云端训练芯片出货量提升，智能计算集群系统业务收入 12,340 万元，"
+        "同比增长 58.2%。",
+        True,
+        0,
+    ),
+    (
+        1,
+        2,
+        "paragraph",
+        "第三节 主营业务",
+        "第三节 主营业务\n研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。",
+        True,
+        0,
+    ),
+    (
+        1,
+        3,
+        "table",
+        "第三节 主营业务",
+        "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |",
+        True,
+        None,
+    ),
+    (
+        2,
+        0,
+        "paragraph",
+        "正文",
+        "正文\n公司与某云计算厂商签订云端训练芯片采购合同，合同金额 8.5 亿元。",
+        True,
+        None,
+    ),
+    (
+        3,
+        0,
+        "paragraph",
+        "第三节 主营业务",
+        "第三节 主营业务\n特种集成电路业务收入 4,021 万元，智能安全芯片需求平稳。",
+        True,
+        None,
+    ),
 )
 
 
@@ -442,7 +483,9 @@ def corpus(temp_db: str) -> psycopg.Connection:
 
     parent_ids: dict[tuple[int, int], int] = {}
     for doc_id, ordinal, btype, section, content, is_leaf, parent_ordinal in _BLOCKS:
-        parent_block_id = parent_ids.get((doc_id, parent_ordinal)) if parent_ordinal is not None else None
+        parent_block_id = (
+            parent_ids.get((doc_id, parent_ordinal)) if parent_ordinal is not None else None
+        )
         row = conn.execute(
             "INSERT INTO core.doc_block (doc_id, parent_block_id, block_type, section_path,"
             " ordinal, page, content, is_leaf, entity_id, doc_type, publish_at,"
@@ -471,6 +514,7 @@ def as_of_2024() -> datetime:
 
 ```python
 """BM25 一路：中文命中、时点过滤、实体过滤、下推验证。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -497,9 +541,7 @@ def test_ranks_start_at_one_and_are_contiguous(
 
 
 @pytest.mark.db
-def test_future_documents_are_invisible(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_future_documents_are_invisible(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """2025-03 的合同公告在 2024-12-31 的时点上必须不可见。"""
     hits = bm25_search(corpus, RetrievalRequest(query="采购合同", as_of=as_of_2024))
     assert hits == []
@@ -528,9 +570,7 @@ def test_entity_filter_excludes_other_companies(
 
 
 @pytest.mark.db
-def test_parent_blocks_are_never_returned(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_parent_blocks_are_never_returned(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     hits = bm25_search(corpus, RetrievalRequest(query="主营业务", as_of=as_of_2024))
     if hits:
         rows = corpus.execute(
@@ -544,16 +584,12 @@ def test_parent_blocks_are_never_returned(
 def test_candidate_k_caps_the_result(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     from ragdemo.retrieval.types import RetrievalConfig
 
-    req = RetrievalRequest(
-        query="收入", as_of=as_of_2024, config=RetrievalConfig(candidate_k=1)
-    )
+    req = RetrievalRequest(query="收入", as_of=as_of_2024, config=RetrievalConfig(candidate_k=1))
     assert len(bm25_search(corpus, req)) <= 1
 
 
 @pytest.mark.db
-def test_explain_shows_bm25_index_usage(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_explain_shows_bm25_index_usage(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     """P1 验收项：EXPLAIN 验证 BM25 过滤下推（10-roadmap P1）。
 
     小语料下优化器可能选顺序扫描，因此这里只断言计划可取到且包含表名；
@@ -579,6 +615,7 @@ entity_id / doc_type / is_leaf / known_at 都在 BM25 索引里且标了 fast，
 ParadeDB 能把这些谓词下推进 tantivy，过滤在打分之前完成——这是时点过滤后
 仍能保证召回的关键（docs/06-retrieval.md §3.2）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -658,6 +695,7 @@ git commit -m "feat(retrieval): BM25 一路与 EXPLAIN 下推检查"
 
 ```python
 """向量一路：迭代扫描参数、时点过滤、归一化要求。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -684,9 +722,7 @@ def test_returns_ranked_hits(corpus: psycopg.Connection, as_of_2024: datetime) -
 
 
 @pytest.mark.db
-def test_future_documents_are_invisible(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
+def test_future_documents_are_invisible(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
     early = vector_search(
         corpus, RetrievalRequest(query="采购合同", as_of=as_of_2024), _qvec("采购合同")
     )
@@ -753,6 +789,7 @@ HNSW 是近似索引：朴素写法会先取全库最相似的若干块、再过
 relaxed_order 允许结果不严格按距离排序。本管线后面还有 RRF 与重排，
 对严格顺序不敏感，因此这是正确的取舍。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -780,9 +817,7 @@ def apply_scan_settings(conn: psycopg.Connection, cfg: RetrievalConfig) -> None:
     """必须在事务内调用——用 SET LOCAL 语义，不污染连接池里的其他请求。"""
     conn.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(cfg.ef_search),))
     conn.execute("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)")
-    conn.execute(
-        "SELECT set_config('hnsw.max_scan_tuples', %s, true)", (str(cfg.max_scan_tuples),)
-    )
+    conn.execute("SELECT set_config('hnsw.max_scan_tuples', %s, true)", (str(cfg.max_scan_tuples),))
 
 
 def vector_search(
@@ -831,6 +866,7 @@ git commit -m "feat(retrieval): 向量一路与 pgvector 迭代扫描参数"
 
 ```python
 """加权 RRF（06 §4）。用排名不用分数——BM25 分数无界，不能直接加权。"""
+
 from __future__ import annotations
 
 from ragdemo.retrieval.fusion import weighted_rrf
@@ -908,6 +944,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.fusi
 RRF 只用排名（天然无量纲）。统一为加权 RRF——权重作用在 RRF 项上，
 既保留「BM25 更重要」的意图，又避免分数尺度问题（docs/06-retrieval.md §4.1）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -987,6 +1024,7 @@ git commit -m "feat(retrieval): 加权 RRF 融合，统一简报中互斥的两�
 
 ```python
 """重排与降级：失败时回退 RRF 顺序，不让查询失败。"""
+
 from __future__ import annotations
 
 import pytest
@@ -1061,6 +1099,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.rera
 
 降级发生率要监控：持续降级说明需要把重排模型本地化（adr/0004 的推翻条件）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -1174,6 +1213,7 @@ git commit -m "feat(retrieval): 重排与失败降级"
 
 ```python
 """父子块展开：引用用叶子块 id，内容用父块；同父块只返回一次。"""
+
 from __future__ import annotations
 
 import psycopg
@@ -1241,9 +1281,7 @@ def test_table_block_uses_its_own_content(corpus: psycopg.Connection) -> None:
 def test_dedup_does_not_backfill_to_top_k(corpus: psycopg.Connection) -> None:
     """去重后不足 top_k 时不补位——宁可少给也不引入低相关证据（06 §6 规则 4）。"""
     leaves = _leaf_ids(corpus, 1)[:2]
-    evidence = expand_to_evidence(
-        corpus, leaves, {b: 1.0 for b in leaves}, reranked=True, top_k=10
-    )
+    evidence = expand_to_evidence(corpus, leaves, {b: 1.0 for b in leaves}, reranked=True, top_k=10)
     assert len(evidence) == 1
 
 
@@ -1283,6 +1321,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.expa
 检索命中叶子块，生成用父块内容，但**引用标注用叶子块 block_id**——
 溯源要精确到段落，指到整个小节等于没指。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -1392,6 +1431,7 @@ git commit -m "feat(retrieval): 父子块展开与同父块去重"
 
 ```python
 """端到端检索：五个阶段串起来，统计齐全，时点正确。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -1411,12 +1451,8 @@ def _service(conn: psycopg.Connection, reranker: object = None) -> RetrievalServ
 
 
 @pytest.mark.db
-def test_end_to_end_returns_evidence(
-    corpus: psycopg.Connection, as_of_2024: datetime
-) -> None:
-    result = _service(corpus).search(
-        RetrievalRequest(query="云端训练芯片 收入", as_of=as_of_2024)
-    )
+def test_end_to_end_returns_evidence(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
+    result = _service(corpus).search(RetrievalRequest(query="云端训练芯片 收入", as_of=as_of_2024))
     assert result.blocks
     assert all(b.block_id > 0 for b in result.blocks)
     assert all(b.known_at <= as_of_2024 for b in result.blocks)
@@ -1437,9 +1473,7 @@ def test_stats_are_populated_for_every_stage(
 
 @pytest.mark.db
 def test_future_document_never_appears(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
-    result = _service(corpus).search(
-        RetrievalRequest(query="采购合同 8.5 亿元", as_of=as_of_2024)
-    )
+    result = _service(corpus).search(RetrievalRequest(query="采购合同 8.5 亿元", as_of=as_of_2024))
     assert all(b.doc_id != 2 for b in result.blocks)
 
 
@@ -1530,6 +1564,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.retrieval.rewr
 不能想当然。`eval_retrieval` 上开关两次跑对比，提升超过 2 个百分点才值得
 默认开启（docs/06-retrieval.md §7）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -1564,6 +1599,7 @@ def expand_synonyms(query: str, table: Mapping[str, list[str]]) -> list[str]:
 
 查询走 asof 视图（正确性）+ 显式时点谓词（可下推），见 docs/06-retrieval.md §3.4。
 """
+
 from __future__ import annotations
 
 import logging
@@ -1612,9 +1648,7 @@ class RetrievalService:
             apply_scan_settings(conn, cfg)
 
             queries = (
-                expand_synonyms(req.query, self.synonyms)
-                if cfg.rewrite_enabled
-                else [req.query]
+                expand_synonyms(req.query, self.synonyms) if cfg.rewrite_enabled else [req.query]
             )
 
             t0 = time.perf_counter()
@@ -1627,8 +1661,12 @@ class RetrievalService:
             ms_vec = (time.perf_counter() - t0) * 1000
 
             fused = weighted_rrf(
-                bm25, vec,
-                w_bm25=cfg.w_bm25, w_vec=cfg.w_vec, rrf_k=cfg.rrf_k, limit=cfg.fusion_k,
+                bm25,
+                vec,
+                w_bm25=cfg.w_bm25,
+                w_vec=cfg.w_vec,
+                rrf_k=cfg.rrf_k,
+                limit=cfg.fusion_k,
             )
 
             for variant in queries[1:]:
@@ -1648,9 +1686,7 @@ class RetrievalService:
             ms_rerank = 0.0
             if cfg.rerank_enabled and fused:
                 t0 = time.perf_counter()
-                outcome = rerank_or_degrade(
-                    self.reranker, req.query, fused, contents, cfg.top_k
-                )
+                outcome = rerank_or_degrade(self.reranker, req.query, fused, contents, cfg.top_k)
                 ms_rerank = (time.perf_counter() - t0) * 1000
             else:
                 head = fused[: cfg.top_k]
@@ -1664,7 +1700,9 @@ class RetrievalService:
                 )
 
             blocks = expand_to_evidence(
-                conn, outcome.order, outcome.scores,
+                conn,
+                outcome.order,
+                outcome.scores,
                 reranked=cfg.rerank_enabled and not outcome.degraded,
                 top_k=cfg.top_k,
             )
@@ -1694,9 +1732,14 @@ class RetrievalService:
 
 def _with_query(req: RetrievalRequest, query: str) -> RetrievalRequest:
     return RetrievalRequest(
-        query=query, as_of=req.as_of, entity_ids=req.entity_ids,
-        doc_types=req.doc_types, published_after=req.published_after,
-        tenant=req.tenant, user=req.user, config=req.config,
+        query=query,
+        as_of=req.as_of,
+        entity_ids=req.entity_ids,
+        doc_types=req.doc_types,
+        published_after=req.published_after,
+        tenant=req.tenant,
+        user=req.user,
+        config=req.config,
     )
 
 
@@ -1765,6 +1808,7 @@ git commit -m "feat(retrieval): RetrievalService 编排与默认关闭的查询�
 
 ```python
 """检索指标：recall@k 与 MRR 的定义必须和 06 §9.1 一致。"""
+
 from __future__ import annotations
 
 import pytest
@@ -1807,6 +1851,7 @@ def test_empty_gold_is_a_programming_error() -> None:
 
 ```python
 """评测框架：跑完写一行 eval_run，含 git_sha 与完整 config。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -1904,6 +1949,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals'`
 recall@k 是**逐题二值**的：top-k 中包含至少一个 gold 即算命中。
 不是 gold 的覆盖比例——同一事实常出现在多处，要求全覆盖会低估系统。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -1935,6 +1981,7 @@ def mrr_at_k(retrieved: Sequence[int], gold: set[int], k: int) -> float:
 每次运行写一行 evals.eval_run，含 git_sha 与完整 config。
 没有这张表，三个月后看到指标下降无法定位是哪个参数改的（docs/08-evaluation.md §4.3）。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -1984,8 +2031,7 @@ def record_eval_run(
     conn.execute(
         "INSERT INTO evals.eval_run (run_id, suite, git_sha, config, metrics,"
         " started_at, ended_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-        (run_id, suite, git_sha, Jsonb(dict(config)), Jsonb(dict(metrics)),
-         started_at, ended_at),
+        (run_id, suite, git_sha, Jsonb(dict(config)), Jsonb(dict(metrics)), started_at, ended_at),
     )
     conn.commit()
 
@@ -2016,7 +2062,8 @@ def run_retrieval_eval(
 
         top = service.search(
             RetrievalRequest(
-                query=str(question), as_of=as_of,
+                query=str(question),
+                as_of=as_of,
                 entity_ids=list(entity_filter) if entity_filter else None,
                 doc_types=list(doc_type_filter) if doc_type_filter else None,
                 config=config,
@@ -2028,7 +2075,8 @@ def run_retrieval_eval(
 
         broad = service.search(
             RetrievalRequest(
-                query=str(question), as_of=as_of,
+                query=str(question),
+                as_of=as_of,
                 entity_ids=list(entity_filter) if entity_filter else None,
                 doc_types=list(doc_type_filter) if doc_type_filter else None,
                 config=wide,
@@ -2092,6 +2140,7 @@ git commit -m "feat(evals): 检索评测框架与 eval_run 记录"
 
 ```python
 """评测 CLI 与基线比对。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -2116,8 +2165,14 @@ def _record(conn: psycopg.Connection, sha: str, recall: float) -> None:
     conn.execute(
         "INSERT INTO evals.eval_run (run_id, suite, git_sha, config, metrics,"
         " started_at, ended_at) VALUES (%s,'retrieval',%s,%s,%s,%s,%s)",
-        (f"r-{sha}", sha, Jsonb({}), Jsonb({"recall_at_10": recall}),
-         datetime.now(UTC), datetime.now(UTC)),
+        (
+            f"r-{sha}",
+            sha,
+            Jsonb({}),
+            Jsonb({"recall_at_10": recall}),
+            datetime.now(UTC),
+            datetime.now(UTC),
+        ),
     )
     conn.commit()
 
@@ -2176,6 +2231,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals.cli'`
 CLI 而非 Web：P1–P3 无前端（adr/0006）。标注工具要当正经工具做，
 否则标注 100 条评测集会变成瓶颈。
 """
+
 from __future__ import annotations
 
 import os
@@ -2233,7 +2289,9 @@ def eval_group() -> None:
 
 @eval_group.command("add-retrieval")
 @click.option("--question", required=True, help="评测问题")
-@click.option("--as-of", "as_of_raw", required=True, help="ISO 8601 带时区，如 2024-08-01T00:00+08:00")
+@click.option(
+    "--as-of", "as_of_raw", required=True, help="ISO 8601 带时区，如 2024-08-01T00:00+08:00"
+)
 @click.option("--entity", "entities", multiple=True, help="实体过滤，可多次指定")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--author", required=True)
@@ -2248,9 +2306,7 @@ def add_retrieval(
     with psycopg.connect(_dsn()) as conn:
         service = RetrievalService(conn, MockEmbedder(), MockReranker())
         result = service.search(
-            RetrievalRequest(
-                query=question, as_of=as_of, entity_ids=list(entities) or None
-            )
+            RetrievalRequest(query=question, as_of=as_of, entity_ids=list(entities) or None)
         )
         if not result.blocks:
             raise click.ClickException("检索没有返回任何候选，无法标注")
@@ -2280,9 +2336,7 @@ def run(suite: str, gate: bool) -> None:
     """跑评测并写 eval_run。"""
     with psycopg.connect(_dsn()) as conn:
         service = RetrievalService(conn, MockEmbedder(), MockReranker())
-        result = run_retrieval_eval(
-            conn, service, git_sha=_git_sha(), config=RetrievalConfig()
-        )
+        result = run_retrieval_eval(conn, service, git_sha=_git_sha(), config=RetrievalConfig())
         click.echo(f"| 指标 | 本次 |")
         click.echo(f"|---|---|")
         click.echo(f"| recall@10 | {result.recall_at_10:.4f} |")
@@ -2384,6 +2438,7 @@ git commit -m "feat(evals): 评测录入 CLI、基线比对与 CI 门禁"
 
 ```python
 """索引召回率：索引路径相对精确扫描的召回（06 §3.6，阈值 ≥ 0.95）。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -2440,6 +2495,7 @@ def test_index_recall_is_one_on_a_tiny_corpus(corpus: psycopg.Connection) -> Non
 跑绿 = P1 可以收。跑红 = 不能进 P2。
 双跑一致性（第 6 项）需要间隔一周，单独用 --run-consistency 触发。
 """
+
 from __future__ import annotations
 
 import json
@@ -2491,8 +2547,7 @@ def test_p95_latency_under_3s(conn: psycopg.Connection, service: RetrievalServic
     ).fetchall()
     assert cases, "评测集为空，无法测延迟"
     latencies = sorted(
-        service.search(RetrievalRequest(query=str(q), as_of=a)).stats.ms_total
-        for q, a in cases
+        service.search(RetrievalRequest(query=str(q), as_of=a)).stats.ms_total for q, a in cases
     )
     p95 = latencies[int(len(latencies) * 0.95) - 1] if len(latencies) > 1 else latencies[0]
     assert p95 < 3000
@@ -2509,8 +2564,7 @@ def test_bm25_filters_are_pushed_into_the_index(conn: psycopg.Connection) -> Non
     from ragdemo.retrieval.lexical import explain_bm25
 
     plan = explain_bm25(
-        conn, RetrievalRequest(query="云端训练芯片", as_of=PROBE_AS_OF,
-                               entity_ids=["CN.688256"])
+        conn, RetrievalRequest(query="云端训练芯片", as_of=PROBE_AS_OF, entity_ids=["CN.688256"])
     )
     assert "Seq Scan on doc_block" not in plan, f"退化成顺序扫描:\n{plan}"
 
@@ -2556,6 +2610,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.evals.index_re
 
 精确扫描是全表，跑得慢，因此只在 nightly 任务里跑，不进 PR 门禁。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -2676,6 +2731,7 @@ git commit -m "test: 索引召回率验证与 P1 验收测试套件"
 
 ```python
 """基础设施配置的不变量。这些错误在生产才暴露，代价太高。"""
+
 from __future__ import annotations
 
 from pathlib import Path

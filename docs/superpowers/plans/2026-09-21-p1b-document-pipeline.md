@@ -124,6 +124,7 @@
 
 ```python
 """切块配置。默认值来自本计划开头的裁定，且必须自洽。"""
+
 from __future__ import annotations
 
 import pytest
@@ -179,6 +180,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse'`
 长度取 200–400 字，见 docs/05-document-pipeline.md §3.1。
 做成配置而非常量，是因为最终值要由 P1c 的检索评测集实测确定。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -264,6 +266,7 @@ git commit -m "feat(parse): 切块配置；修正规范中叶子块长度的自�
 
 ```python
 """切块器：纯函数，覆盖长度、重叠、表格保护、章节边界、样板过滤。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -278,11 +281,19 @@ CFG = ChunkConfig()
 
 def _doc(blocks: list[NormalizedBlock]) -> NormalizedDocument:
     return NormalizedDocument(
-        provider_doc_id="D1", entity_ref="688256.SH", doc_type="quarterly",
-        title="三季报", period="2024Q3",
+        provider_doc_id="D1",
+        entity_ref="688256.SH",
+        doc_type="quarterly",
+        title="三季报",
+        period="2024Q3",
         publish_at=datetime(2024, 10, 28, 18, 32, tzinfo=UTC),
-        language="zh", source_url=None, raw_bytes_ref=None, content_hash="h",
-        is_correction=False, supersedes_provider_doc_id=None, page_count=1,
+        language="zh",
+        source_url=None,
+        raw_bytes_ref=None,
+        content_hash="h",
+        is_correction=False,
+        supersedes_provider_doc_id=None,
+        page_count=1,
         blocks=blocks,
     )
 
@@ -303,7 +314,7 @@ def test_consecutive_chunks_overlap() -> None:
     text = "甲" * 1200
     parts = split_text(text, CFG)
     assert len(parts) >= 3
-    assert parts[0][-CFG.overlap_chars:] == parts[1][: CFG.overlap_chars]
+    assert parts[0][-CFG.overlap_chars :] == parts[1][: CFG.overlap_chars]
 
 
 def test_split_terminates_and_covers_all_text() -> None:
@@ -383,9 +394,7 @@ def test_boilerplate_blocks_are_dropped_when_enabled() -> None:
 
 def test_boilerplate_kept_when_disabled() -> None:
     cfg = ChunkConfig(drop_boilerplate=False)
-    chunks = chunk_document(
-        _doc([NormalizedBlock(0, "paragraph", "", "第 12 页 共 24 页")]), cfg
-    )
+    chunks = chunk_document(_doc([NormalizedBlock(0, "paragraph", "", "第 12 页 共 24 页")]), cfg)
     assert len(chunks) == 1
 ```
 
@@ -403,16 +412,17 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.chunker'
 
 过滤过度会丢召回，因此规则保守且可配置，变更必须跑检索评测（05 §3.3）。
 """
+
 from __future__ import annotations
 
 import re
 
 _PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^第\s*\d+\s*页\s*共\s*\d+\s*页$"),
-    re.compile(r"^-?\s*\d+\s*-?$"),                      # 孤立页码
+    re.compile(r"^-?\s*\d+\s*-?$"),  # 孤立页码
     re.compile(r"^目\s*录$"),
     re.compile(r"^释\s*义$"),
-    re.compile(r"保证信息披露内容的真实、准确和完整"),      # 各家雷同的免责模板
+    re.compile(r"保证信息披露内容的真实、准确和完整"),  # 各家雷同的免责模板
     re.compile(r"^本报告期内公司不存在.{0,20}情形$"),
 )
 
@@ -434,6 +444,7 @@ def is_boilerplate(text: str) -> bool:
 2. 块不跨小节——跨小节会混入不相关内容，稀释检索信号；
 3. 块首拼接 section_path——让块自带上下文。
 """
+
 from __future__ import annotations
 
 import re
@@ -500,8 +511,13 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
         if block.block_type == "table" and cfg.keep_table_whole:
             chunks.append(
                 Chunk(
-                    ordinal=ordinal, block_type="table", section_path=block.section_path,
-                    content=block.content, page=block.page, bbox=block.bbox, is_leaf=True,
+                    ordinal=ordinal,
+                    block_type="table",
+                    section_path=block.section_path,
+                    content=block.content,
+                    page=block.page,
+                    bbox=block.bbox,
+                    is_leaf=True,
                 )
             )
             ordinal += 1
@@ -561,6 +577,7 @@ git commit -m "feat(parse): 切块器，表格不切分且块不跨小节"
 
 ```python
 """父子块：同小节的叶子共享一个父块；表格既是父块也是叶子。"""
+
 from __future__ import annotations
 
 from ragdemo.parse.chunker import Chunk
@@ -569,8 +586,13 @@ from ragdemo.parse.tree import build_tree
 
 def _leaf(ordinal: int, section: str, content: str, block_type: str = "paragraph") -> Chunk:
     return Chunk(
-        ordinal=ordinal, block_type=block_type, section_path=section,
-        content=content, page=1, bbox=None, is_leaf=True,
+        ordinal=ordinal,
+        block_type=block_type,
+        section_path=section,
+        content=content,
+        page=1,
+        bbox=None,
+        is_leaf=True,
     )
 
 
@@ -608,7 +630,7 @@ def test_is_leaf_cannot_be_derived_from_parent_ordinal() -> None:
         [_leaf(0, "第一节", "甲"), _leaf(1, "第一节", "乙"), _leaf(2, "第二节", "| a |", "table")]
     )
     parentless = [c for c in tree if c.parent_ordinal is None]
-    assert any(c.is_leaf for c in parentless)      # 表格
+    assert any(c.is_leaf for c in parentless)  # 表格
     assert any(not c.is_leaf for c in parentless)  # 父块
 
 
@@ -642,6 +664,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.tree'`
 is_leaf 必须是显式的列：表格块既是父块也是叶子块，用「有没有父块」判断
 会把所有表格排除出召回。
 """
+
 from __future__ import annotations
 
 from ragdemo.parse.chunker import Chunk
@@ -736,6 +759,7 @@ git commit -m "feat(parse): 父子块构造，表格既是父块也是叶子块"
 
 ```python
 """表格描述：只描述表里有什么，不做任何解读或数值推断。"""
+
 from __future__ import annotations
 
 import pytest
@@ -838,6 +862,7 @@ expected_output_schema: plain_text_one_sentence
 描述必须只陈述表里有什么。让小模型顺手「总结一下」，等于在检索层就
 掺进了未经验证、无来源的判断——而输出中每个论断都必须可溯源。
 """
+
 from __future__ import annotations
 
 import re
@@ -929,6 +954,7 @@ git commit -m "feat(parse): 表格描述生成，拦截解读性表述"
 
 ```python
 """元数据校验 8 项。任一项不过，整份文档回滚——部分入库比没入库更危险。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -940,19 +966,33 @@ from ragdemo.parse.validate import validate_chunks
 
 def _doc(page_count: int = 24) -> NormalizedDocument:
     return NormalizedDocument(
-        provider_doc_id="D1", entity_ref="688256.SH", doc_type="quarterly",
-        title="三季报", period="2024Q3",
+        provider_doc_id="D1",
+        entity_ref="688256.SH",
+        doc_type="quarterly",
+        title="三季报",
+        period="2024Q3",
         publish_at=datetime(2024, 10, 28, 18, 32, tzinfo=UTC),
-        language="zh", source_url=None, raw_bytes_ref=None, content_hash="h",
-        is_correction=False, supersedes_provider_doc_id=None, page_count=page_count,
+        language="zh",
+        source_url=None,
+        raw_bytes_ref=None,
+        content_hash="h",
+        is_correction=False,
+        supersedes_provider_doc_id=None,
+        page_count=page_count,
         blocks=[NormalizedBlock(0, "paragraph", "第一节", "内容")],
     )
 
 
 def _chunk(**kw: object) -> Chunk:
     base = dict(
-        ordinal=0, block_type="paragraph", section_path="第一节", content="内容",
-        page=1, bbox=None, is_leaf=True, parent_ordinal=None,
+        ordinal=0,
+        block_type="paragraph",
+        section_path="第一节",
+        content="内容",
+        page=1,
+        bbox=None,
+        is_leaf=True,
+        parent_ordinal=None,
     )
     base.update(kw)
     return Chunk(**base)  # type: ignore[arg-type]
@@ -1031,6 +1071,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.parse.validate
 整份文档回滚而非跳过坏块：部分入库的文档会让检索返回残缺证据，
 比没有这份文档更危险。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -1129,6 +1170,7 @@ Task 9 的解析器产出 `ParseResult`，由 Task 10 的资产转成 `ParseArti
 
 ```python
 """文档入库：反规范化列一致、整份回滚、重解析不改 known_at。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -1222,15 +1264,11 @@ def test_known_at_applies_disclosure_lag(temp_db: str) -> None:
         " ARRAY['云端训练芯片'],'云端训练芯片','688256.SH')"
     )
     conn.commit()
-    w = DocumentWriter(
-        conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1)
-    )
+    w = DocumentWriter(conn, ingest_run_id="r1", source="mock", disclosure_lag=timedelta(days=1))
     doc = _docs()[0]
     chunks, desc = _prepare(doc)
     w.write_document(doc, chunks, desc)  # type: ignore[arg-type]
-    publish_at, known_at = conn.execute(
-        "SELECT publish_at, known_at FROM core.document"
-    ).fetchone()  # type: ignore[misc]
+    publish_at, known_at = conn.execute("SELECT publish_at, known_at FROM core.document").fetchone()  # type: ignore[misc]
     assert known_at - publish_at == timedelta(days=1)
 
 
@@ -1269,11 +1307,13 @@ def test_reparse_keeps_original_known_at(writer: DocumentWriter) -> None:
     ).fetchone()  # type: ignore[misc]
 
     second = writer.reparse_document(
-        doc, chunks, desc, supersedes_doc_id=first.doc_id  # type: ignore[arg-type]
+        doc,
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,  # type: ignore[arg-type]
     )
     new_known_at, version_group, supersedes = writer.conn.execute(
-        "SELECT known_at, version_group_id, supersedes_doc_id FROM core.document"
-        " WHERE doc_id = %s",
+        "SELECT known_at, version_group_id, supersedes_doc_id FROM core.document WHERE doc_id = %s",
         (second.doc_id,),
     ).fetchone()  # type: ignore[misc]
 
@@ -1318,6 +1358,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.documen
 2. 重解析沿用原文档的 known_at。取重解析时刻会让这份文档在历史回测中凭空消失
    （05 §7.2 第 2 步）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -1391,9 +1432,7 @@ class DocumentWriter:
 
         self._require_valid(doc, chunks, descriptions)
         with self.conn.transaction():
-            doc_id = self._insert_document(
-                doc, known_at=self._known_at(doc), artifacts=artifacts
-            )
+            doc_id = self._insert_document(doc, known_at=self._known_at(doc), artifacts=artifacts)
             self.conn.execute(
                 "UPDATE core.document SET version_group_id = %s WHERE doc_id = %s",
                 (doc_id, doc_id),
@@ -1482,12 +1521,28 @@ class DocumentWriter:
             "%s,%s,%s) "
             "RETURNING doc_id",
             (
-                entity_id, doc.doc_type, doc.title, doc.period, doc.publish_at,
-                doc.language, self.source, doc.source_url, doc.raw_bytes_ref,
-                doc.content_hash, version_group_id, doc.is_correction, supersedes_doc_id,
-                parse_engine, doc.page_count, doc.publish_at.date(),
-                known_at, doc.provider_doc_id, self.ingest_run_id,
-                json_ref, md_ref, warnings,
+                entity_id,
+                doc.doc_type,
+                doc.title,
+                doc.period,
+                doc.publish_at,
+                doc.language,
+                self.source,
+                doc.source_url,
+                doc.raw_bytes_ref,
+                doc.content_hash,
+                version_group_id,
+                doc.is_correction,
+                supersedes_doc_id,
+                parse_engine,
+                doc.page_count,
+                doc.publish_at.date(),
+                known_at,
+                doc.provider_doc_id,
+                self.ingest_run_id,
+                json_ref,
+                md_ref,
+                warnings,
             ),
         ).fetchone()
         assert row is not None
@@ -1521,13 +1576,25 @@ class DocumentWriter:
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "RETURNING block_id",
                 (
-                    doc_id, parent_block_id, chunk.block_type, chunk.section_path,
-                    chunk.ordinal, chunk.page,
+                    doc_id,
+                    parent_block_id,
+                    chunk.block_type,
+                    chunk.section_path,
+                    chunk.ordinal,
+                    chunk.page,
                     list(chunk.bbox) if chunk.bbox else None,
-                    chunk.content, descriptions.get(chunk.ordinal),
-                    len(chunk.content), chunk.is_leaf, entity_id, doc.doc_type,
-                    publish_at, doc.publish_at.date(), known_at, self.source,
-                    doc.provider_doc_id, self.ingest_run_id,
+                    chunk.content,
+                    descriptions.get(chunk.ordinal),
+                    len(chunk.content),
+                    chunk.is_leaf,
+                    entity_id,
+                    doc.doc_type,
+                    publish_at,
+                    doc.publish_at.date(),
+                    known_at,
+                    self.source,
+                    doc.provider_doc_id,
+                    self.ingest_run_id,
                 ),
             ).fetchone()
             assert row is not None
@@ -1584,6 +1651,7 @@ git commit -m "feat(ingest): 文档与块入库，重解析沿用原 known_at"
 
 ```python
 """嵌入基础：维度、L2 归一化、输入拼接。"""
+
 from __future__ import annotations
 
 import math
@@ -1627,8 +1695,10 @@ def test_l2_normalize_handles_zero_vector() -> None:
 def test_embedding_input_includes_title_and_section() -> None:
     """标题与章节路径提供块本身缺失的上下文（「本期」「上述」无法孤立解析）。"""
     text = embedding_input(
-        doc_title="三季报", section_path="第三节 > 分部收入",
-        content_desc="分部收入表", content="智能计算 12,340 万元",
+        doc_title="三季报",
+        section_path="第三节 > 分部收入",
+        content_desc="分部收入表",
+        content="智能计算 12,340 万元",
     )
     assert "三季报" in text and "第三节" in text and "分部收入表" in text
 
@@ -1636,8 +1706,11 @@ def test_embedding_input_includes_title_and_section() -> None:
 def test_embedding_input_truncates_content_not_context() -> None:
     """超长时截断正文，保留前面的标题与章节——上下文比尾部正文更值钱。"""
     text = embedding_input(
-        doc_title="三季报", section_path="第三节", content_desc="",
-        content="甲" * 5000, max_chars=100,
+        doc_title="三季报",
+        section_path="第三节",
+        content_desc="",
+        content="甲" * 5000,
+        max_chars=100,
     )
     assert text.startswith("三季报")
     assert len(text) == 100
@@ -1657,6 +1730,7 @@ def test_embedder_rejects_empty_batch() -> None:
 
 ```python
 """嵌入缓存：主键三列，跨模型与跨用户不串。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1748,6 +1822,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.embed'`
 维度固定 1024（adr/0004）：bge-m3 原生 1024，Qwen3-Embedding 经 MRL 降到 1024，
 两者可互换而不改表结构。换模型只是数据回填，不是架构变更。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -1802,6 +1877,7 @@ class Embedder(Protocol):
 从内容哈希派生向量，因此同样的文本永远得到同样的向量——
 检索评测在 Mock 上可复现，是 P1 能在没有嵌入 API 配额时推进的前提。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -1840,6 +1916,7 @@ class MockEmbedder:
 各家公告中大量重复的模板段落只需算一次，对 5000 元/月的预算是实质节省。
 主键三列缺一不可，理由见 docs/05-document-pipeline.md §5.3。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -1852,7 +1929,9 @@ PUBLIC_OWNER = ""
 
 
 class EmbeddingCache:
-    def __init__(self, conn: psycopg.Connection, *, model: str, owner_user: str = PUBLIC_OWNER) -> None:
+    def __init__(
+        self, conn: psycopg.Connection, *, model: str, owner_user: str = PUBLIC_OWNER
+    ) -> None:
         self.conn = conn
         self.model = model
         self.owner_user = owner_user
@@ -1928,6 +2007,7 @@ git commit -m "feat(embed): 嵌入协议、L2 归一化与三列主键的内容�
 
 ```python
 """批量嵌入：只处理 embedding IS NULL，命中缓存不重算，可中断可续跑。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -2064,6 +2144,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.embed.batch'`
 P1 首次入库有数十万块，托管 API 有速率限制，所以批处理 + 内容哈希缓存
 不是优化，是能否完成 P1 的前提（adr/0004 的后果 1）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -2097,8 +2178,7 @@ def embed_pending_blocks(
         "SELECT b.block_id, d.title, b.section_path, b.content_desc, b.content "
         "  FROM core.doc_block b JOIN core.document d USING (doc_id) "
         " WHERE b.is_leaf AND b.embedding IS NULL "
-        " ORDER BY b.block_id "
-        + ("LIMIT %s" if limit is not None else ""),
+        " ORDER BY b.block_id " + ("LIMIT %s" if limit is not None else ""),
         (limit,) if limit is not None else (),
     ).fetchall()
 
@@ -2192,6 +2272,7 @@ git commit -m "feat(embed): 批量嵌入与断点续传，相同内容只算一�
 
 ```python
 """对象存储抽象。写入必须原子——半个 JSON 会让缓存命中一份坏数据。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -2286,6 +2367,7 @@ def test_local_store_satisfies_the_protocol(tmp_path: Path) -> None:
 最要紧的三条：从 detail[] 切块（markdown 没有页码）、
 parse_engine 带参数指纹（否则评测基线静默失效）、私有文档不外送。
 """
+
 from __future__ import annotations
 
 import json
@@ -2322,6 +2404,7 @@ def _detail() -> list[dict[str, Any]]:
 
 # --- 参数指纹 ---------------------------------------------------------------
 
+
 def test_fingerprint_is_stable_across_key_order() -> None:
     assert param_fingerprint({"a": 1, "b": 2}) == param_fingerprint({"b": 2, "a": 1})
 
@@ -2339,6 +2422,7 @@ def test_artifact_keys_carry_both_hash_and_fingerprint() -> None:
 
 
 # --- detail[] → NormalizedBlock ---------------------------------------------
+
 
 def test_headers_and_footers_are_dropped() -> None:
     """content == 1 是供应商标注的非正文（05 §3.3）。"""
@@ -2403,12 +2487,15 @@ def test_bbox_is_none_when_page_size_is_unknown() -> None:
 
 # --- 表格 -------------------------------------------------------------------
 
+
 def test_merged_cells_are_expanded_not_left_blank() -> None:
     """留空会让跨列表头匹配不到——BM25 与嵌入都按块的整体文本工作。"""
-    md = table_markdown([
-        {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
-        {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
-    ])
+    md = table_markdown(
+        [
+            {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "业务分部"},
+            {"row": 0, "col": 1, "row_span": 1, "col_span": 2, "text": "2024H1"},
+        ]
+    )
     assert md.splitlines()[0] == "| 业务分部 | 2024H1 | 2024H1 |"
 
 
@@ -2422,6 +2509,7 @@ def test_empty_cells_produce_empty_string() -> None:
 
 
 # --- 私有材料闸门 -----------------------------------------------------------
+
 
 def test_private_document_is_not_sent_upstream(tmp_path: Path) -> None:
     """换到托管 API 后新增的风险，MinerU 时代不存在（adr/0008 后果 1）。"""
@@ -2440,6 +2528,7 @@ def test_private_document_passes_when_the_gate_is_open(tmp_path: Path) -> None:
 
 # --- 缓存 -------------------------------------------------------------------
 
+
 def test_cache_hit_skips_the_billed_api_call(tmp_path: Path) -> None:
     """xParse 按页计费。同一份文档在同一套参数下永远只解析一次（05 §2.4）。"""
     blob = LocalBlobStore(tmp_path)
@@ -2447,7 +2536,7 @@ def test_cache_hit_skips_the_billed_api_call(tmp_path: Path) -> None:
     json_key, _ = artifact_keys(parser.content_hash(b"%PDF-1.4"), parser.param_fp)
     blob.put(json_key, json.dumps(_payload(), ensure_ascii=False).encode("utf-8"))
 
-    result = parser.parse(b"%PDF-1.4")          # base_url 不可达，命中缓存才不会炸
+    result = parser.parse(b"%PDF-1.4")  # base_url 不可达，命中缓存才不会炸
 
     assert result.from_cache is True
     assert result.json_ref == json_key
@@ -2465,10 +2554,18 @@ def test_engine_version_carries_vendor_version_and_fingerprint(tmp_path: Path) -
 
 # --- 错误码分类 -------------------------------------------------------------
 
-@pytest.mark.parametrize(("code", "marker"), [
-    (40303, "unsupported"), (40301, "unsupported"), (40425, "unsupported"),
-    (40302, "too_large"), (40422, "corrupt"), (40423, "encrypted"),
-])
+
+@pytest.mark.parametrize(
+    ("code", "marker"),
+    [
+        (40303, "unsupported"),
+        (40301, "unsupported"),
+        (40425, "unsupported"),
+        (40302, "too_large"),
+        (40422, "corrupt"),
+        (40423, "encrypted"),
+    ],
+)
 def test_permanent_failures_carry_a_marker(code: int, marker: str) -> None:
     """永久失败要留记号，否则下次分区重跑会再拉一遍、再失败一遍。"""
     with pytest.raises(ParsePermanent) as excinfo:
@@ -2518,6 +2615,7 @@ def test_partial_page_failure_is_a_warning_not_an_error(tmp_path: Path) -> None:
 
 # --- 页数预算 ---------------------------------------------------------------
 
+
 def test_budget_reports_exhaustion() -> None:
     budget = PageBudget(remaining=10)
     budget.charge(4)
@@ -2542,6 +2640,7 @@ P1 用本地文件系统，P4 接 MinIO（docs/01-architecture.md §4）。
 放在 core 包里是因为它与 db 同层：接入侧存原始 PDF、解析侧存解析产物、
 备份侧存 pg_dump，三处都要用，而它不含任何业务语义。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -2603,6 +2702,7 @@ class LocalBlobStore:
 x-ti-app-id / x-ti-secret-code 由出网代理转发时注入，
 业务容器的环境变量里没有任何供应商密钥。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -2622,31 +2722,39 @@ DEFAULT_TIMEOUT_S: Final = 600.0
 
 # 参数集合是版本化的一部分（05 §2.2）。改这里必须同步那张表，
 # 并且知道它会让全部存量文档的 param_fp 变化 —— 也就是一次全量重解析。
-XPARSE_PARAMS: Final[Mapping[str, str | int]] = MappingProxyType({
-    "parse_mode": "auto",
-    "markdown_details": 1,      # detail[] 是切块的唯一输入
-    "apply_document_tree": 1,   # outline_level 的来源
-    "apply_merge": 1,           # 合并跨页表格。财报表格跨页是常态
-    "table_flavor": "html",     # 只影响存档的 markdown；HTML 能表达合并单元格
-    "catalog_details": 1,
-    "page_details": 0,          # 关掉 pages[]：逐行 OCR 能把响应撑大一个数量级
-    "raw_ocr": 0,
-    "char_details": 0,
-    "get_image": "none",        # 图片 URL 30 天过期，存下来就是悬空引用
-    "apply_image_analysis": 0,  # 会把图片送去大模型解读，越过计算/生成分离的边界
-    "formula_level": 0,
-    "paratext_mode": "annotation",
-    "dpi": 144,
-    "page_start": 1,
-    "page_count": 1000,
-})
+XPARSE_PARAMS: Final[Mapping[str, str | int]] = MappingProxyType(
+    {
+        "parse_mode": "auto",
+        "markdown_details": 1,  # detail[] 是切块的唯一输入
+        "apply_document_tree": 1,  # outline_level 的来源
+        "apply_merge": 1,  # 合并跨页表格。财报表格跨页是常态
+        "table_flavor": "html",  # 只影响存档的 markdown；HTML 能表达合并单元格
+        "catalog_details": 1,
+        "page_details": 0,  # 关掉 pages[]：逐行 OCR 能把响应撑大一个数量级
+        "raw_ocr": 0,
+        "char_details": 0,
+        "get_image": "none",  # 图片 URL 30 天过期，存下来就是悬空引用
+        "apply_image_analysis": 0,  # 会把图片送去大模型解读，越过计算/生成分离的边界
+        "formula_level": 0,
+        "paratext_mode": "annotation",
+        "dpi": 144,
+        "page_start": 1,
+        "page_count": 1000,
+    }
+)
 
 # 错误码分类。分错的代价是不对称的：把永久失败当成可重试会无限烧钱，
 # 把可重试当成永久失败会静默丢文档。
-_PERMANENT: Final[Mapping[int, str]] = MappingProxyType({
-    40301: "unsupported", 40303: "unsupported", 40425: "unsupported",
-    40302: "too_large", 40422: "corrupt", 40423: "encrypted",
-})
+_PERMANENT: Final[Mapping[int, str]] = MappingProxyType(
+    {
+        40301: "unsupported",
+        40303: "unsupported",
+        40425: "unsupported",
+        40302: "too_large",
+        40422: "corrupt",
+        40423: "encrypted",
+    }
+)
 _CONFIG_ERRORS: Final[frozenset[int]] = frozenset({40004, 40101, 40102, 40103, 40424, 40427})
 _RETRYABLE: Final[frozenset[int]] = frozenset({30203, 500})
 _OUT_OF_CREDIT: Final = 40003
@@ -2702,7 +2810,7 @@ class PageBudget:
 class ParseResult:
     blocks: list[NormalizedBlock]
     page_count: int
-    engine_version: str          # textin:<result.version>+<param_fp>
+    engine_version: str  # textin:<result.version>+<param_fp>
     markdown: str
     json_ref: str | None
     md_ref: str | None
@@ -2850,17 +2958,27 @@ class MockDocumentParser:
         blocks = [
             NormalizedBlock(0, "title", "", "第一节 公司概况", page=1, level=0),
             NormalizedBlock(
-                1, "paragraph", "第一节 公司概况",
-                "公司主营云端训练芯片与智能计算集群系统。", page=1,
+                1,
+                "paragraph",
+                "第一节 公司概况",
+                "公司主营云端训练芯片与智能计算集群系统。",
+                page=1,
             ),
             NormalizedBlock(
-                2, "table", "第一节 公司概况",
-                "| 指标 | 数值 |\n|---|---|\n| 营业收入 | 12,340 |", page=2,
+                2,
+                "table",
+                "第一节 公司概况",
+                "| 指标 | 数值 |\n|---|---|\n| 营业收入 | 12,340 |",
+                page=2,
             ),
         ]
         return ParseResult(
-            blocks=blocks, page_count=2, engine_version="mock:1",
-            markdown="# 第一节 公司概况\n", json_ref=None, md_ref=None,
+            blocks=blocks,
+            page_count=2,
+            engine_version="mock:1",
+            markdown="# 第一节 公司概况\n",
+            json_ref=None,
+            md_ref=None,
             warnings=list(self._warnings),
         )
 
@@ -3019,6 +3137,7 @@ git commit -m "feat(parse): TextIn xParse 封装、解析产物落盘与成本�
 
 ```python
 """文档管线端到端：Mock 公告 → 解析 → 切块 → 入库 → 嵌入，全部块可检索。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -3087,10 +3206,14 @@ def test_rerunning_the_pipeline_is_idempotent(conn: psycopg.Connection, tmp_path
     blob = LocalBlobStore(tmp_path)
     prepared = prepare_documents(docs, MockDocumentParser(), blob, PageBudget(1000))
 
-    doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements"))
+    doc_blocks_loaded(
+        ctx, prepared, DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements")
+    )
     (after_first,) = conn.execute("SELECT count(*) FROM core.doc_block").fetchone()  # type: ignore[misc]
 
-    doc_blocks_loaded(ctx, prepared, DocumentWriter(conn, ingest_run_id="r2", source="mock-announcements"))
+    doc_blocks_loaded(
+        ctx, prepared, DocumentWriter(conn, ingest_run_id="r2", source="mock-announcements")
+    )
     (after_second,) = conn.execute("SELECT count(*) FROM core.doc_block").fetchone()  # type: ignore[misc]
 
     assert after_first == after_second
@@ -3119,6 +3242,7 @@ def test_parse_artifact_refs_land_in_the_document_row(
 
 def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
     """供应商已经给了结构化块，再送去解析既花钱又不如原件准（05 §1）。"""
+
     class Exploding(MockDocumentParser):
         def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> object:
             raise AssertionError("路径 A 的文档不应该被解析")
@@ -3132,6 +3256,7 @@ def test_path_a_documents_are_not_re_parsed(tmp_path: Path) -> None:
 
 def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
     """页数预算耗尽就停，不静默烧钱（05 §2.7）。"""
+
     class Counting(MockDocumentParser):
         calls = 0
 
@@ -3149,6 +3274,7 @@ def test_budget_exhaustion_stops_before_the_next_call(tmp_path: Path) -> None:
 
 def test_permanent_failure_still_records_the_document(tmp_path: Path) -> None:
     """不留记号的话，下次分区重跑会再拉一遍、再失败一遍（05 §2.6）。"""
+
     class Unsupported(MockDocumentParser):
         def parse(self, file_bytes: bytes, *, owner_user: str | None = None):
             raise ParsePermanent("unsupported", 40303)
@@ -3180,6 +3306,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest.assets_
 路径 B 的文档只有一个 raw_bytes_ref，要先送 xParse 解析（docs/05-document-pipeline.md §1）。
 分流在 prepare_documents 里，它是纯函数——不碰数据库、不要 Dagster 上下文。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -3304,9 +3431,7 @@ def doc_blocks_loaded(
         doc = item.doc
         chunks = build_tree(chunk_document(doc, cfg)) if doc.blocks else []
         descriptions = {
-            c.ordinal: describer.describe(
-                c.content, title=doc.title, section_path=c.section_path
-            )
+            c.ordinal: describer.describe(c.content, title=doc.title, section_path=c.section_path)
             for c in chunks
             if c.block_type == "table"
         }

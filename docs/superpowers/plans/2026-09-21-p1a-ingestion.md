@@ -101,6 +101,7 @@
 
 ```python
 """适配器协议的不变量：时区强制与不可变数据类。"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -133,8 +134,12 @@ def test_fetch_context_is_frozen() -> None:
 
 def test_raw_response_is_frozen() -> None:
     raw = RawResponse(
-        provider="mock", endpoint="/x", params={"a": 1}, payload=[],
-        http_status=200, fetched_at=datetime.now(UTC),
+        provider="mock",
+        endpoint="/x",
+        params={"a": 1},
+        payload=[],
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         raw.http_status = 500  # type: ignore[misc]
@@ -143,9 +148,15 @@ def test_raw_response_is_frozen() -> None:
 def test_fact_record_rejects_naive_known_at() -> None:
     with pytest.raises(ValueError, match="known_at"):
         FactRecord(
-            entity_ref="688256.SH", metric_field="revenue", period="2024Q3",
-            period_end=date(2024, 9, 30), value=1.0, unit="CNY", currency="CNY",
-            valid_from=date(2024, 7, 1), known_at=datetime(2024, 10, 28),
+            entity_ref="688256.SH",
+            metric_field="revenue",
+            period="2024Q3",
+            period_end=date(2024, 9, 30),
+            value=1.0,
+            unit="CNY",
+            currency="CNY",
+            valid_from=date(2024, 7, 1),
+            known_at=datetime(2024, 10, 28),
             source_ref=None,
         )
 
@@ -161,9 +172,16 @@ def test_known_at_must_not_be_in_the_future() -> None:
     future = datetime.now(UTC) + timedelta(days=1)
     with pytest.raises(ValueError, match="未来"):
         FactRecord(
-            entity_ref="688256.SH", metric_field="revenue", period="2024Q3",
-            period_end=date(2024, 9, 30), value=1.0, unit="CNY", currency="CNY",
-            valid_from=date(2024, 7, 1), known_at=future, source_ref=None,
+            entity_ref="688256.SH",
+            metric_field="revenue",
+            period="2024Q3",
+            period_end=date(2024, 9, 30),
+            value=1.0,
+            unit="CNY",
+            currency="CNY",
+            valid_from=date(2024, 7, 1),
+            known_at=future,
+            source_ref=None,
         )
 ```
 
@@ -184,6 +202,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters'`
 
 ```python
 """适配器错误类型。"""
+
 from __future__ import annotations
 
 
@@ -218,6 +237,7 @@ class UpstreamUnavailable(AdapterError):
 行情用收盘时刻——只有适配器知道原始字段的语义。
 见 docs/03-point-in-time.md §1.3。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
@@ -354,6 +374,7 @@ Mock 不是测试脚手架，是**一等公民**——公告供应商选定前�
 用法：子类化 AdapterContract，实现 make_adapter()，即自动获得这 5 条测试。
 真实适配器与 Mock 走同一套契约——这是 Mock 能替代真实数据推进 P1 的前提。
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
@@ -417,6 +438,7 @@ def _iter_records(payload: object) -> list[object]:
 
 ```python
 """MockFactAdapter 必须通过全部适配器契约，并支持注入自定义记录。"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -468,6 +490,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.mock'
 默认数据取自真实三季报的公开数字，确保 P1 的评测不是在理想化数据上跑出来的。
 known_at 一律由 partition_date 推导，因此回填历史分区时天然落在历史区间。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
@@ -479,12 +502,30 @@ from ragdemo.adapters.base import FactRecord, FetchContext, RawResponse
 UTC = timezone.utc
 
 _DEFAULT_ROWS: tuple[dict[str, Any], ...] = (
-    {"ts_code": "688256.SH", "field": "revenue_total", "period": "2024Q3",
-     "period_end": "2024-09-30", "value": 12340.5, "unit": "CNY"},
-    {"ts_code": "688256.SH", "field": "rd_expense", "period": "2024Q3",
-     "period_end": "2024-09-30", "value": 1890.2, "unit": "CNY"},
-    {"ts_code": "002049.SZ", "field": "revenue_total", "period": "2024Q3",
-     "period_end": "2024-09-30", "value": 4021.8, "unit": "CNY"},
+    {
+        "ts_code": "688256.SH",
+        "field": "revenue_total",
+        "period": "2024Q3",
+        "period_end": "2024-09-30",
+        "value": 12340.5,
+        "unit": "CNY",
+    },
+    {
+        "ts_code": "688256.SH",
+        "field": "rd_expense",
+        "period": "2024Q3",
+        "period_end": "2024-09-30",
+        "value": 1890.2,
+        "unit": "CNY",
+    },
+    {
+        "ts_code": "002049.SZ",
+        "field": "revenue_total",
+        "period": "2024Q3",
+        "period_end": "2024-09-30",
+        "value": 4021.8,
+        "unit": "CNY",
+    },
 )
 
 
@@ -580,6 +621,7 @@ git commit -m "feat(adapters): 契约测试基类与 Mock 事实适配器"
 
 这组测试是 P1 正确性的核心。写错了，历史库会被污染，而历史库按设计不可删。
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
@@ -602,9 +644,16 @@ MIGRATIONS = Path("db/migrations")
 
 def _record(value: float, known_at: datetime, ref: str = "688256.SH") -> FactRecord:
     return FactRecord(
-        entity_ref=ref, metric_field="revenue_total", period="2024Q3",
-        period_end=date(2024, 9, 30), value=value, unit="CNY", currency="CNY",
-        valid_from=date(2024, 7, 1), known_at=known_at, source_ref="x",
+        entity_ref=ref,
+        metric_field="revenue_total",
+        period="2024Q3",
+        period_end=date(2024, 9, 30),
+        value=value,
+        unit="CNY",
+        currency="CNY",
+        valid_from=date(2024, 7, 1),
+        known_at=known_at,
+        source_ref="x",
     )
 
 
@@ -720,6 +769,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.ingest'`
 
 数据库的 fin_fact_live_uk 部分唯一索引是最后一道防线：忘记第 1 步会直接冲突失败。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -829,9 +879,18 @@ class PointInTimeWriter:
                 " ingest_run_id) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
-                    entity_id, metric_id, record.period, record.period_end,
-                    record.value, record.unit, record.currency, record.valid_from,
-                    record.known_at, self.source, record.source_ref, self.ingest_run_id,
+                    entity_id,
+                    metric_id,
+                    record.period,
+                    record.period_end,
+                    record.value,
+                    record.unit,
+                    record.currency,
+                    record.valid_from,
+                    record.known_at,
+                    self.source,
+                    record.source_ref,
+                    self.ingest_run_id,
                 ),
             )
         return outcome
@@ -877,6 +936,7 @@ git commit -m "feat(ingest): 时点写入中间件，幂等写入与追加式更
 
 ```python
 """密钥剥离：provider_snapshot 会原样记录调用参数，token 混在里面就进了数据库。"""
+
 from __future__ import annotations
 
 from ragdemo.adapters.secrets import strip_secrets
@@ -909,6 +969,7 @@ def test_non_secret_values_are_untouched_and_input_not_mutated() -> None:
 
 ```python
 """原始响应留存：永不修改、永不删除，且不含密钥。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -934,8 +995,12 @@ def conn(temp_db: str) -> psycopg.Connection:
 
 def _raw(payload: object, params: dict[str, object] | None = None) -> RawResponse:
     return RawResponse(
-        provider="tushare", endpoint="/income", params=params or {"token": "sk-secret"},
-        payload=payload, http_status=200, fetched_at=datetime.now(UTC),
+        provider="tushare",
+        endpoint="/income",
+        params=params or {"token": "sk-secret"},
+        payload=payload,
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -977,6 +1042,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.secre
 provider_snapshot.params 会原样记录调用参数。某些供应商把 token 放在
 query string 里，不剥离就等于把密钥写进数据库（docs/09-compliance-security.md §4.2）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -986,9 +1052,21 @@ REDACTED = "[REDACTED]"
 
 SECRET_PARAM_NAMES = frozenset(
     {
-        "token", "api_key", "apikey", "access_token", "refresh_token",
-        "secret", "client_secret", "password", "passwd", "pwd",
-        "authorization", "auth", "sig", "signature", "credential",
+        "token",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "pwd",
+        "authorization",
+        "auth",
+        "sig",
+        "signature",
+        "credential",
     }
 )
 
@@ -1018,6 +1096,7 @@ def strip_secrets(params: Mapping[str, Any]) -> dict[str, Any]:
 
 任何「数据对不对」的争议都回到 provider_snapshot 重放。因此它永不修改、永不删除。
 """
+
 from __future__ import annotations
 
 import json
@@ -1095,6 +1174,7 @@ git commit -m "feat(ingest): 原始响应留存与参数密钥剥离"
 
 ```python
 """HTTP 客户端：退避、Retry-After、重试耗尽后失败而非返回部分数据。"""
+
 from __future__ import annotations
 
 import httpx
@@ -1106,10 +1186,12 @@ from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 
 def _client(handler: httpx.MockTransport, **kw: object) -> HttpClient:
     return HttpClient(
-        provider="test", base_url="https://example.test",
+        provider="test",
+        base_url="https://example.test",
         policy=RetryPolicy(max_attempts=3, backoff_base_s=0.0),
         bucket=TokenBucket(rate_per_minute=10_000),
-        transport=handler, **kw,  # type: ignore[arg-type]
+        transport=handler,
+        **kw,  # type: ignore[arg-type]
     )
 
 
@@ -1141,9 +1223,7 @@ def test_exhausted_retries_raise_instead_of_returning_partial() -> None:
 
 
 def test_429_surfaces_retry_after() -> None:
-    transport = httpx.MockTransport(
-        lambda r: httpx.Response(429, headers={"Retry-After": "7"})
-    )
+    transport = httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "7"}))
     with pytest.raises(UpstreamUnavailable) as exc:
         _client(transport).get_json("/x", {})
     assert isinstance(exc.value.__cause__, RateLimited)
@@ -1222,6 +1302,7 @@ edgar:
 只重试幂等的读操作。429 优先读 Retry-After，没有才用指数退避。
 重试耗尽抛 UpstreamUnavailable —— 让 Dagster 分区失败，而不是返回部分数据。
 """
+
 from __future__ import annotations
 
 import time
@@ -1321,9 +1402,7 @@ class HttpClient:
         self.daily_quota = daily_quota
         self.cost_per_call_cents = cost_per_call_cents
         self.calls_today = 0
-        self._client = httpx.Client(
-            base_url=base_url, timeout=timeout_s, transport=transport
-        )
+        self._client = httpx.Client(base_url=base_url, timeout=timeout_s, transport=transport)
 
     def get_json(self, endpoint: str, params: Mapping[str, Any]) -> RawResponse:
         if self.daily_quota is not None and self.calls_today >= self.daily_quota:
@@ -1368,9 +1447,7 @@ class HttpClient:
 def _error_for(response: httpx.Response) -> Exception:
     if response.status_code == 429:
         header = response.headers.get("Retry-After")
-        return RateLimited(
-            "上游限速", retry_after_s=float(header) if header else None
-        )
+        return RateLimited("上游限速", retry_after_s=float(header) if header else None)
     return UpstreamUnavailable(f"HTTP {response.status_code}")
 
 
@@ -1435,6 +1512,7 @@ git commit -m "feat(adapters): 限流重试配额的 HTTP 客户端"
 
 ```python
 """Tushare 适配器：known_at 必须取公告日，不是期末日。"""
+
 from __future__ import annotations
 
 import json
@@ -1453,9 +1531,12 @@ FIXTURES = Path("tests/fixtures/tushare")
 
 def _raw(name: str, endpoint: str) -> RawResponse:
     return RawResponse(
-        provider="tushare", endpoint=endpoint, params={},
+        provider="tushare",
+        endpoint=endpoint,
+        params={},
         payload=json.loads((FIXTURES / name).read_text(encoding="utf-8")),
-        http_status=200, fetched_at=datetime.now(timezone.utc),
+        http_status=200,
+        fetched_at=datetime.now(timezone.utc),
     )
 
 
@@ -1501,9 +1582,12 @@ def test_price_known_at_is_market_close_not_fetch_time() -> None:
 def test_error_response_raises() -> None:
     adapter = TushareAdapter.for_replay(FIXTURES)
     bad = RawResponse(
-        provider="tushare", endpoint="/income", params={},
+        provider="tushare",
+        endpoint="/income",
+        params={},
         payload={"code": 40203, "msg": "积分不足", "data": None},
-        http_status=200, fetched_at=datetime.now(timezone.utc),
+        http_status=200,
+        fetched_at=datetime.now(timezone.utc),
     )
     with pytest.raises(ValueError, match="40203"):
         list(adapter.parse(bad))
@@ -1525,6 +1609,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.tusha
 不取 end_date（期末日）。取 end_date 会让 9 月 30 日就「知道」三季报——
 这是最常见也最致命的前视偏差。见 docs/03-point-in-time.md §1.3。
 """
+
 from __future__ import annotations
 
 import json
@@ -1711,6 +1796,7 @@ git commit -m "feat(adapters): Tushare 适配器，known_at 取公告日而非�
 
 ```python
 """EDGAR 适配器：known_at 用 acceptanceDateTime（精确到秒），不用 filingDate。"""
+
 from __future__ import annotations
 
 import json
@@ -1726,11 +1812,12 @@ FIXTURES = Path("tests/fixtures/edgar")
 
 def _raw() -> RawResponse:
     return RawResponse(
-        provider="edgar", endpoint="/submissions/CIK0001045810.json", params={},
-        payload=json.loads(
-            (FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")
-        ),
-        http_status=200, fetched_at=datetime.now(UTC),
+        provider="edgar",
+        endpoint="/submissions/CIK0001045810.json",
+        params={},
+        payload=json.loads((FIXTURES / "submissions_0001045810.json").read_text(encoding="utf-8")),
+        http_status=200,
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -1756,8 +1843,7 @@ def test_document_url_is_constructed_correctly() -> None:
     filings = list(EdgarAdapter.for_replay(FIXTURES).parse_filings(_raw()))
     tenq = next(f for f in filings if f.form_type == "10-Q")
     assert tenq.document_url == (
-        "https://www.sec.gov/Archives/edgar/data/1045810/"
-        "000104581024000316/nvda-20241027.htm"
+        "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000316/nvda-20241027.htm"
     )
 
 
@@ -1787,6 +1873,7 @@ EDGAR 是 P1 唯一免费且真实的语料来源。在公告供应商选定前�
 「用真实数据检验管线」的职责（adr/0005 的风险缓解），因此评测集中
 要求至少 30 条基于 EDGAR 真实文档。
 """
+
 from __future__ import annotations
 
 import json
@@ -1818,8 +1905,7 @@ class FilingRef:
     @property
     def document_url(self) -> str:
         return (
-            f"{ARCHIVES}/{int(self.cik)}/"
-            f"{self.accession.replace('-', '')}/{self.primary_document}"
+            f"{ARCHIVES}/{int(self.cik)}/{self.accession.replace('-', '')}/{self.primary_document}"
         )
 
 
@@ -1924,6 +2010,7 @@ git commit -m "feat(adapters): EDGAR 适配器，known_at 取 acceptanceDateTime
 选定供应商后，新写的 adapter 必须原样通过这些测试——这是「定接口不定供应商」
 能兑现的前提（adr/0005）。
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
@@ -1986,6 +2073,7 @@ class AnnouncementContract:
 
 ```python
 """MockAnnouncementProvider 通过全部公告契约，并正确应用披露延迟。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -2064,6 +2152,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.adapters.annou
 选定供应商后只需写一个实现 AnnouncementProvider 的 adapter，
 并原样通过 tests/contracts/announcement_contract.py 的 6 条契约。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
@@ -2158,6 +2247,7 @@ class AnnouncementProvider(Protocol):
 数据取自真实公告的脱敏节选——Mock 太理想会让 P1 的评测数字虚高，
 选型时才发现落差（adr/0005 的风险一节）。必须包含：正文段落、表格、更正公告。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -2187,14 +2277,29 @@ _DOCS: tuple[dict[str, Any], ...] = (
         "page_count": 24,
         "blocks": [
             ("title", "第三节 主营业务", 1, 11, 1),
-            ("paragraph",
-             "报告期内公司智能计算集群系统业务实现营业收入 12,340 万元，同比增长 58.2%，"
-             "主要系云端训练芯片出货量提升所致。", 1, 12, None),
-            ("table",
-             "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |\n"
-             "| 其他 | 1,020 | -3.1% |", 1, 13, None),
-            ("paragraph",
-             "研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。", 1, 14, None),
+            (
+                "paragraph",
+                "报告期内公司智能计算集群系统业务实现营业收入 12,340 万元，同比增长 58.2%，"
+                "主要系云端训练芯片出货量提升所致。",
+                1,
+                12,
+                None,
+            ),
+            (
+                "table",
+                "| 业务分部 | 收入(万元) | 同比 |\n| 智能计算 | 12,340 | +58.2% |\n"
+                "| 其他 | 1,020 | -3.1% |",
+                1,
+                13,
+                None,
+            ),
+            (
+                "paragraph",
+                "研发费用 1,890 万元，同比增长 22.4%，主要用于下一代训练芯片流片。",
+                1,
+                14,
+                None,
+            ),
         ],
     },
     {
@@ -2208,9 +2313,14 @@ _DOCS: tuple[dict[str, Any], ...] = (
         "supersedes": "SSE-688256-2024Q3",
         "page_count": 2,
         "blocks": [
-            ("paragraph",
-             "经复核，公司 2024 年第三季度智能计算集群系统业务营业收入应为 12,500 万元，"
-             "原披露 12,340 万元有误，特此更正。", 1, 1, None),
+            (
+                "paragraph",
+                "经复核，公司 2024 年第三季度智能计算集群系统业务营业收入应为 12,500 万元，"
+                "原披露 12,340 万元有误，特此更正。",
+                1,
+                1,
+                None,
+            ),
         ],
     },
 )
@@ -2260,8 +2370,12 @@ class MockAnnouncementProvider:
     def fetch_document(self, ctx: FetchContext, provider_doc_id: str) -> RawResponse:
         doc = next(d for d in self._docs if d["id"] == provider_doc_id)
         return RawResponse(
-            provider=self.provider, endpoint=f"/documents/{provider_doc_id}",
-            params={}, payload=doc, http_status=200, fetched_at=datetime.now(CST),
+            provider=self.provider,
+            endpoint=f"/documents/{provider_doc_id}",
+            params={},
+            payload=doc,
+            http_status=200,
+            fetched_at=datetime.now(CST),
         )
 
     def known_at(self, record: Any) -> datetime:
@@ -2365,6 +2479,7 @@ git commit -m "feat(adapters): 公告归一化模型、AnnouncementProvider 契�
 
 ```python
 """实体解析三层降级：代码 → 别名 → 上下文。三层都不确定则进人工队列，不猜。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -2397,7 +2512,7 @@ def resolver(temp_db: str) -> EntityResolver:
         "('寒武纪','CN.688256','short','manual'),"
         "('Cambricon','CN.688256','en','manual'),"
         "('中兴','CN.000063','short','manual'),"
-        "('中兴','CN.002371','nickname','manual')"   # 故意制造一对多
+        "('中兴','CN.002371','nickname','manual')"  # 故意制造一对多
     )
     conn.commit()
     return EntityResolver(conn)
@@ -2452,8 +2567,7 @@ def test_unresolved_goes_to_the_queue(resolver: EntityResolver) -> None:
         r, raw_ref="中兴", context={"doc_id": 1}, source="mock", ingest_run_id="r1"
     )
     row = resolver.conn.execute(
-        "SELECT raw_ref, candidates, resolved_at FROM core.entity_resolution_queue"
-        " WHERE id = %s",
+        "SELECT raw_ref, candidates, resolved_at FROM core.entity_resolution_queue WHERE id = %s",
         (qid,),
     ).fetchone()
     assert row is not None
@@ -2488,6 +2602,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'ragdemo.entities'`
 模糊匹配（pg_trgm）只用于给人工提供候选，绝不自动采纳——把「中兴新材」
 匹配成「中兴通讯」这类错误一旦入库，污染会扩散到关系图和观点。
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -2633,6 +2748,7 @@ git commit -m "feat(entities): 实体解析三层降级，模糊匹配不自动�
 
 ```python
 """Dagster 资产：幂等、分区起点、回填时 known_at 落在历史区间。"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -2769,6 +2885,7 @@ dev = [
 2. 回填历史分区时 known_at 必须是历史时刻。适配器的 known_at() 从记录本身计算，
    因此回填天然正确——这是把该逻辑放在适配器而非中间件的理由。
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -2795,9 +2912,7 @@ def fact_normalized(ctx: AssetExecutionContext, adapter: Adapter) -> list[FactRe
     records: list[FactRecord] = []
     for raw in adapter.fetch(fetch_ctx):
         records.extend(adapter.parse(raw))  # type: ignore[attr-defined]
-    ctx.log.info(
-        "normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)}
-    )
+    ctx.log.info("normalized", extra={"run_id": fetch_ctx.ingest_run_id, "count": len(records)})
     return records
 
 
@@ -2829,6 +2944,7 @@ def fin_fact_loaded(
 LangGraph 侧的监听器按 event_id 取任务。**Dagster 资产不直接调用 Agent**——
 避免数据管线被模型调用的延迟与失败拖垮（docs/01-architecture.md §3）。
 """
+
 from __future__ import annotations
 
 import os
