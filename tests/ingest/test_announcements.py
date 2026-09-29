@@ -257,6 +257,45 @@ def test_hk_entity_routes_to_hkexnews_not_cninfo(
 
 
 @pytest.mark.db
+def test_hk_stock_code_is_zero_padded_to_five_digits_for_hkexnews(
+    conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
+) -> None:
+    """`wind_code` 里存的港股代码没有统一补零到披露易要求的 5 位（"0020" 不是
+    "00020"）——2026-09-29 实盘验收对商汤科技（0020.HK）实测发现
+    `prefix.do` 精确匹配 5 位代码，传 "0020" 会报"找不到 stockId"。"""
+    import json as _json
+
+    health, backlog = MemorySourceHealth(), Backlog(state)
+    seen_names: list[str] = []
+
+    def hk_handler(request: httpx.Request) -> httpx.Response:
+        if "prefix.do" in request.url.path:
+            seen_names.append(dict(request.url.params).get("name", ""))
+            return httpx.Response(
+                200,
+                text=(
+                    'cb({"more":"0","stockInfo":'
+                    '[{"stockId":1000000001,"code":"00020","name":"商汤科技"}]});'
+                ),
+            )
+        return httpx.Response(200, json={"recordCnt": 0, "result": _json.dumps([])})
+
+    hk_deps = HkexnewsLayerDeps(
+        adapter=HkexnewsAdapter(_http(hk_handler, "https://www1.hkexnews.hk")),
+        static_client=_http(
+            lambda r: httpx.Response(200, content=b"x"), "https://www1.hkexnews.hk"
+        ),
+        parser=MockDocumentParser(),
+        blob=LocalBlobStore(tmp_path),
+    )
+    sources = AnnouncementSources(hkexnews=hk_deps)
+    route = EntityRoute(entity_ref="0020.HK", short_name="商汤科技", market="HKEX")
+    report = _run(conn, health, backlog, sources, tmp_path, entities=[route])
+    assert report.failed == {}
+    assert seen_names == ["00020"]
+
+
+@pytest.mark.db
 def test_unsupported_market_is_skipped_with_a_warning_not_a_failure(
     conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
 ) -> None:

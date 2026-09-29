@@ -326,7 +326,11 @@ def _layers_for(
                     deps=hkexnews_deps,
                     index=index,
                     entity_ref=route.entity_ref,
-                    stock_code=route.entity_ref.split(".")[0],
+                    # 披露易的 prefix.do 按港交所标准 5 位代码精确匹配（"00020"，
+                    # 不是 "0020"）；wind_code 里存的代码没有统一补零，2026-09-29
+                    # 实盘验收对商汤科技（0020.HK）实测发现——zfill 只在不足 5 位
+                    # 时补零，5 位数代码原样通过。
+                    stock_code=route.entity_ref.split(".")[0].zfill(5),
                     since=since_dt,
                     until=until_dt,
                     tiers=tiers,
