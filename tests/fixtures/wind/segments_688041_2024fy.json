@@ -1,0 +1,323 @@
+{
+ "tool": "get_stock_fundamentals",
+ "question": "查询海光信息(688041.SH)2024年年报(报告期2024-12-31)按产品和按地区划分的主营业务收入、毛利和收入占比",
+ "payload": {
+  "data": {
+   "data": [
+    {
+     "columns": [
+      {
+       "name": "Wind代码",
+       "type": "string"
+      },
+      {
+       "name": "证券简称",
+       "type": "string"
+      },
+      {
+       "name": "2024年年报营业总收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2024年年报主营产品名称",
+       "type": "string"
+      },
+      {
+       "name": "2024年年报主营产品收入",
+       "type": "number",
+       "unit": "百万元"
+      },
+      {
+       "name": "2024年年报主营产品毛利",
+       "type": "number",
+       "unit": "百万元"
+      },
+      {
+       "name": "名次",
+       "type": "number"
+      },
+      {
+       "name": "2024年年报主营产品收入占比",
+       "type": "number",
+       "unit": "%"
+      },
+      {
+       "name": "2024年年报主营产品毛利占总营收收入比例",
+       "type": "number"
+      }
+     ],
+     "rows": [
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       "高端处理器",
+       9134.2991,
+       5818.3767,
+       1,
+       99.696,
+       0.635
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       "技术服务",
+       27.8491,
+       19.7621,
+       2,
+       0.304,
+       0.0022
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       3,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       4,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       5,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       6,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       7,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       8,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       9,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       91.6215,
+       null,
+       null,
+       null,
+       10,
+       null,
+       null
+      ]
+     ]
+    },
+    {
+     "columns": [
+      {
+       "name": "Wind代码",
+       "type": "string"
+      },
+      {
+       "name": "证券简称",
+       "type": "string"
+      },
+      {
+       "name": "2024年年报主营地区名称",
+       "type": "string"
+      },
+      {
+       "name": "2024年年报主营地区收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2024年年报主营地区毛利",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "名次",
+       "type": "number"
+      },
+      {
+       "name": "2024年年报营业总收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2024年年报主营地区收入占比",
+       "type": "number",
+       "unit": "%"
+      },
+      {
+       "name": "2024年年报主营地区毛利占总营收收入比例",
+       "type": "number"
+      }
+     ],
+     "rows": [
+      [
+       "688041.SH",
+       "海光信息",
+       "境内(含中国港澳台地区)",
+       91.6215,
+       58.3814,
+       1,
+       91.6215,
+       100,
+       0.6372
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       2,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       3,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       4,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       5,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       6,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       7,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       8,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       9,
+       91.6215,
+       null,
+       null
+      ],
+      [
+       "688041.SH",
+       "海光信息",
+       null,
+       null,
+       null,
+       10,
+       91.6215,
+       null,
+       null
+      ]
+     ]
+    }
+   ]
+  },
+  "error": null
+ }
+}
