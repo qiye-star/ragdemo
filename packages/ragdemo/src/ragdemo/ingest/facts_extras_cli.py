@@ -257,7 +257,8 @@ def crosscheck_holders_command() -> None:
     with psycopg.connect(_dsn()) as conn:
         report = crosscheck_holders(conn)
     click.echo(
-        f"核对 {report.checked} 名股东，与原文一致 {report.matched}，对不上 {len(report.mismatched)}"
+        f"核对 {report.checked} 名股东，与原文一致 {report.matched}，"
+        f"对不上 {len(report.mismatched)}"
     )
     for line in report.mismatched:
         click.echo(f"[对不上] {line}", err=True)
