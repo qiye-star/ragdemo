@@ -64,6 +64,8 @@ class IngestSummary:
     unreconciled_to_fin_fact: list[str] = field(default_factory=list)
     # 只拿到部分维度（Wind 对某个维度返回了空表）：已入库的部分是对的，缺的是覆盖缺口。
     partial_dimensions: dict[str, list[str]] = field(default_factory=dict)
+    # Wind 的占比列自相矛盾、已丢弃占比（收入照常入库）的 (实体/期别 → 维度)。
+    dropped_shares: dict[str, list[str]] = field(default_factory=dict)
     aborted: str | None = None
 
     def count(self, outcome: Outcome) -> None:
@@ -252,6 +254,8 @@ def ingest_segments(
                     )
                 else:
                     summary.unreconciled_to_fin_fact.append(key)
+                if parsed.dropped_share_dims:
+                    summary.dropped_shares[key] = sorted(parsed.dropped_share_dims)
                 missing = sorted({"product", "region"} - parsed.dimensions)
                 if missing:
                     summary.partial_dimensions[key] = missing

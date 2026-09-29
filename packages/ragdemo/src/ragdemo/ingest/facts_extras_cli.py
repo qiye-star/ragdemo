@@ -74,6 +74,10 @@ def echo_summary(summary: IngestSummary) -> None:
         click.echo(
             f"[维度缺失] {key}：Wind 未返回 {'/'.join(missing)}，已入库的部分不受影响", err=True
         )
+    for key, dims in summary.dropped_shares.items():
+        click.echo(
+            f"[占比已丢弃] {key}：{'/'.join(dims)} 的收入占比与收入对不上，只入库收入", err=True
+        )
     for key, reason in summary.rejected.items():
         click.echo(f"[拒绝] {key}: {reason}", err=True)
     if summary.aborted:

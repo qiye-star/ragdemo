@@ -208,15 +208,20 @@ def test_revenue_not_adding_up_to_the_total_is_rejected() -> None:
         )
 
 
-def test_share_disagreeing_with_revenue_over_total_is_rejected() -> None:
+def test_share_disagreeing_with_revenue_is_dropped_but_revenue_is_kept() -> None:
+    """占比是 Wind 的派生列、口径不稳（实测某地区占比 181%）——占比矛盾只丢占比，收入照常。"""
     d = _load("segments_688041_2024fy")["payload"]
     bad = copy.deepcopy(d)
     table = bad["data"]["data"][0]
     table["rows"][1][_idx(table, "主营产品收入占比")] = 20.0  # 技术服务占比应约 0.3%
-    with pytest.raises(WindResponseRejected):
-        WindSegmentsAdapter(MockMcpGateway()).parse(
-            _raw("segments_688041_2024fy", "688041.SH", "2024FY", bad)
-        )
+    parsed = WindSegmentsAdapter(MockMcpGateway()).parse(
+        _raw("segments_688041_2024fy", "688041.SH", "2024FY", bad)
+    )
+    assert parsed.dropped_share_dims == {"product"}
+    products = [r for r in parsed.rows if r.dimension == "product"]
+    assert all(r.share is None for r in products) and len(products) == 2
+    regions = [r for r in parsed.rows if r.dimension == "region"]
+    assert all(r.share is not None for r in regions)  # 另一个维度不受牵连
 
 
 def test_quarter_periods_are_not_supported_for_segments() -> None:
@@ -325,3 +330,14 @@ def test_gross_profit_never_comes_from_the_calculated_column() -> None:
     first_gp = table["rows"][0][gp_i]
     unit = table["columns"][gp_i]["unit"]
     assert parsed.rows[0].gross_profit == Decimal(str(first_gp)) * {"亿元": 10**8}[unit]
+
+
+def test_share_sum_over_100_percent_drops_shares_only() -> None:
+    d = _load("segments_688041_2024fy")["payload"]
+    bad = copy.deepcopy(d)
+    table = bad["data"]["data"][1]  # 地区表
+    table["rows"][0][_idx(table, "主营地区收入占比")] = 181.1297
+    parsed = WindSegmentsAdapter(MockMcpGateway()).parse(
+        _raw("segments_688041_2024fy", "688041.SH", "2024FY", bad)
+    )
+    assert parsed.dropped_share_dims == {"region"}

@@ -260,10 +260,13 @@ class WindSegmentsAdapter:
         rows: list[SegmentRow] = []
         seen_dims: set[str] = set()
         reconciled = True
+        dropped: set[str] = set()
         for table in _tables(raw.payload):
             _check_period_labels(table["columns"], year, _REPORT_WORD[kind])
-            table_rows, table_reconciled = _parse_segment_table(table, windcode)
+            table_rows, table_reconciled, shares_ok = _parse_segment_table(table, windcode)
             dim = table_rows[0].dimension if table_rows else None
+            if dim is not None and not shares_ok:
+                dropped.add(dim)
             if dim is not None:
                 if dim in seen_dims:
                     raise WindResponseRejected(
@@ -274,7 +277,9 @@ class WindSegmentsAdapter:
             reconciled = reconciled and table_reconciled
         if not rows:
             raise WindResponseRejected("没有解析出任何分部行")
-        return SegmentsParse(rows=rows, reconciled_internally=reconciled)
+        return SegmentsParse(
+            rows=rows, reconciled_internally=reconciled, dropped_share_dims=frozenset(dropped)
+        )
 
 
 @dataclass(frozen=True)
@@ -282,6 +287,9 @@ class SegmentsParse:
     rows: list[SegmentRow]
     # 每张表都带总收入列、且收入之和与占比都对上了；否则调用方必须靠 fin_fact 对账。
     reconciled_internally: bool
+    # 占比列与"收入÷总收入"对不上（或之和超过 100%）的维度：占比是 Wind 的派生列、口径不稳
+    # （实测 688041 2026H1 地区占比 181%），丢掉占比（置 None），收入本身照常对账、照常入库。
+    dropped_share_dims: frozenset[str] = frozenset()
 
     @property
     def dimensions(self) -> frozenset[str]:
@@ -318,7 +326,9 @@ def _find(
     ]
 
 
-def _parse_segment_table(table: Mapping[str, Any], windcode: str) -> tuple[list[SegmentRow], bool]:
+def _parse_segment_table(
+    table: Mapping[str, Any], windcode: str
+) -> tuple[list[SegmentRow], bool, bool]:
     """按列名的**含义**（结尾的关键字）认列，而不是整句匹配：Wind 每次给的列集合都不同
     （2026-09-29 实测：有时没有占比列、有时没有总收入列、有时列名里嵌了公司简称、
     有时把"产品"写成"项目"、还夹带"计算得到的毛利"这类派生列）。"""
@@ -377,19 +387,23 @@ def _parse_segment_table(table: Mapping[str, Any], windcode: str) -> tuple[list[
     names = [s.name for s in rows]
     if len(set(names)) != len(names):
         raise WindResponseRejected(f"{dim}：分部名称重复 {names}")
-    return rows, _check_segments(rows, total, dim)
+    reconciled, shares_ok = _check_segments(rows, total, dim)
+    if not shares_ok:
+        rows = [replace(r, share=None) for r in rows]
+    return rows, reconciled, shares_ok
 
 
-def _check_segments(rows: Sequence[SegmentRow], total: Decimal | None, dim: str) -> bool:
-    """有总收入列就在响应内部对账（收入之和、每行占比），对不上抛拒绝；没有总收入列
-    返回 False（只做占比之和的下限检查），由调用方拿 `fin_fact` 营收对账。"""
+def _check_segments(
+    rows: Sequence[SegmentRow], total: Decimal | None, dim: str
+) -> tuple[bool, bool]:
+    """返回 (响应内部已对账, 占比可信)。有总收入列就核对收入之和（对不上抛拒绝——收入错了
+    整份不能要）；占比对不上只让占比不可信（调用方丢掉占比），不牵连收入。"""
     if not rows:
-        return False
+        return False, True
     shares = [s.share for s in rows if s.share is not None]
-    if sum(shares, Decimal(0)) > Decimal("1.001"):
-        raise WindResponseRejected(f"{dim}：收入占比之和 {sum(shares, Decimal(0))} 超过 100%")
+    shares_ok = sum(shares, Decimal(0)) <= Decimal("1.001")
     if total is None or total <= 0:
-        return False
+        return False, shares_ok
     listed = sum(s.revenue for s in rows)
     if abs(listed - total) / total > _TOTAL_TOLERANCE:
         raise WindResponseRejected(
@@ -397,10 +411,8 @@ def _check_segments(rows: Sequence[SegmentRow], total: Decimal | None, dim: str)
         )
     for s in rows:
         if s.share is not None and abs(s.revenue / total - s.share) > _SHARE_TOLERANCE:
-            raise WindResponseRejected(
-                f"{dim}/{s.name}：占比 {s.share} 与 收入÷总收入 {s.revenue / total:.5f} 不吻合"
-            )
-    return True
+            shares_ok = False
+    return True, shares_ok
 
 
 def check_against_revenue(
