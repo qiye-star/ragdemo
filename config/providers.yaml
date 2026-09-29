@@ -32,3 +32,16 @@ siliconflow:
     max_attempts: 4
     backoff_base_s: 1.0
   cost_per_call_cents: 0
+
+deepseek:
+  # 生成模型（表格描述等，阶段 3.1）。base_url 是生产域名，仅供限流 / 配额参数的唯一来源；
+  # 实际连接地址由 MODEL_BASE_URL 指向回环反向代理（infra/docker-compose.yml 的 8086 端口），
+  # 密钥（MODEL_API_KEY）只在代理层，由代理以 Bearer 头注入。
+  base_url: https://api.deepseek.com
+  rate_limit_qpm: 120
+  daily_quota: 20000
+  timeout_s: 60
+  retry:
+    max_attempts: 3
+    backoff_base_s: 2.0
+  cost_per_call_cents: 0

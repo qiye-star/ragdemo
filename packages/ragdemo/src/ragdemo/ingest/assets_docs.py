@@ -44,7 +44,8 @@ from ragdemo.ingest.snapshot import record_blob_snapshot, record_snapshot
 from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.confidence import table_looks_closed
 from ragdemo.parse.config import ChunkConfig
-from ragdemo.parse.describe import DescriptionRejected, MockTableDescriber, TableDescriber
+from ragdemo.parse.describe import DescriptionRejected, TableDescriber
+from ragdemo.parse.describer_factory import build_describer
 from ragdemo.parse.router import (
     check_monthly_budget,
     load_active_policy,
@@ -456,7 +457,7 @@ def doc_blocks_loaded(
     document_writer: ResourceParam[DocumentWriter],
 ) -> int:
     cfg = ChunkConfig()
-    describer = MockTableDescriber()
+    describer = build_describer(load_config())
     total = 0
     for item in doc_prepared:
         doc = item.doc
@@ -589,7 +590,7 @@ def tier_c_reparse(
     ensure_budget(conn, now=now, cap_cny=cfg.monthly_budget_cny)  # 月度总预算，先于 C 档预算
     month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
     month_end = _next_month(month_start)
-    describer = MockTableDescriber()
+    describer = build_describer(load_config())
     chunk_cfg = ChunkConfig()
     reparsed = 0
 

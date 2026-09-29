@@ -93,6 +93,8 @@ services:
       - "127.0.0.1:8083:8083"
       - "127.0.0.1:8084:8084"
       - "127.0.0.1:8085:8085"
+      # 2026-09-29：DeepSeek（表格描述等生成任务）反向代理端口，同一个模式，Bearer 由 addon 注入。
+      - "127.0.0.1:8086:8086"
     # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
     # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
     # /policy/addon.py`，这里只追加三个 --mode：显式声明 regular@8080（保留
@@ -118,6 +120,8 @@ services:
       - reverse:https://mcp.wind.com.cn@8084
       - --mode
       - reverse:https://api-mcp.51ifind.com:8643@8085
+      - --mode
+      - reverse:https://api.deepseek.com@8086
     restart: unless-stopped
 
 volumes:

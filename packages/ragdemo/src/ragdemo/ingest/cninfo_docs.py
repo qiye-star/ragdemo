@@ -14,7 +14,7 @@ CLI 自己构造指向 `www.cninfo.com.cn` / `static.cninfo.com.cn` 的真实客
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -39,7 +39,7 @@ from ragdemo.ingest.documents import DocumentWriter, DocumentWriteResult
 from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, LayerReport, ParseTier, parse_tier
 from ragdemo.ingest.snapshot import record_blob_snapshot, record_snapshot
 from ragdemo.parse.config import ChunkConfig
-from ragdemo.parse.describe import MockTableDescriber
+from ragdemo.parse.describe import MockTableDescriber, TableDescriber
 from ragdemo.parse.textin import DocumentParser, PageBudget
 from ragdemo_core.blob import BlobStore
 
@@ -160,6 +160,7 @@ class CninfoLayerDeps:
     static_client: HttpClient  # 指向 static.cninfo.com.cn
     parser: DocumentParser
     blob: BlobStore
+    describer: TableDescriber = field(default_factory=MockTableDescriber)
 
 
 def run_cninfo_layer(
@@ -219,7 +220,7 @@ def run_cninfo_layer(
 
     writer = DocumentWriter(conn, ingest_run_id=ingest_run_id, source="cninfo")
     chunk_cfg = ChunkConfig()
-    describer = MockTableDescriber()
+    describer = deps.describer
     pending: list[tuple[NormalizedDocument, int]] = []  # (待解析文档, 对应目录行 id)
 
     for ref in refs.values():

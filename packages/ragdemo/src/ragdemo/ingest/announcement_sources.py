@@ -29,6 +29,7 @@ from ragdemo.ingest.announcements import AnnouncementSources
 from ragdemo.ingest.cninfo_docs import CninfoLayerDeps
 from ragdemo.ingest.edgar_index import EdgarLayerDeps
 from ragdemo.ingest.hkexnews_docs import HkexnewsLayerDeps
+from ragdemo.parse.describer_factory import build_describer
 from ragdemo.parse.textin import DocumentParser, MockDocumentParser, TextInParser
 from ragdemo_core.blob import LocalBlobStore
 
@@ -69,6 +70,7 @@ def _http_client(provider: str, base_url: str, *, user_agent: str | None = None)
 def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
     blob = LocalBlobStore(cfg.blob_root)
     parser = _parser_for(cfg)
+    describer = build_describer(cfg)
 
     cninfo = None
     cninfo_ua = os.environ.get(CNINFO_USER_AGENT_ENV, "").strip()
@@ -82,6 +84,7 @@ def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
             ),
             parser=parser,
             blob=blob,
+            describer=describer,
         )
 
     ifind = (
@@ -98,6 +101,7 @@ def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
         static_client=hkexnews_client,
         parser=parser,
         blob=blob,
+        describer=describer,
     )
 
     edgar = None
@@ -112,6 +116,7 @@ def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
             ),
             parser=parser,
             blob=blob,
+            describer=describer,
         )
 
     return AnnouncementSources(cninfo=cninfo, ifind=ifind, hkexnews=hkexnews, edgar=edgar)

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.config import load_config
 from ragdemo.ingest.assets_docs import (
     build_chunks_and_descriptions,
     prepare_documents,
@@ -26,7 +27,7 @@ from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier, parse_tier, 
 from ragdemo.ingest.pdf_pages import pdf_page_count
 from ragdemo.ingest.writer import UnknownEntityRef
 from ragdemo.parse.config import ChunkConfig
-from ragdemo.parse.describe import MockTableDescriber
+from ragdemo.parse.describer_factory import build_describer
 from ragdemo.parse.textin import DocumentParser, PageBudget
 from ragdemo_core.blob import BlobNotFound, BlobStore
 
@@ -167,7 +168,7 @@ def run_parse_pending(
         return report
 
     chunk_cfg = ChunkConfig()
-    describer = MockTableDescriber()
+    describer = build_describer(load_config())
 
     for row in candidates:
         if budget.exhausted:

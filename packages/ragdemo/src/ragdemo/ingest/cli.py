@@ -64,7 +64,8 @@ from ragdemo.ingest.parse_pending import run_parse_pending
 from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
-from ragdemo.parse.describe import MockTableDescriber, TableDescriber
+from ragdemo.parse.describe import TableDescriber
+from ragdemo.parse.describer_factory import build_describer
 from ragdemo.parse.textin import (
     XPARSE_PARAMS,
     DocumentParser,
@@ -215,7 +216,7 @@ def docs_ingest(
         raise click.ClickException("manifest 里没有匹配的公告，检查 --select-title / --manifest")
 
     chunk_cfg = ChunkConfig()
-    describer = MockTableDescriber()
+    describer = build_describer(_load_config())
 
     if not yes:
         _dry_run(
@@ -315,7 +316,7 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
     cfg = _load_config()
     blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
     chunk_cfg = ChunkConfig()
-    describer = MockTableDescriber()
+    describer = build_describer(_load_config())
 
     with psycopg.connect(_dsn()) as conn:
         row = conn.execute(

@@ -27,6 +27,12 @@ def _dsn_for(database: str) -> str:
     return f"{base}/{database}"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试永远不该在用户 shell 里恰好导出了 MODEL_BASE_URL 时去调真实模型（要钱、结果不确定）。"""
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+
+
 @pytest.fixture
 def temp_db() -> Iterator[str]:
     """创建一个随机命名的空库，测试结束后强制删除。"""

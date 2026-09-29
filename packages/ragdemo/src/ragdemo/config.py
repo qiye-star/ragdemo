@@ -26,6 +26,8 @@ DEFAULT_MAX_PAGES_PER_RUN = 500
 # 后可互换，但换模型是数据回填决定，不是这里该猜的事）。
 DEFAULT_SILICONFLOW_EMBED_MODEL = "BAAI/bge-m3"
 DEFAULT_SILICONFLOW_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+DEFAULT_MODEL_NAME = "deepseek-chat"
+DEFAULT_DESCRIBE_PROMPT = "v2"
 
 # 环境变量里"真"的拼写变体。没有出现在这里的一律按 False 处理——
 # 包括空字符串（未设置等价于默认值 False，而不是报错）。
@@ -51,6 +53,10 @@ class RagdemoConfig:
     siliconflow_embed_model: str
     siliconflow_rerank_model: str
     monthly_budget_cny: Decimal = DEFAULT_MONTHLY_BUDGET_CNY
+    # 生成模型（表格描述等，阶段 3.1）。地址指向回环反向代理；不设置则用 Mock 描述器。
+    model_base_url: str | None = None
+    model_name: str = DEFAULT_MODEL_NAME
+    describe_prompt: str = DEFAULT_DESCRIBE_PROMPT
 
     def validate(self) -> None:
         if self.textin_max_pages_per_run <= 0:
@@ -151,6 +157,9 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
         siliconflow_embed_model=siliconflow_embed_model,
         siliconflow_rerank_model=siliconflow_rerank_model,
         monthly_budget_cny=monthly_budget_cny,
+        model_base_url=source.get("MODEL_BASE_URL") or None,
+        model_name=source.get("MODEL_NAME") or DEFAULT_MODEL_NAME,
+        describe_prompt=source.get("DESCRIBE_PROMPT_VERSION") or DEFAULT_DESCRIBE_PROMPT,
     )
     cfg.validate()
     return cfg
