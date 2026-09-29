@@ -17,6 +17,7 @@ from ragdemo.adapters.wind import (
 )
 from ragdemo.config import load_config
 from ragdemo.ingest.facts_extras_cli import (
+    crosscheck_facts_command,
     crosscheck_holders_command,
     fx_command,
     holders_command,
@@ -109,3 +110,4 @@ facts_group.add_command(segments_command)
 facts_group.add_command(verify_stage2_command)
 facts_group.add_command(crosscheck_holders_command)
 facts_group.add_command(prices_command)
+facts_group.add_command(crosscheck_facts_command)

@@ -45,3 +45,61 @@ def test_period_of_title_covers_both_quarter_spellings() -> None:
     assert period_of_title("2025年半年度报告摘要") == "2025H1"
     assert period_of_title("2024年年度报告") == "2024FY"
     assert period_of_title("关于2024年年度报告的专项说明") is None
+
+
+# --- 财务事实 vs 报告原文 -------------------------------------------------------------
+
+from ragdemo.ingest.stage2_crosscheck import FactCheck, find_report_value  # noqa: E402
+
+REPORT_TABLE = [
+    (
+        1,
+        "| 项目 | 本报告期 | 年初至报告期末 |\n|---|---|---|\n"
+        "| 营业收入 | 4,025,739,773.97 | 9,489,974,831.12 |\n"
+        "| 归属于上市公司股东的扣<br>除非经常性损益的净利润 | 726,691,836.97 | 1,816,705,304.64 |\n"
+        "| 归属于上市公司股东的净利润 | 759,994,598.37 | 1,961,446,439.52 |",
+    ),
+    (
+        8,
+        "| 项目 | 2025 年前三季度 |\n|---|---|\n| 其中:营业收入 | 9,489,974,831.12 |\n"
+        "| 研发费用 | 1,000,000,000.00 |",
+    ),
+]
+
+
+def test_find_report_value_picks_the_cell_closest_to_the_fact() -> None:
+    labels = ("营业收入", "其中:营业收入")
+    value, page = find_report_value(REPORT_TABLE, labels, Decimal("9489970000")) or (None, None)
+    assert value == Decimal("9489974831.12")  # 累计列而不是本报告期列
+    assert page in (1, 8)
+
+
+def test_find_report_value_matches_the_whole_row_label_only() -> None:
+    """ "归属于上市公司股东的扣除非经常性损益的净利润"不能被当成"归属于上市公司股东的净利润"。"""
+    labels = ("归属于上市公司股东的净利润",)
+    value, _ = find_report_value(REPORT_TABLE, labels, Decimal("1961450000")) or (None, None)
+    assert value == Decimal("1961446439.52")
+    other, _ = find_report_value(REPORT_TABLE, labels, Decimal("1816700000")) or (None, None)
+    assert other is not None and other != Decimal("1816705304.64")  # 扣非行没有被认作
+
+
+def test_find_report_value_none_when_the_row_is_absent() -> None:
+    assert find_report_value(REPORT_TABLE, ("合同负债",), Decimal(1)) is None
+
+
+def _check(fact: str, report: str | None) -> FactCheck:
+    return FactCheck(
+        "CN.1",
+        "2025Q3",
+        "revenue_total",
+        Decimal(fact),
+        None if report is None else Decimal(report),
+        "t",
+        1,
+    )
+
+
+def test_fact_check_tolerance_covers_wind_rounding_but_not_a_real_discrepancy() -> None:
+    assert _check("9489970000", "9489974831.12").matched  # Wind 亿元 4 位小数 ≈ ±5000 元
+    assert not _check("9489970000", "9490000000").matched  # 差 3 万元：不是取整误差
+    assert not _check("9489970000", None).matched  # 找不到 = 没核对上，不算通过

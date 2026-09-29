@@ -22,7 +22,7 @@ from ragdemo.adapters.wind_structured import WindHoldersAdapter, WindSegmentsAda
 from ragdemo.config import load_config
 from ragdemo.ingest.price_backfill import backfill_prices, tushare_codes
 from ragdemo.ingest.price_sources_build import build_price_sources
-from ragdemo.ingest.stage2_crosscheck import crosscheck_holders
+from ragdemo.ingest.stage2_crosscheck import crosscheck_facts, crosscheck_holders
 from ragdemo.ingest.stage2_verify import verify_stage2
 from ragdemo.ingest.structured_extras import (
     HOLDER_KINDS,
@@ -306,3 +306,32 @@ def prices_command(since: str, until: str, entity_refs: tuple[str, ...], yes: bo
         click.echo(f"[失败] {code}: {reason}", err=True)
     if report.failed:
         raise click.ClickException(f"{len(report.failed)} 个实体未能回填（冷却过后重跑即可）")
+
+
+@click.command("crosscheck-facts")
+@click.option("--show", default=0, type=int, help="列出前 N 条已核对一致的数字及其出处页码")
+def crosscheck_facts_command(show: int) -> None:
+    """财务事实的独立核对：fin_fact vs 已解析的定期报告原文表格（容差 6000 元，覆盖 Wind 的
+    四位小数取整）。找不到科目行的如实记为"原文里没找到"，不算通过；有一处数字对不上非零退出。"""
+    with psycopg.connect(_dsn()) as conn:
+        checks = crosscheck_facts(conn)
+    matched = [c for c in checks if c.matched]
+    missing = [c for c in checks if c.report_value is None]
+    wrong = [c for c in checks if c.report_value is not None and not c.matched]
+    click.echo(
+        f"核对 {len(checks)} 个数字：与原文一致 {len(matched)}，原文里没找到该科目 {len(missing)}，"
+        f"对不上 {len(wrong)}"
+    )
+    for c in matched[:show]:
+        click.echo(
+            f"  一致 {c.entity_id} {c.period} {c.metric_id}: 库 {c.fact_value} ≈ 原文 "
+            f"{c.report_value}（《{c.doc_title}》第 {c.page} 页）"
+        )
+    for c in wrong:
+        click.echo(
+            f"[对不上] {c.entity_id} {c.period} {c.metric_id}: 库 {c.fact_value} vs 原文 "
+            f"{c.report_value}（《{c.doc_title}》第 {c.page} 页）",
+            err=True,
+        )
+    if wrong:
+        raise SystemExit(1)
