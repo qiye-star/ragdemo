@@ -41,7 +41,7 @@ from ragdemo.dataapi.sample import (
     SampleDocument,
     SampleFact,
 )
-from ragdemo.metrics.derived import prior_year_period, yoy
+from ragdemo.metrics.derived import derive
 
 
 def _visible(known_at: datetime, superseded_at: datetime | None, as_of: datetime) -> bool:
@@ -143,15 +143,8 @@ class MockDataApi:
         period: str,
     ) -> DerivedValue | None:
         require_as_of(as_of)
-        if kind != "yoy":
-            raise ValueError(f"未知的派生类型 {kind!r}（契约 v1 只有 yoy）")
-        current = self.query_fin_fact(entity_id, metric_id, as_of=as_of, period=period)
-        if not current:
-            return None
-        base = self.query_fin_fact(
-            entity_id, metric_id, as_of=as_of, period=prior_year_period(period)
-        )
-        return yoy(current[0], base[0] if base else None)
+        facts = {f.period: f for f in self.query_fin_fact(entity_id, metric_id, as_of=as_of)}
+        return derive(kind, facts, period, metric_id=metric_id)
 
     def get_prices(
         self, entity_id: str, *, start: date, end: date, as_of: datetime

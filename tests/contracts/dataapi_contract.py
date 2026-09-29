@@ -177,7 +177,7 @@ class DataApiContract:
             self.make_api().query_derived(
                 HYGON,
                 "revenue_total",
-                "ttm",  # type: ignore[arg-type]
+                "mom",  # type: ignore[arg-type]
                 as_of=LATER,
                 period="2024Q3",
             )
@@ -391,3 +391,33 @@ class DataApiContract:
         assert api.get_fx_rate("EUR", "CNY", on=date(2025, 3, 28), as_of=LATER) is None
         assert api.get_fx_rate("USD", "CNY", on=date(2025, 6, 1), as_of=LATER) is None  # 过期
         assert api.get_fx_rate("USD", "CNY", on=date(2025, 3, 1), as_of=LATER) is None  # 尚无
+
+    # --- 环比 / TTM（v1.2，阶段 2.5）------------------------------------------------
+
+    def test_qoq_and_ttm_without_the_needed_periods_give_no_number_and_say_why(self) -> None:
+        api = self.make_api()
+        for kind in ("qoq", "ttm"):
+            d = api.query_derived(
+                HYGON,
+                "revenue_total",
+                kind,
+                as_of=AFTER_CORRECTION,
+                period="2024Q3",
+            )
+            assert d is not None and d.kind == kind
+            assert d.value is None and d.note, "样例里没有 2024Q2 / 2023FY，不该编数"
+            assert d.inputs and d.inputs[0].period == "2024Q3"
+
+    def test_qoq_and_ttm_are_none_when_the_period_is_not_known_yet(self) -> None:
+        api = self.make_api()
+        for kind in ("qoq", "ttm"):
+            assert (
+                api.query_derived(
+                    HYGON,
+                    "revenue_total",
+                    kind,
+                    as_of=BEFORE_Q3,
+                    period="2024Q3",
+                )
+                is None
+            )

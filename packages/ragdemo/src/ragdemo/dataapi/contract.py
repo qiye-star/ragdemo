@@ -23,7 +23,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 CONTRACT_VERSION = "1.2"
 
-DerivedKind = Literal["yoy"]  # v1 只有累计同比；环比 / TTM 在阶段 2.5 作为增量加入
+DerivedKind = Literal["yoy", "qoq", "ttm"]  # v1 只有累计同比；v1.2 加入环比与 TTM
 
 
 def require_as_of(as_of: datetime) -> None:
@@ -317,7 +317,8 @@ class DataApi(Protocol):
         as_of: datetime,
         period: str,
     ) -> DerivedValue | None:
-        """代码计算的派生值（v1：累计同比）。本期数据查不到返回 None。"""
+        """代码计算的派生值（累计同比 yoy；v1.2 加环比 qoq、滚动 12 个月 ttm）。
+        本期数据查不到返回 None；上期缺失 / 为负等算不出来时 value 为 None 并在 note 里写明原因。"""
         ...
 
     def get_prices(
