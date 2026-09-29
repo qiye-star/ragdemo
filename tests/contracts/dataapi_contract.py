@@ -220,8 +220,12 @@ class DataApiContract:
         hits = self.make_api().search_blocks("DCU", as_of=T_FUTURE_DOC + timedelta(days=1), k=50)
         assert 41 in {h.block_id for h in hits}
 
-    def test_search_for_private_content_finds_nothing(self) -> None:
-        assert self.make_api().search_blocks(PRIVATE_MARKER, as_of=LATER) == []
+    def test_search_for_private_content_never_returns_it(self) -> None:
+        """混合检索（BM25 + 向量）会用相近的公共块补足结果，所以不断言"空"——断言的是
+        私有块与它的文本一个都不会出现。"""
+        hits = self.make_api().search_blocks(PRIVATE_MARKER, as_of=LATER, k=50)
+        assert all(h.block_id != 31 and h.doc_id != 3 for h in hits)
+        assert all(PRIVATE_MARKER not in (h.preview or "") for h in hits)
 
     def test_search_hides_text_of_sources_that_cannot_show_raw(self) -> None:
         hits = self.make_api().search_blocks("DCU", as_of=AFTER_CORRECTION, k=50)
@@ -231,10 +235,12 @@ class DataApiContract:
 
     def test_search_filters_and_limit(self) -> None:
         api = self.make_api()
+        # 过滤是硬约束（混合检索可能用同范围内的相近块补足，所以只断言"不越界"）。
         only_quarterly = api.search_blocks("DCU", as_of=LATER, doc_types=["quarterly"], k=50)
-        assert {h.doc_id for h in only_quarterly} == {1}
+        assert 1 in {h.doc_id for h in only_quarterly}
+        assert {h.doc_id for h in only_quarterly} <= {1, 5}  # 样例里只有这两份季报
         sugon = api.search_blocks("服务器", as_of=LATER, entity_ids=[SUGON], k=50)
-        assert {h.doc_id for h in sugon} == {5}
+        assert sugon and {h.doc_id for h in sugon} == {5}
         assert len(api.search_blocks("DCU", as_of=LATER, k=1)) == 1
         with pytest.raises(ValueError):
             api.search_blocks("DCU", as_of=LATER, k=0)
