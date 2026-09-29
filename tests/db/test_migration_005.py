@@ -87,6 +87,9 @@ def test_bitemporal_registry_lists_every_point_in_time_table(
         "core.metric_source_map_version",
         "core.ai_revenue_rule",
         "core.announcement_index",
+        "core.shareholder_holding",
+        "core.segment_revenue",
+        "core.fx_rate",
     }
 
 
