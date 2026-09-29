@@ -44,7 +44,7 @@ from ragdemo.adapters.local_manifest import (
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.ingest.announcement_sources import WIND_DOCS_URL_ENV, build_announcement_sources
+from ragdemo.ingest.announcement_sources import build_announcement_sources
 from ragdemo.ingest.announcements import (
     DOWNLOAD_ENTITIES,
     entity_routes,
@@ -73,7 +73,6 @@ from ragdemo.parse.textin import (
     artifact_keys,
     param_fingerprint,
 )
-from ragdemo.quality.announcement_coverage import check_announcement_coverage
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
@@ -708,47 +707,6 @@ def docs_parse_pending(
             f"（{report.parsed_pages} 页），无块 {report.stored_unparsed}，"
             f"预算跳过 {report.skipped_budget}"
         )
-
-
-# --- docs check-coverage（公告双源接入计划 Task 11）--------------------------
-
-
-@docs_group.command("check-coverage")
-@click.option("--since", required=True, help="起始日期 YYYY-MM-DD")
-@click.option("--until", required=True, help="截止日期 YYYY-MM-DD（含）")
-def docs_check_coverage(since: str, until: str) -> None:
-    """A 股公告漏收核对：按月问 Wind，与巨潮目录比对，把疑似漏收清单写进
-    `quality.quality_metric`（`announcement_coverage_gap`）。不写目录——这只是
-    一次核对，不是又一条数据入库路径。港股/美股走官方渠道，不在这个核对范围内。
-    """
-    since_d = date.fromisoformat(since)
-    until_d = date.fromisoformat(until)
-    cfg = _load_config()
-    blob = LocalBlobStore(cfg.blob_root)
-    sources = build_announcement_sources(cfg)
-    if sources.wind is None:
-        raise click.ClickException(
-            f"环境变量 {WIND_DOCS_URL_ENV} 未设置——漏收核对靠 Wind 做参照物，"
-            "没有这一层就没有可比对的对象。"
-        )
-
-    with psycopg.connect(_dsn()) as conn:
-        gaps = check_announcement_coverage(
-            conn,
-            wind=sources.wind,
-            blob=blob,
-            since=since_d,
-            until=until_d,
-            partition_date=until_d,
-            ingest_run_id="cli:docs-check-coverage",
-        )
-
-    if not gaps:
-        click.echo("未发现疑似漏收")
-        return
-    click.echo(f"疑似漏收 {len(gaps)} 份：")
-    for gap in gaps:
-        click.echo(f"  - {gap.entity_ref} {gap.publish_date} {gap.title}")
 
 
 # --- docs announcements（公告双源接入计划 Task 12）----------------------------

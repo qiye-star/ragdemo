@@ -131,5 +131,31 @@ Capability.ANNOUNCEMENTS_CN: (
 - 巨潮资讯网上线官方公开 API 文档且条款与现在假设的不同（例如要求签约、
   限制缓存）：按新条款重新登记 `core.source_registry`，不再套用"官方公开
   记录，无需商务确认"这条判断。
-- Wind 或 iFind 未来能给出完整正文（而非摘录/片段）：重新评估是否作为
-  第二层，参照 `Capability.FINANCIALS` 目前"只有一层"的保守设计。
+- iFind 未来能给出完整正文（而非片段）：重新评估是否作为第二层，参照
+  `Capability.FINANCIALS` 目前"只有一层"的保守设计。
+
+## 三次修订：移除 Wind 降级层（2026-09-29，公告双源接入计划 Task 13 实盘验收）
+
+`Capability.ANNOUNCEMENTS_CN` 的 `wind-docs` 层（`get_company_announcements`）
+从路由里删除，`ANNOUNCEMENTS_VERIFY`（Wind 漏收核对）整条能力一并删除：
+
+```python
+Capability.ANNOUNCEMENTS_CN: (
+    LayerSpec("cninfo", service="cninfo-http", source="cninfo", degraded=False),
+    LayerSpec("ifind-notice", service="ifind-news", source="ifind",
+              degraded=True, full_text=False),
+),
+```
+
+原因不是代码缺陷，是账号服务范围的误判：实盘验收对全部 A 股实体跑漏收核对时，
+`get_company_announcements` 报"账户积分余额不足"——核实后这个账号购买的 Wind
+MCP 服务范围只覆盖财务、行情、股东、分部数据，不包含公告检索。`vserver_
+financial_docs` 这个服务在 API 层面确实存在、工具列表里也确实列着
+`get_company_announcements`，但调用即报额度不足，说明账号侧从未开通这项。
+
+Task 6 当初把它接进来时只做过 Mock 契约测试与一次性的 Live 探测（列出工具、
+验证鉴权），没有在真实业务窗口下（跨月、跨全部 A 股实体）实际使用过，这类
+额度类问题只有在这个量级的真实调用下才会暴露——不是"探测通过"能覆盖的。
+
+**推翻条件**：账号方确认 Wind MCP 服务范围已包含公告检索且额度充足：重新评估
+是否作为 `ANNOUNCEMENTS_CN` 的降级层。

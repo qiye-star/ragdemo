@@ -1,4 +1,10 @@
-"""公告路由编排（公告双源接入计划 Task 9）：按市场分派、A 股三层降级、待补、游标。"""
+"""公告路由编排（公告双源接入计划 Task 9）：按市场分派、A 股两层降级、待补、游标。
+
+A 股原本设计了三层（cninfo → wind-docs → ifind-notice），2026-09-29 实盘验收时
+发现这个账号的 Wind 服务范围只覆盖财务/行情/股东/分部数据、不含公告，
+`wind-docs` 这一层已从路由里移除（ADR-0013 修订），现在只有 cninfo → ifind-notice
+两层。
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,6 @@ from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.ifind_notice import IfindNoticeAdapter
 from ragdemo.adapters.mcp_gateway import ToolSpec
 from ragdemo.adapters.mock.mcp_gateway import MockMcpGateway
-from ragdemo.adapters.wind_docs import WindDocsAdapter
 from ragdemo.ingest.announcements import (
     DOWNLOAD_ENTITIES,
     AnnouncementRunReport,
@@ -117,15 +122,6 @@ def _cninfo_down() -> Any:  # noqa: ANN401
     return handler
 
 
-def _wind(payload: Any = None, failing: bool = False) -> WindDocsAdapter:  # noqa: ANN401
-    gateway = MockMcpGateway(
-        tools=[ToolSpec("get_company_announcements", "", {})],
-        responses={} if failing else {"get_company_announcements": payload},
-        failing={"get_company_announcements": "额度不足"} if failing else {},
-    )
-    return WindDocsAdapter(gateway)
-
-
 def _ifind(payload: Any = None, failing: bool = False) -> IfindNoticeAdapter:  # noqa: ANN401
     gateway = MockMcpGateway(
         tools=[ToolSpec("search_notice", "", {})],
@@ -144,18 +140,6 @@ CN_ANNOUNCEMENT = {
     "adjunctUrl": "finalpage/2026-09-15/1.PDF",
     "adjunctType": "PDF",
 }
-WIND_ANNOUNCEMENT = {
-    "data": {
-        "items": [
-            {
-                "title": "海光信息:2026年半年度报告",
-                "date": "2026-08-14",
-                "url": "https://m.wind.com.cn#/NA/AAAA1111",
-                "content": "摘录",
-            }
-        ]
-    }
-}
 IFIND_ANNOUNCEMENT = {
     "data": (
         '[{"公告标题": "海光信息：董事会决议公告", "公告片段内容": "摘录", "日期": "2026-08-20"}]'
@@ -170,10 +154,9 @@ def _route_cn() -> EntityRoute:
 def _sources(
     *,
     cninfo: CninfoLayerDeps | None = None,
-    wind: WindDocsAdapter | None = None,
     ifind: IfindNoticeAdapter | None = None,
 ) -> AnnouncementSources:
-    return AnnouncementSources(cninfo=cninfo, wind=wind, ifind=ifind)
+    return AnnouncementSources(cninfo=cninfo, ifind=ifind)
 
 
 def _run(
@@ -228,43 +211,22 @@ def test_cninfo_healthy_writes_index_and_advances_watermark(
 
 
 @pytest.mark.db
-def test_cninfo_down_falls_back_to_wind_and_backlogs_full_text(
+def test_cninfo_down_falls_back_to_ifind_and_backlogs_full_text(
     conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
 ) -> None:
     health, backlog = MemorySourceHealth(), Backlog(state)
     deps = _cninfo_deps(_cninfo_down(), LocalBlobStore(tmp_path))
     report = _run(
-        conn, health, backlog, _sources(cninfo=deps, wind=_wind(WIND_ANNOUNCEMENT)), tmp_path
+        conn, health, backlog, _sources(cninfo=deps, ifind=_ifind(IFIND_ANNOUNCEMENT)), tmp_path
     )
     conn.commit()
     assert report.indexed == 1 and "688041.SH" in report.backlogged
     row = conn.execute(
         "SELECT source, has_full_text FROM core.announcement_index WHERE superseded_at IS NULL"
     ).fetchone()
-    assert row == ("wind", False)
+    assert row == ("ifind", False)
     (item,) = backlog.open_items(Capability.ANNOUNCEMENTS_CN)
     assert item.entity_ref == "688041.SH"
-
-
-@pytest.mark.db
-def test_wind_down_too_falls_back_to_ifind(
-    conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
-) -> None:
-    health, backlog = MemorySourceHealth(), Backlog(state)
-    deps = _cninfo_deps(_cninfo_down(), LocalBlobStore(tmp_path))
-    report = _run(
-        conn,
-        health,
-        backlog,
-        _sources(cninfo=deps, wind=_wind(failing=True), ifind=_ifind(IFIND_ANNOUNCEMENT)),
-        tmp_path,
-    )
-    conn.commit()
-    assert report.indexed == 1
-    row = conn.execute(
-        "SELECT source FROM core.announcement_index WHERE superseded_at IS NULL"
-    ).fetchone()
-    assert row == ("ifind",)
 
 
 @pytest.mark.db
@@ -341,15 +303,15 @@ def test_entity_routes_picks_the_right_code_column_per_market(conn: psycopg.Conn
     assert len(routes) == 3
 
 
-CN_ANNOUNCEMENT_SAME_AS_WIND = {
+CN_ANNOUNCEMENT_SAME_AS_IFIND = {
     "secCode": "688041",
     "orgId": "9900048365",
     "announcementId": "2",
-    # 与 WIND_ANNOUNCEMENT 归一化后同一份公告：同实体、同日、去掉"海光信息:"
-    # 前缀后标题相同——巨潮恢复时应该取代 wind 那一行，而不是并存两条。
-    "announcementTitle": "海光信息:2026年半年度报告",
-    "announcementTime": 1786636800000,  # 2026-08-14 00:00 北京时间
-    "adjunctUrl": "finalpage/2026-08-14/2.PDF",
+    # 与 IFIND_ANNOUNCEMENT 归一化后同一份公告：同实体、同日、去掉"海光信息:"/
+    # "海光信息："前缀后标题相同——巨潮恢复时应该取代 ifind 那一行，而不是并存两条。
+    "announcementTitle": "海光信息:董事会决议公告",
+    "announcementTime": 1787155200000,  # 2026-08-20 00:00 北京时间
+    "adjunctUrl": "finalpage/2026-08-20/2.PDF",
     "adjunctType": "PDF",
 }
 
@@ -364,7 +326,7 @@ def test_recovery_refetches_backlog_window_and_supersedes_degraded_rows(
         conn,
         health,
         backlog,
-        _sources(cninfo=down_deps, wind=_wind(WIND_ANNOUNCEMENT)),
+        _sources(cninfo=down_deps, ifind=_ifind(IFIND_ANNOUNCEMENT)),
         tmp_path,
         partition_date=date(2026, 9, 15),
         backfill_since=date(2026, 8, 1),
@@ -379,14 +341,14 @@ def test_recovery_refetches_backlog_window_and_supersedes_degraded_rows(
         if "hisAnnouncement" in request.url.path:
             body = dict(httpx.QueryParams(request.content.decode()))
             seen_since.append(body.get("seDate", ""))
-        return _cninfo_ok([CN_ANNOUNCEMENT_SAME_AS_WIND])(request)
+        return _cninfo_ok([CN_ANNOUNCEMENT_SAME_AS_IFIND])(request)
 
     ok_deps = _cninfo_deps(capturing_handler, LocalBlobStore(tmp_path))
     _run(
         conn,
         health,
         backlog,
-        _sources(cninfo=ok_deps, wind=_wind(WIND_ANNOUNCEMENT)),
+        _sources(cninfo=ok_deps, ifind=_ifind(IFIND_ANNOUNCEMENT)),
         tmp_path,
         partition_date=later,
         backfill_since=date(2026, 8, 1),
@@ -397,10 +359,10 @@ def test_recovery_refetches_backlog_window_and_supersedes_degraded_rows(
     assert any(s.startswith("2026-08") for s in seen_since), (
         "巨潮恢复后要把区间补回到最早的缺口起点，不是只从上次成功的 partition_date 继续"
     )
-    wind_row = conn.execute(
-        "SELECT superseded_at IS NOT NULL FROM core.announcement_index WHERE source = 'wind'"
+    ifind_row = conn.execute(
+        "SELECT superseded_at IS NOT NULL FROM core.announcement_index WHERE source = 'ifind'"
     ).fetchone()
-    assert wind_row == (True,), "巨潮的行到达后，wind 那条降级行要被取代"
+    assert ifind_row == (True,), "巨潮的行到达后，ifind 那条降级行要被取代"
 
 
 @pytest.mark.db

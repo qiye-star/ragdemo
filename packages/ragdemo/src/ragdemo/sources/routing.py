@@ -22,7 +22,6 @@ class Capability(StrEnum):
     ANNOUNCEMENTS_CN = "announcements_cn"
     ANNOUNCEMENTS_HK = "announcements_hk"
     ANNOUNCEMENTS_US = "announcements_us"
-    ANNOUNCEMENTS_VERIFY = "announcements_verify"
 
 
 @dataclass(frozen=True)
@@ -50,17 +49,13 @@ ROUTES: Mapping[Capability, tuple[LayerSpec, ...]] = {
             "ifind-financials", service="ifind-stock", source="ifind", degraded=False, writes=False
         ),
     ),
-    # A 股：巨潮资讯网为主（官方指定披露平台，能给全文），Wind/iFind 降级只写目录，
+    # A 股：巨潮资讯网为主（官方指定披露平台，能给全文），iFind 降级只写目录，
     # 全文进待补清单（2026-09-28 公告双源接入计划，修订 ADR-0013 的"只有一层"）。
+    # Wind 曾经也是一层（`wind-financial-docs`/`get_company_announcements`），
+    # 但 2026-09-29 实盘验收发现这个账号的 Wind 服务范围只覆盖财务/行情/股东/
+    # 分部数据，不包含公告——移除，不是代码缺陷（ADR-0013 修订）。
     Capability.ANNOUNCEMENTS_CN: (
         LayerSpec("cninfo", service="cninfo-http", source="cninfo", degraded=False),
-        LayerSpec(
-            "wind-docs",
-            service="wind-financial-docs",
-            source="wind",
-            degraded=True,
-            full_text=False,
-        ),
         LayerSpec(
             "ifind-notice", service="ifind-news", source="ifind", degraded=True, full_text=False
         ),
@@ -73,15 +68,6 @@ ROUTES: Mapping[Capability, tuple[LayerSpec, ...]] = {
     # 美股 + 已在 SEC 报送的 ADR（台积电、日月光、阿里巴巴、百度、金山云）：EDGAR，单层。
     Capability.ANNOUNCEMENTS_US: (
         LayerSpec("edgar", service="edgar-http", source="edgar", degraded=False),
-    ),
-    Capability.ANNOUNCEMENTS_VERIFY: (
-        LayerSpec(
-            "wind-coverage",
-            service="wind-financial-docs",
-            source="wind",
-            degraded=False,
-            writes=False,
-        ),
     ),
 }
 

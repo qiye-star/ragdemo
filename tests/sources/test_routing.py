@@ -21,7 +21,6 @@ def test_duties_match_adr_0012_and_0013() -> None:
         Capability.ANNOUNCEMENTS_CN: "cninfo-http",
         Capability.ANNOUNCEMENTS_HK: "hkexnews-http",
         Capability.ANNOUNCEMENTS_US: "edgar-http",
-        Capability.ANNOUNCEMENTS_VERIFY: "wind-financial-docs",
     }
     assert [s.name for s in ROUTES[Capability.PRICE_DAILY]] == [
         "tushare-mcp",
@@ -30,7 +29,6 @@ def test_duties_match_adr_0012_and_0013() -> None:
     ]
     assert [s.name for s in ROUTES[Capability.ANNOUNCEMENTS_CN]] == [
         "cninfo",
-        "wind-docs",
         "ifind-notice",
     ]
 
@@ -41,7 +39,7 @@ def test_financials_never_fall_back_to_another_source() -> None:
 
 
 def test_announcement_fallbacks_never_claim_full_text() -> None:
-    """A 股降级层（Wind/iFind）只给摘录/片段，进不了要求全文的文档管线。"""
+    """A 股降级层（iFind）只给摘录/片段，进不了要求全文的文档管线。"""
     primary, *fallbacks = ROUTES[Capability.ANNOUNCEMENTS_CN]
     assert primary.full_text
     assert fallbacks and all(not spec.full_text for spec in fallbacks)
@@ -57,7 +55,6 @@ def test_hk_and_us_announcements_have_no_fallback_layer() -> None:
 
 def test_verification_layers_never_write() -> None:
     assert not any(s.writes for s in ROUTES[Capability.FINANCIALS_VERIFY])
-    assert not any(s.writes for s in ROUTES[Capability.ANNOUNCEMENTS_VERIFY])
 
 
 def test_cross_provider_fallbacks_are_marked_degraded() -> None:

@@ -1,15 +1,19 @@
 """公告路由编排（公告双源接入计划 Task 9）：按市场分派到 A 股 / 港股 / 美股三条
-能力，A 股走 `SourceRouter` 的三层降级（cninfo → wind-docs → ifind-notice），
-待补清单与游标管理都在这里，各层本身（`run_cninfo_layer` 等）不关心跨层的事。
+能力，A 股走 `SourceRouter` 的两层降级（cninfo → ifind-notice），待补清单与游标
+管理都在这里，各层本身（`run_cninfo_layer` 等）不关心跨层的事。
 
 区间语义：游标 `core.ingest_watermark(source_id=f"announcements:{group}:{entity_ref}")`
 记"这个实体处理到哪一天了"；下一次的 `since` = 游标次日，没有游标就用 `backfill_since`
 （首次回填）。待补清单里如果这个实体还有未解决项，`since` 改用待补项的 `since`
 （更早）——巨潮恢复后要把缺口一次性补上，不是只从游标继续。
 
-只有 A 股的主源（cninfo）成功才推进游标、解决待补；降级层（wind/ifind）成功只写
+只有 A 股的主源（cninfo）成功才推进游标、解决待补；降级层（ifind）成功只写
 目录、把全文记入待补，**不推进游标**——全文还没到，不能假装这段时间已经处理完。
 港股 / 美股没有降级层，失败直接进待补、本实体本次跳过。
+
+Wind 曾经也是 A 股的一层降级来源（`get_company_announcements`），2026-09-29 实盘
+验收时发现这个账号的 Wind 服务范围只覆盖财务/行情/股东/分部数据，不含公告，
+已从这里的路由移除（同步改 ADR-0013、`sources/routing.py`）。
 """
 
 from __future__ import annotations
@@ -23,7 +27,6 @@ import psycopg
 
 from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.ifind_notice import IfindNoticeAdapter
-from ragdemo.adapters.wind_docs import WindDocsAdapter
 from ragdemo.ingest.announcement_index import IndexOutcome, IndexWriter
 from ragdemo.ingest.cninfo_docs import CninfoLayerDeps, run_cninfo_layer
 from ragdemo.ingest.edgar_index import EdgarLayerDeps, run_edgar_layer
@@ -90,8 +93,7 @@ def entity_routes(conn: psycopg.Connection) -> list[EntityRoute]:
     直接跳过，不是错误。
     """
     rows = conn.execute(
-        "SELECT name_short, name_full, market, tushare_code, wind_code, edgar_cik"
-        "  FROM core.entity"
+        "SELECT name_short, name_full, market, tushare_code, wind_code, edgar_cik  FROM core.entity"
     ).fetchall()
     routes: list[EntityRoute] = []
     for name_short, name_full, market, tushare_code, wind_code, edgar_cik in rows:
@@ -106,7 +108,9 @@ def entity_routes(conn: psycopg.Connection) -> list[EntityRoute]:
                 )
             )
         elif market in _MARKET_GROUP and _MARKET_GROUP[market] == "cn" and tushare_code:
-            routes.append(EntityRoute(entity_ref=tushare_code, short_name=short_name, market=market))
+            routes.append(
+                EntityRoute(entity_ref=tushare_code, short_name=short_name, market=market)
+            )
         elif market == "HKEX" and wind_code:
             routes.append(EntityRoute(entity_ref=wind_code, short_name=short_name, market=market))
     return routes
@@ -115,7 +119,6 @@ def entity_routes(conn: psycopg.Connection) -> list[EntityRoute]:
 @dataclass(frozen=True)
 class AnnouncementSources:
     cninfo: CninfoLayerDeps | None = None
-    wind: WindDocsAdapter | None = None
     ifind: IfindNoticeAdapter | None = None
     hkexnews: HkexnewsLayerDeps | None = None
     edgar: EdgarLayerDeps | None = None
@@ -132,49 +135,7 @@ class AnnouncementRunReport:
     warnings: list[str] = field(default_factory=list)
 
 
-def _months_in(since: date, until: date) -> list[date]:
-    months = []
-    year, month = since.year, since.month
-    while (year, month) <= (until.year, until.month):
-        months.append(date(year, month, 1))
-        month += 1
-        if month > 12:
-            month, year = 1, year + 1
-    return months
-
-
 _NEW_ROW_OUTCOMES = frozenset({IndexOutcome.INSERTED, IndexOutcome.SUPERSEDED_DEGRADED})
-
-
-def _wind_degraded(
-    wind: WindDocsAdapter,
-    index: IndexWriter,
-    blob: BlobStore,
-    *,
-    route: EntityRoute,
-    since: date,
-    until: date,
-    ingest_run_id: str,
-) -> int:
-    """按月问、逐月都可能重复命中同一份公告（尤其查询窗口横跨多个月时）——
-    `IndexWriter.write` 本身会跳过重复的 (source, source_ref)，这里只数真正
-    新增的行，不是"处理过几条"。"""
-    ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=until)
-    written = 0
-    for month in _months_in(since, until):
-        raw = wind.fetch_month(ctx, short_name=route.short_name, month=month)
-        record_snapshot(index.conn, raw, ingest_run_id=ingest_run_id, blob=blob)
-        for entry in wind.parse_entries(
-            raw,
-            entity_ref=route.entity_ref,
-            short_names=[route.short_name],
-            since=since,
-            until=until,
-        ):
-            outcome, _ = index.write(entry)
-            if outcome in _NEW_ROW_OUTCOMES:
-                written += 1
-    return written
 
 
 def _ifind_degraded(
@@ -330,24 +291,6 @@ def _layers_for(
                         download=download,
                         ingest_run_id=ingest_run_id,
                         dry_run=False,
-                    ),
-                )
-            )
-        wind = sources.wind
-        if wind is not None:
-            layers.append(
-                Layer(
-                    "wind-docs",
-                    "wind",
-                    True,
-                    lambda: _wind_degraded(
-                        wind,
-                        index,
-                        blob,
-                        route=route,
-                        since=since,
-                        until=until,
-                        ingest_run_id=ingest_run_id,
                     ),
                 )
             )

@@ -1,13 +1,17 @@
 """按环境变量拼出 `AnnouncementSources`（公告双源接入计划 Task 12）。
 
 `ingest/definitions.py`（真实 Dagster 资源）与 `ingest/cli.py`（`docs announcements`
-的手动一次性调用）都要构造同一套五个来源层——单独抽出来，两处各自的判断规则
+的手动一次性调用）都要构造同一套来源层——单独抽出来，两处各自的判断规则
 才不会跑偏。
 
-哪一层的凭据/地址没配，哪一层就是 `None`（cninfo/wind/ifind/edgar）——与
+哪一层的凭据/地址没配，哪一层就是 `None`（cninfo/ifind/edgar）——与
 `ingest/definitions.py::price_sources_resource` 同一条规则：本地开发与测试
 不该被逼着配齐全部来源才能跑通。披露易（hkexnews）例外：公开网站，不需要
 任何凭据，恒不为 `None`。
+
+Wind 曾经是 A 股公告的第四个来源（`WindDocsAdapter`），2026-09-29 实盘验收时
+发现这个账号的 Wind 服务范围只覆盖财务/行情/股东/分部数据，不含公告——已移除
+（同步改 `ingest/announcements.py`、`sources/routing.py`、ADR-0013）。
 """
 
 from __future__ import annotations
@@ -20,7 +24,6 @@ from ragdemo.adapters.hkexnews import HkexnewsAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.ifind_notice import IfindNoticeAdapter
 from ragdemo.adapters.mcp_gateway import gateway_client_from_env
-from ragdemo.adapters.wind_docs import WindDocsAdapter
 from ragdemo.config import RagdemoConfig
 from ragdemo.ingest.announcements import AnnouncementSources
 from ragdemo.ingest.cninfo_docs import CninfoLayerDeps
@@ -31,7 +34,6 @@ from ragdemo_core.blob import LocalBlobStore
 
 CNINFO_USER_AGENT_ENV = "RAGDEMO_CNINFO_USER_AGENT"
 EDGAR_USER_AGENT_ENV = "EDGAR_USER_AGENT"
-WIND_DOCS_URL_ENV = "RAGDEMO_WIND_DOCS_MCP_URL"
 # `.env.example` 早就留了这个名字，注释写的就是"公告片段检索"——与
 # `Capability.ANNOUNCEMENTS_CN` 的 ifind-notice 层（service="ifind-news"）
 # 说的是同一件事，只是在这次接线之前从没有代码真正读过它。
@@ -82,11 +84,6 @@ def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
             blob=blob,
         )
 
-    wind = (
-        WindDocsAdapter(gateway_client_from_env(url_env=WIND_DOCS_URL_ENV, provider="wind-docs"))
-        if _configured(WIND_DOCS_URL_ENV)
-        else None
-    )
     ifind = (
         IfindNoticeAdapter(
             gateway_client_from_env(url_env=IFIND_URL_ENV, provider="ifind-notice", sessions=True)
@@ -117,6 +114,4 @@ def build_announcement_sources(cfg: RagdemoConfig) -> AnnouncementSources:
             blob=blob,
         )
 
-    return AnnouncementSources(
-        cninfo=cninfo, wind=wind, ifind=ifind, hkexnews=hkexnews, edgar=edgar
-    )
+    return AnnouncementSources(cninfo=cninfo, ifind=ifind, hkexnews=hkexnews, edgar=edgar)
