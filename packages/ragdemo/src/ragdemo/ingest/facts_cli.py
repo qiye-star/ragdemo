@@ -16,6 +16,7 @@ from ragdemo.adapters.wind import (
     quarter_ends_back,
 )
 from ragdemo.config import load_config
+from ragdemo.ingest.facts_extras_cli import fx_command, holders_command, segments_command
 from ragdemo.ingest.wind_facts import a_share_windcodes, ingest_wind_facts
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
@@ -93,3 +94,8 @@ def ingest_command(
             f"{len(set(report.failed) | set(report.backlogged))} 个实体未能入库，见上方原因"
             "（进了待补清单的，下次运行会自动先补）"
         )
+
+
+facts_group.add_command(fx_command)
+facts_group.add_command(holders_command)
+facts_group.add_command(segments_command)
