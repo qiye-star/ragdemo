@@ -272,3 +272,78 @@ def test_same_source_row_with_full_text_is_never_downgraded_by_a_later_listing_o
     conn.commit()
     outcome, again = writer.write(_entry(has_full_text=False))
     assert outcome is IndexOutcome.SKIPPED and again == first
+
+
+@pytest.mark.db
+def test_same_day_full_text_supplement_does_not_violate_the_time_order(
+    conn: psycopg.Connection,
+) -> None:
+    """回归（2026-09-29 补下载海光公告时实测）：当天发布的公告，日精度 known_at 是当日
+    23:59:59.999999，此刻 `now` 更早——补全文取代旧行不能把 superseded_at 写成 `now`
+    （违反 superseded_at > known_at）。"""
+    today = date(2026, 9, 28)
+    morning = datetime(2026, 9, 28, 1, 0, tzinfo=UTC)  # 早于当日日精度 known_at
+    listing = _entry(
+        source_ref="9", publish_date=today, known_at=known_at_for_day(today), has_full_text=False
+    )
+    _writer(conn, morning).write(listing)
+    outcome, _ = _writer(conn, morning).write(replace_full_text(listing))
+    conn.commit()
+    assert outcome is IndexOutcome.SUPERSEDED_DEGRADED
+    old, new = conn.execute(
+        "SELECT superseded_at, known_at FROM core.announcement_index ORDER BY index_id"
+    ).fetchall()
+    assert old[0] == old[1] + timedelta(microseconds=1)  # 新旧同一 known_at，旧行紧随其后被取代
+    assert new[0] is None
+
+
+def replace_full_text(entry: IndexEntry) -> IndexEntry:
+    from dataclasses import replace
+
+    return replace(entry, has_full_text=True)
+
+
+@pytest.mark.db
+def test_only_one_row_is_visible_at_any_as_of_after_a_same_source_supplement(
+    conn: psycopg.Connection,
+) -> None:
+    """同来源补全文后，任何 as_of 都只看到一行（不是补全文那一刻之前两行并存）。"""
+    from ragdemo_core.db.session import as_of_session
+
+    day = date(2026, 8, 14)
+    known = known_at_for_day(day)
+    listing = _entry(source_ref="10", publish_date=day, known_at=known, has_full_text=False)
+    _writer(conn, NOW).write(listing)
+    _writer(conn, NOW + timedelta(days=30)).write(replace_full_text(listing))
+    conn.commit()
+    for as_of in (known + timedelta(hours=1), NOW + timedelta(days=10), NOW + timedelta(days=60)):
+        with as_of_session(conn, as_of):
+            rows = conn.execute("SELECT has_full_text FROM asof.announcement_index").fetchall()
+        assert rows == [(True,)], as_of
+
+
+@pytest.mark.db
+def test_primary_arriving_before_the_degraded_rows_known_at_supersedes_without_violation(
+    conn: psycopg.Connection,
+) -> None:
+    today = date(2026, 9, 28)
+    morning = datetime(2026, 9, 28, 1, 0, tzinfo=UTC)
+    degraded = _entry(
+        source="ifind",
+        source_ref="i1",
+        publish_date=today,
+        known_at=known_at_for_day(today),
+        has_full_text=False,
+    )
+    _writer(conn, morning).write(degraded)
+    outcome, _ = _writer(conn, morning).write(
+        _entry(
+            source="cninfo",
+            source_ref="c1",
+            publish_date=today,
+            known_at=known_at_for_day(today),
+            has_full_text=True,
+        )
+    )
+    conn.commit()
+    assert outcome is IndexOutcome.SUPERSEDED_DEGRADED

@@ -66,6 +66,9 @@ def normalize_title(title: str, short_names: list[str] | tuple[str, ...]) -> str
     return text
 
 
+_EPSILON = timedelta(microseconds=1)
+
+
 class IndexWriter:
     def __init__(
         self, conn: psycopg.Connection, *, ingest_run_id: str, now: Callable[[], datetime]
@@ -102,11 +105,12 @@ class IndexWriter:
         entity_id = self._entity_id(entry.entity_ref)
         with self.conn.transaction():
             existing = self.conn.execute(
-                "SELECT index_id, has_full_text FROM core.announcement_index"
+                "SELECT index_id, has_full_text, known_at FROM core.announcement_index"
                 " WHERE source = %s AND source_ref = %s AND superseded_at IS NULL",
                 (entry.source, entry.source_ref),
             ).fetchone()
             supersede_same_source: int | None = None
+            same_source_known_at: datetime | None = None
             if existing is not None:
                 if entry.has_full_text and not existing[1]:
                     # 同一来源的同一份公告，之前只建了目录（如实体当时不在下载范围内），
@@ -115,30 +119,42 @@ class IndexWriter:
                     # 而 core.document 里其实已经有了。反过来（旧行有全文、新写入
                     # 只是目录）不降级，仍然 SKIPPED。
                     supersede_same_source = int(existing[0])
+                    same_source_known_at = existing[2]
                 else:
                     return IndexOutcome.SKIPPED, int(existing[0])
 
             title_norm = normalize_title(entry.title, self._short_names(entity_id))
             match = self.conn.execute(
-                "SELECT index_id, has_full_text FROM core.announcement_index"
+                "SELECT index_id, has_full_text, known_at FROM core.announcement_index"
                 " WHERE entity_id = %s AND publish_date = %s AND title_norm = %s"
                 "   AND superseded_at IS NULL",
                 (entity_id, entry.publish_date, title_norm),
             ).fetchone()
 
             outcome = IndexOutcome.INSERTED
-            if supersede_same_source is not None:
+            if supersede_same_source is not None and same_source_known_at is not None:
+                # 新旧两行是同一份公告、同一个 known_at：旧行只是"还没有全文"的占位，
+                # 在 known_at 之后 1 微秒即被取代，任何 as_of 下都只看到一行。
+                # 不能取 `now`：日精度来源当天发布的公告 known_at 是当日 23:59:59.999999，
+                # `now` 更早会违反 superseded_at > known_at；取了 `now` 而 known_at 更早时
+                # 又会让 [known_at, now) 之间新旧两行同时可见（2026-09-29 实测）。
                 self.conn.execute(
                     "UPDATE core.announcement_index SET superseded_at = %s,"
                     " source_note = %s WHERE index_id = %s",
-                    (self._now(), "同来源补全文，由带全文的新行取代", supersede_same_source),
+                    (
+                        same_source_known_at + _EPSILON,
+                        "同来源补全文，由带全文的新行取代",
+                        supersede_same_source,
+                    ),
                 )
                 outcome = IndexOutcome.SUPERSEDED_DEGRADED
             elif match is not None:
-                match_id, match_full_text = match
+                match_id, match_full_text, match_known_at = match
                 if entry.has_full_text and not match_full_text:
-                    # 主源到达：取代已有的降级行。
-                    now = self._now()
+                    # 主源到达：取代已有的降级行。降级行在主源到达之前一直可见；主源到达
+                    # 时刻早于降级行自己的 known_at（当天发布、日精度上界还没到）时，
+                    # 至少取 known_at + 1 微秒以满足 superseded_at > known_at。
+                    now = max(self._now(), match_known_at + _EPSILON)
                     self.conn.execute(
                         "UPDATE core.announcement_index SET superseded_at = %s,"
                         " source_note = %s WHERE index_id = %s",
