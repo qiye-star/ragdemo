@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 import click
 import psycopg
@@ -19,6 +19,7 @@ from ragdemo.adapters.mcp_gateway import gateway_client_from_env
 from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
 from ragdemo.adapters.wind_structured import WindHoldersAdapter, WindSegmentsAdapter
 from ragdemo.config import load_config
+from ragdemo.ingest.stage2_verify import verify_stage2
 from ragdemo.ingest.structured_extras import (
     HOLDER_KINDS,
     SEGMENT_KINDS,
@@ -225,3 +226,24 @@ def segments_command(
             refresh=refresh,
         )
     echo_summary(summary)
+
+
+@click.command("verify-stage2")
+def verify_stage2_command() -> None:
+    """阶段二数据体检（只读库）：股东 / 分部 / 汇率的一致性、时点、溯源、可复现。
+    有任何 error 以非零码退出；warning（如分部没有对应期营收、未对账）只报告。"""
+    with psycopg.connect(_dsn()) as conn:
+        findings = verify_stage2(conn, as_of=datetime.now(UTC))
+        counts = {
+            t: conn.execute(f"SELECT count(*) FROM {t} WHERE superseded_at IS NULL").fetchone()
+            for t in ("core.shareholder_holding", "core.segment_revenue", "core.fx_rate")
+        }
+    click.echo(
+        "现行行数：" + "，".join(f"{t.split('.')[1]} {c[0] if c else 0}" for t, c in counts.items())
+    )
+    for f in findings:
+        click.echo(f"[{f.severity}] {f.check}: {f.message}", err=f.severity == "error")
+    errors = [f for f in findings if f.severity == "error"]
+    click.echo(f"错误 {len(errors)}，警告 {len(findings) - len(errors)}")
+    if errors:
+        raise SystemExit(1)

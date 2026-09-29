@@ -16,7 +16,12 @@ from ragdemo.adapters.wind import (
     quarter_ends_back,
 )
 from ragdemo.config import load_config
-from ragdemo.ingest.facts_extras_cli import fx_command, holders_command, segments_command
+from ragdemo.ingest.facts_extras_cli import (
+    fx_command,
+    holders_command,
+    segments_command,
+    verify_stage2_command,
+)
 from ragdemo.ingest.wind_facts import a_share_windcodes, ingest_wind_facts
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
@@ -99,3 +104,4 @@ def ingest_command(
 facts_group.add_command(fx_command)
 facts_group.add_command(holders_command)
 facts_group.add_command(segments_command)
+facts_group.add_command(verify_stage2_command)
