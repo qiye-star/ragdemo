@@ -11,14 +11,17 @@
 5. 汇率：数值落在各币种的合理区间（捕捉 100JPY / CNY/KRW 口径换算错误）、相邻交易日波动
    ≤ 5%（捕捉倒数写反）、相邻记录间隔 ≤ 12 天、且各币种对的交易日集合一致（CFETS 对所有
    币种同日公布，某一对独有的缺口就是漏取）；
-6. 复现：同一个 `as_of` 连续查两次，三张表的结果逐行完全一致。
+6. 复现：同一个 `as_of` 连续查两次，三张表的结果逐行完全一致；
+7. 财务事实（阶段 2.6）：每条 Wind 财务事实的 `known_at`（Wind 自报的"实际披露日期"）与公告目录
+   里该期定期报告的首次披露日（北京时间的日历日）一致——两个互相独立的来源互相印证；
+   累计口径下 `Q2` 即半年报（H1）。
 """
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from itertools import pairwise
 from typing import Literal
@@ -56,6 +59,7 @@ def verify_stage2(conn: psycopg.Connection, *, as_of: datetime) -> list[Finding]
     findings += _check_known_at(conn)
     findings += _check_snapshots(conn)
     findings += _check_fx(conn)
+    findings += _check_fin_fact_known_at(conn)
     findings += _check_reproducible(conn, as_of)
     return findings
 
@@ -194,6 +198,37 @@ def _check_fx(conn: psycopg.Connection) -> list[Finding]:
                         f"{base}/CNY 缺 {len(missing)} 个其它币种对都有的交易日，如 {min(missing)}",
                     )
                 )
+    return out
+
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _check_fin_fact_known_at(conn: psycopg.Connection) -> list[Finding]:
+    """财务事实的 known_at（Wind 自报披露日）对公告目录的首次披露日——按北京时间日历日比。"""
+    out: list[Finding] = []
+    rows = conn.execute(
+        "SELECT DISTINCT entity_id, period, known_at FROM core.fin_fact"
+        " WHERE superseded_at IS NULL AND source = 'wind' ORDER BY 1, 2"
+    ).fetchall()
+    for entity_id, period, known_at in rows:
+        key = f"{entity_id}/{period}"
+        disc = first_disclosure(conn, entity_id, str(period).replace("Q2", "H1"))
+        if disc is None:
+            out.append(
+                Finding(
+                    "warning", "fin_fact_known_at", f"{key}：公告目录里找不到该期报告，无法互证"
+                )
+            )
+        elif disc.known_at.astimezone(_CST).date() != known_at.astimezone(_CST).date():
+            out.append(
+                Finding(
+                    "error",
+                    "fin_fact_known_at",
+                    f"{key}：Wind 披露日 {known_at.astimezone(_CST).date()} ≠ 公告目录首次披露 "
+                    f"{disc.known_at.astimezone(_CST).date()}",
+                )
+            )
     return out
 
 

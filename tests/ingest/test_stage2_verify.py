@@ -172,3 +172,35 @@ def test_eleven_day_holiday_gap_is_fine_but_a_pair_specific_hole_is_not(
     assert any(
         "缺 1 个其它币种对都有的交易日" in e for e in _errors(verify_stage2(conn, as_of=NOW))
     )
+
+
+def _fin_fact(conn: psycopg.Connection, period: str, known_at: datetime) -> None:
+    conn.execute(
+        "INSERT INTO core.node_metric (metric_id, metric_name, metric_role, frequency,"
+        " source_type, definition, unit) VALUES ('revenue_total', '营业收入',"
+        " (enum_range(NULL::core.metric_role))[1], 'quarterly', 'filing', 'x', 'CNY')"
+        " ON CONFLICT DO NOTHING"
+    )
+    conn.execute(
+        "INSERT INTO core.fin_fact (entity_id, metric_id, period, period_end, value, unit,"
+        " currency, valid_from, known_at, source, ingest_run_id, snapshot_id) VALUES"
+        " ('CN.688041', 'revenue_total', %s, '2024-12-31', 1, 'CNY', 'CNY', '2024-12-31',"
+        " %s, 'wind', 't', %s)",
+        (period, known_at, _sid(conn)),
+    )
+    conn.commit()
+
+
+@pytest.mark.db
+def test_fin_fact_known_at_is_cross_checked_against_the_announcement_index(
+    conn: psycopg.Connection,
+) -> None:
+    _fin_fact(conn, "2024FY", DISCLOSED)  # 与目录首次披露同一天
+    assert _errors(verify_stage2(conn, as_of=NOW)) == []
+
+
+@pytest.mark.db
+def test_fin_fact_known_at_on_the_wrong_day_is_an_error(conn: psycopg.Connection) -> None:
+    _fin_fact(conn, "2024FY", DISCLOSED + timedelta(days=3))
+    errors = _errors(verify_stage2(conn, as_of=NOW))
+    assert any(e.startswith("fin_fact_known_at:") for e in errors)
