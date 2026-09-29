@@ -16,6 +16,7 @@ import psycopg
 from ragdemo.adapters.cfets import PAIRS, WINDOW_DAYS, CfetsAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.mcp_gateway import gateway_client_from_env
+from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
 from ragdemo.adapters.wind_structured import WindHoldersAdapter, WindSegmentsAdapter
 from ragdemo.config import load_config
 from ragdemo.ingest.structured_extras import (
@@ -69,6 +70,10 @@ def echo_summary(summary: IngestSummary) -> None:
         )
     for key in summary.unreconciled_to_fin_fact:
         click.echo(f"[未与 fin_fact 对账] {key}（库里没有该期营业收入）", err=True)
+    for key, missing in summary.partial_dimensions.items():
+        click.echo(
+            f"[维度缺失] {key}：Wind 未返回 {'/'.join(missing)}，已入库的部分不受影响", err=True
+        )
     for key, reason in summary.rejected.items():
         click.echo(f"[拒绝] {key}: {reason}", err=True)
     if summary.aborted:
@@ -111,9 +116,20 @@ def fx_command(since: str, until: str, yes: bool) -> None:
     "--recent", default=8, show_default=True, type=int, help="未指定 --period 时取最近几期"
 )
 @click.option("--refresh", is_flag=True, default=False, help="已有数据的期别也重取（检测追溯调整）")
+@click.option(
+    "--from-snapshots",
+    is_flag=True,
+    default=False,
+    help="不调用 Wind，用已留存的同问句响应重新解析入库（解析规则改进后省额度）",
+)
 @click.option("--yes", is_flag=True, default=False, help="真正调用 Wind 并写库；不传只 dry run")
 def holders_command(
-    entity_refs: tuple[str, ...], periods: tuple[str, ...], recent: int, refresh: bool, yes: bool
+    entity_refs: tuple[str, ...],
+    periods: tuple[str, ...],
+    recent: int,
+    refresh: bool,
+    from_snapshots: bool,
+    yes: bool,
 ) -> None:
     """前十大股东入 core.shareholder_holding；known_at 取该期定期报告的首次披露时刻。"""
     with psycopg.connect(_dsn()) as conn:
@@ -132,7 +148,11 @@ def holders_command(
                 f" 次；库里已有 {plan.already_present}；无披露记录跳过 {plan.skipped_no_disclosure}"
             )
             return
-        gateway = gateway_client_from_env(url_env=WIND_URL_ENV, provider="wind-mcp")
+        gateway = (
+            SnapshotReplayGateway(conn)
+            if from_snapshots
+            else gateway_client_from_env(url_env=WIND_URL_ENV, provider="wind-mcp")
+        )
         summary = ingest_holders(
             conn,
             adapter=WindHoldersAdapter(gateway),
@@ -154,9 +174,20 @@ def holders_command(
     "--recent", default=4, show_default=True, type=int, help="未指定 --period 时取最近几期"
 )
 @click.option("--refresh", is_flag=True, default=False, help="已有数据的期别也重取（检测追溯调整）")
+@click.option(
+    "--from-snapshots",
+    is_flag=True,
+    default=False,
+    help="不调用 Wind，用已留存的同问句响应重新解析入库（解析规则改进后省额度）",
+)
 @click.option("--yes", is_flag=True, default=False, help="真正调用 Wind 并写库；不传只 dry run")
 def segments_command(
-    entity_refs: tuple[str, ...], periods: tuple[str, ...], recent: int, refresh: bool, yes: bool
+    entity_refs: tuple[str, ...],
+    periods: tuple[str, ...],
+    recent: int,
+    refresh: bool,
+    from_snapshots: bool,
+    yes: bool,
 ) -> None:
     """主营构成入 core.segment_revenue；入库前与 fin_fact 营业收入对账，对不上的不入库。"""
     with psycopg.connect(_dsn()) as conn:
@@ -175,7 +206,11 @@ def segments_command(
                 f" 次；库里已有 {plan.already_present}；无披露记录跳过 {plan.skipped_no_disclosure}"
             )
             return
-        gateway = gateway_client_from_env(url_env=WIND_URL_ENV, provider="wind-mcp")
+        gateway = (
+            SnapshotReplayGateway(conn)
+            if from_snapshots
+            else gateway_client_from_env(url_env=WIND_URL_ENV, provider="wind-mcp")
+        )
         summary = ingest_segments(
             conn,
             adapter=WindSegmentsAdapter(gateway),

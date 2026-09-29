@@ -51,7 +51,8 @@ _LABEL_WORDS = {
     "Q3": ("三季报", "3季末"),
 }
 _PERIOD = re.compile(r"^(\d{4})(FY|H1|Q1|Q3)$")
-_DIMENSIONS = {"产品": "product", "地区": "region", "行业": "industry"}
+# "主营项目" 是 Wind 对产品/业务维度的另一种叫法（浪潮信息实测）。
+_SEG_WORDS = {"产品": "product", "项目": "product", "地区": "region", "行业": "industry"}
 
 _RATIO_TOLERANCE = Decimal("0.001")  # 隐含总股本一致性的额外容差（0.1%）
 _SHARE_TOLERANCE = Decimal("0.001")  # 分部占比与 收入÷总收入 的容差（0.1 个百分点）
@@ -251,70 +252,102 @@ class WindSegmentsAdapter:
     def known_at(self, record: Any) -> Any:  # noqa: ANN401
         raise NotImplementedError("分部数据的 known_at 由公告目录回填（period_disclosure）")
 
-    def parse(self, raw: RawResponse) -> list[SegmentRow]:
+    def parse(self, raw: RawResponse) -> SegmentsParse:
         windcode, period = str(raw.params["windcode"]), str(raw.params["period"])
         year, kind = _split_period(period)
         if kind not in ("FY", "H1"):
             raise WindResponseRejected(f"分部不支持期别 {period}")
-        prefix = rf"{year}年{_REPORT_WORD[kind]}(?:前\d+大)?"
-        out: list[SegmentRow] = []
+        rows: list[SegmentRow] = []
         seen_dims: set[str] = set()
+        reconciled = True
         for table in _tables(raw.payload):
-            columns = table["columns"]
-            dim = _dimension_of(columns, prefix)
-            if dim in seen_dims:
-                raise WindResponseRejected(f"维度 {dim} 出现了不止一张表")
-            seen_dims.add(dim)
-            out.extend(_parse_segment_table(table, prefix, dim, windcode))
-        if not out:
+            _check_period_labels(table["columns"], year, _REPORT_WORD[kind])
+            table_rows, table_reconciled = _parse_segment_table(table, windcode)
+            dim = table_rows[0].dimension if table_rows else None
+            if dim is not None:
+                if dim in seen_dims:
+                    raise WindResponseRejected(
+                        f"维度 {dim} 出现了不止一张表（Wind 重复返回了同一张）"
+                    )
+                seen_dims.add(dim)
+            rows.extend(table_rows)
+            reconciled = reconciled and table_reconciled
+        if not rows:
             raise WindResponseRejected("没有解析出任何分部行")
-        return out
+        return SegmentsParse(rows=rows, reconciled_internally=reconciled)
 
 
-def _dimension_of(columns: Sequence[Mapping[str, Any]], prefix: str) -> str:
-    found = {
-        _DIMENSIONS[m.group(1)]
-        for c in columns
-        if (m := re.match(rf"^{prefix}主营(产品|地区|行业)名称$", str(c.get("name", ""))))
-    }
-    if len(found) != 1:
-        raise WindResponseRejected(
-            f"无法确定维度，或列名期别与请求不符（应以 {prefix} 开头）：{sorted(found)}"
-        )
-    return next(iter(found))
+@dataclass(frozen=True)
+class SegmentsParse:
+    rows: list[SegmentRow]
+    # 每张表都带总收入列、且收入之和与占比都对上了；否则调用方必须靠 fin_fact 对账。
+    reconciled_internally: bool
+
+    @property
+    def dimensions(self) -> frozenset[str]:
+        return frozenset(r.dimension for r in self.rows)
 
 
-def _parse_segment_table(
-    table: Mapping[str, Any], prefix: str, dim: str, windcode: str
-) -> list[SegmentRow]:
-    columns = table["columns"]
-    word = {"product": "产品", "region": "地区", "industry": "行业"}[dim]
+_YEAR_PREFIX = re.compile(r"^(\d{4})年(年报|中报)")
 
-    def col(pattern: str, what: str) -> int:
-        return _column_index(columns, re.compile(f"^{prefix}{pattern}$"), what)
 
-    name_i = col(f"主营{word}名称", "名称")
-    rev_i = col(f"主营{word}收入", "收入")
-    share_i = col(f"主营{word}收入占比", "收入占比")
-    gp_hits = [
-        i for i, c in enumerate(columns) if re.match(f"^{prefix}主营{word}毛利$", str(c["name"]))
+def _check_period_labels(columns: Sequence[Mapping[str, Any]], year: str, word: str) -> None:
+    """列名里带期别的（`2024年年报…`）必须全部与请求一致，且至少要有一列带期别。"""
+    seen = False
+    for c in columns:
+        m = _YEAR_PREFIX.match(str(c.get("name", "")))
+        if m is None:
+            continue
+        seen = True
+        if (m.group(1), m.group(2)) != (year, word):
+            raise WindResponseRejected(
+                f"列名期别 {m.group(1)}年{m.group(2)} 与请求的 {year}年{word} 不符：{c.get('name')}"
+            )
+    if not seen:
+        raise WindResponseRejected("列名里没有任何期别字样，无法确认是请求的那一期")
+
+
+def _find(
+    columns: Sequence[Mapping[str, Any]], pattern: str, *, exclude: str | None = None
+) -> list[int]:
+    rx = re.compile(pattern)
+    return [
+        i
+        for i, c in enumerate(columns)
+        if rx.search(str(c.get("name", ""))) and not (exclude and exclude in str(c["name"]))
     ]
-    gp_i = gp_hits[0] if len(gp_hits) == 1 else None
+
+
+def _parse_segment_table(table: Mapping[str, Any], windcode: str) -> tuple[list[SegmentRow], bool]:
+    """按列名的**含义**（结尾的关键字）认列，而不是整句匹配：Wind 每次给的列集合都不同
+    （2026-09-29 实测：有时没有占比列、有时没有总收入列、有时列名里嵌了公司简称、
+    有时把"产品"写成"项目"、还夹带"计算得到的毛利"这类派生列）。"""
+    columns = table["columns"]
+    name_hits = _find(columns, r"主营(产品|项目|地区|行业)名称$")
+    if len(name_hits) != 1:
+        raise WindResponseRejected(f"应恰有一列主营XX名称，实际 {len(name_hits)} 列")
+    name_i = name_hits[0]
+    word = re.search(r"主营(产品|项目|地区|行业)名称$", str(columns[name_i]["name"]))
+    assert word is not None
+    w = word.group(1)
+    dim = _SEG_WORDS[w]
+
+    rev_hits = _find(columns, rf"主营{w}收入$")
+    if len(rev_hits) != 1:
+        raise WindResponseRejected(f"应恰有一列主营{w}收入，实际 {len(rev_hits)} 列")
+    rev_i = rev_hits[0]
+    share_hits = _find(columns, rf"主营{w}收入占比$")
+    gp_hits = _find(columns, rf"主营{w}毛利$", exclude="计算")  # 派生列 `计算得到的…毛利` 不读
+    total_hits = _find(columns, rf"(?:营业总收入|主营{w}总收入|主营收入合计)$")
     code_i = _column_index(columns, re.compile(r"^Wind代码$"), "Wind代码")
+
+    share_i = share_hits[0] if len(share_hits) == 1 else None
+    gp_i = gp_hits[0] if len(gp_hits) == 1 else None
+    total_i = total_hits[0] if total_hits else None
     rev_mult = _multiplier(columns[rev_i])
     gp_mult = _multiplier(columns[gp_i]) if gp_i is not None else None
-    if columns[share_i].get("unit") != "%":
+    if share_i is not None and columns[share_i].get("unit") != "%":
         raise WindResponseRejected("收入占比的单位应为 %")
-
-    # 总收入列：`主营XX总收入`（前 N 大之和）或 `营业总收入`；两者取有的，都没有就无法对账。
-    total_i = next(
-        (
-            i
-            for i, c in enumerate(columns)
-            if re.match(rf"^{prefix}(?:主营{word}总收入|营业总收入)$", str(c["name"]))
-        ),
-        None,
-    )
 
     rows: list[SegmentRow] = []
     total: Decimal | None = None
@@ -331,7 +364,7 @@ def _parse_segment_table(
         if revenue is None:
             raise WindResponseRejected(f"{seg}：有名称但没有收入")
         gross = _number(r[gp_i], f"{seg} 毛利") if gp_i is not None else None
-        pct = _number(r[share_i], f"{seg} 收入占比")
+        pct = _number(r[share_i], f"{seg} 收入占比") if share_i is not None else None
         rows.append(
             SegmentRow(
                 dimension=dim,
@@ -344,15 +377,19 @@ def _parse_segment_table(
     names = [s.name for s in rows]
     if len(set(names)) != len(names):
         raise WindResponseRejected(f"{dim}：分部名称重复 {names}")
-    _check_segments(rows, total, dim)
-    return rows
+    return rows, _check_segments(rows, total, dim)
 
 
-def _check_segments(rows: Sequence[SegmentRow], total: Decimal | None, dim: str) -> None:
+def _check_segments(rows: Sequence[SegmentRow], total: Decimal | None, dim: str) -> bool:
+    """有总收入列就在响应内部对账（收入之和、每行占比），对不上抛拒绝；没有总收入列
+    返回 False（只做占比之和的下限检查），由调用方拿 `fin_fact` 营收对账。"""
     if not rows:
-        return
+        return False
+    shares = [s.share for s in rows if s.share is not None]
+    if sum(shares, Decimal(0)) > Decimal("1.001"):
+        raise WindResponseRejected(f"{dim}：收入占比之和 {sum(shares, Decimal(0))} 超过 100%")
     if total is None or total <= 0:
-        raise WindResponseRejected(f"{dim}：响应没有可用于对账的总收入列，整份拒绝")
+        return False
     listed = sum(s.revenue for s in rows)
     if abs(listed - total) / total > _TOTAL_TOLERANCE:
         raise WindResponseRejected(
@@ -363,6 +400,7 @@ def _check_segments(rows: Sequence[SegmentRow], total: Decimal | None, dim: str)
             raise WindResponseRejected(
                 f"{dim}/{s.name}：占比 {s.share} 与 收入÷总收入 {s.revenue / total:.5f} 不吻合"
             )
+    return True
 
 
 def check_against_revenue(

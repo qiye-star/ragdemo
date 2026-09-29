@@ -155,7 +155,7 @@ def test_period_phrase() -> None:
 
 
 def _segments(name: str, code: str, period: str) -> list[SegmentRow]:
-    return WindSegmentsAdapter(MockMcpGateway()).parse(_raw(name, code, period))
+    return WindSegmentsAdapter(MockMcpGateway()).parse(_raw(name, code, period)).rows
 
 
 def test_segments_parse_both_dimensions_and_convert_units_to_yuan() -> None:
@@ -274,3 +274,54 @@ def test_column_spelled_without_the_top_ten_words_is_accepted() -> None:
         _raw("holders_688041_2024fy", code, "2024Q3", alt)
     )
     assert len(result.rows) == 10
+
+
+def _parse_segments(name: str, code: str, period: str) -> Any:  # noqa: ANN401
+    return WindSegmentsAdapter(MockMcpGateway()).parse(_raw(name, code, period))
+
+
+def test_response_with_totals_is_reconciled_internally() -> None:
+    assert _parse_segments("segments_688041_2024fy", "688041.SH", "2024FY").reconciled_internally
+
+
+def test_column_names_may_embed_the_company_name() -> None:
+    """2026-09-29 实测：同一个问句，列名有时写成 `2024年年报海光信息主营产品名称`。"""
+    parsed = _parse_segments("segments_688041_2024fy_named", "688041.SH", "2024FY")
+    assert {r.dimension for r in parsed.rows} == {"product", "region"}
+    assert parsed.reconciled_internally
+
+
+def test_project_is_treated_as_the_product_dimension_and_an_empty_table_is_a_partial_result() -> (
+    None
+):
+    parsed = _parse_segments("segments_000977_2025fy_variant", "000977.SZ", "2025FY")
+    assert parsed.dimensions == {"product"}  # Wind 对地区返回了空表：只入库有数据的维度
+    assert {r.name for r in parsed.rows} == {"服务器产品", "存储类、交换类等产品", "其他业务"}
+
+
+def test_response_without_a_total_column_is_flagged_not_trusted() -> None:
+    """没有总收入列就无法在响应内部对账——必须交给 fin_fact 对账，reconciled_internally=False。"""
+    parsed = _parse_segments("segments_000977_2024fy_variant", "000977.SZ", "2024FY")
+    assert not parsed.reconciled_internally
+    assert all(r.share is None for r in parsed.rows)  # 该响应没有占比列，不臆造
+
+
+def test_the_same_dimension_returned_twice_is_rejected() -> None:
+    """Wind 两张表都写成产品——不能当作两个维度入库。"""
+    payload = copy.deepcopy(_load("segments_688041_2024fy")["payload"])
+    for c in payload["data"]["data"][1]["columns"]:
+        c["name"] = c["name"].replace("主营地区", "主营产品")
+    with pytest.raises(WindResponseRejected, match="不止一张表"):
+        WindSegmentsAdapter(MockMcpGateway()).parse(
+            _raw("segments_688041_2024fy", "688041.SH", "2024FY", payload)
+        )
+
+
+def test_gross_profit_never_comes_from_the_calculated_column() -> None:
+    parsed = _parse_segments("segments_000977_2025fy_variant", "000977.SZ", "2025FY")
+    payload = _load("segments_000977_2025fy_variant")["payload"]
+    table = payload["data"]["data"][0]
+    gp_i = next(i for i, c in enumerate(table["columns"]) if c["name"].endswith("主营项目毛利"))
+    first_gp = table["rows"][0][gp_i]
+    unit = table["columns"][gp_i]["unit"]
+    assert parsed.rows[0].gross_profit == Decimal(str(first_gp)) * {"亿元": 10**8}[unit]

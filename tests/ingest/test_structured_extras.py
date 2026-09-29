@@ -326,3 +326,41 @@ def test_fx_waf_block_aborts_without_writing_garbage(
         pairs=("USD/CNY", "CNY/KRW"),
     )
     assert summary.aborted is not None and _count(conn, "core.fx_rate") == 0
+
+
+@pytest.mark.db
+def test_replay_from_snapshots_reparses_without_calling_wind(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
+
+    _announce(conn, "海光信息技术股份有限公司2024年年度报告", "2025-03-01")
+    kwargs = _seg_kwargs(conn, tmp_path, lambda *_: Decimal("9162150000"))
+    ingest_segments(conn, **kwargs)  # 第一次：真实（Mock）调用，留下快照
+    conn.execute("DELETE FROM core.segment_revenue")  # 模拟"解析规则改进前入库失败"
+    conn.commit()
+
+    replay = WindSegmentsAdapter(SnapshotReplayGateway(conn))
+    summary = ingest_segments(conn, **{**kwargs, "adapter": replay})
+    assert summary.inserted == 1 and summary.wind_calls == 1  # 网关调用计数只是回放的一次读取
+    assert _count(conn, "core.segment_revenue") == 3
+
+
+@pytest.mark.db
+def test_replay_with_no_snapshot_is_rejected_but_never_aborts_the_batch(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
+
+    for year in (2022, 2023, 2024, 2025):
+        _announce(conn, f"海光信息技术股份有限公司{year}年年度报告", f"{year + 1}-04-01")
+    summary = ingest_holders(
+        conn,
+        adapter=WindHoldersAdapter(SnapshotReplayGateway(conn)),
+        blob=LocalBlobStore(tmp_path),
+        entities=[ENT],
+        periods=["2025FY", "2024FY", "2023FY", "2022FY"],
+        ingest_run_id="t",
+        now=lambda: NOW,
+    )
+    assert summary.aborted is None and len(summary.rejected) == 4 and summary.wind_calls == 0

@@ -1,0 +1,325 @@
+{
+ "tool": "get_stock_fundamentals",
+ "question": "查询浪潮信息(000977.SZ)2025年年报(报告期2025-12-31)按产品和按地区划分的主营业务收入、毛利和收入占比",
+ "payload": {
+  "data": {
+   "data": [
+    {
+     "rows": [
+      [
+       "000977.SZ",
+       "浪潮信息",
+       "服务器产品",
+       1546.0525,
+       69.855,
+       1,
+       1647.82,
+       93.8241,
+       4.2392
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       "存储类、交换类等产品",
+       97.7129,
+       8.542,
+       2,
+       1647.82,
+       5.9298,
+       0.5184
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       "其他业务",
+       4.0546,
+       2.073,
+       3,
+       1647.82,
+       0.2461,
+       0.1258
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       4,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       5,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       6,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       7,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       8,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       9,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       10,
+       1647.82,
+       null,
+       null
+      ]
+     ],
+     "columns": [
+      {
+       "name": "Wind代码",
+       "type": "string"
+      },
+      {
+       "name": "证券简称",
+       "type": "string"
+      },
+      {
+       "name": "2025年年报主营项目名称",
+       "type": "string"
+      },
+      {
+       "name": "2025年年报主营项目收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2025年年报主营项目毛利",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "名次",
+       "type": "number"
+      },
+      {
+       "name": "2025年年报营业总收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2025年年报主营项目收入占比",
+       "type": "number",
+       "unit": "%"
+      },
+      {
+       "name": "2025年年报主营项目毛利占总营收收入占比",
+       "type": "number",
+       "unit": "%"
+      }
+     ]
+    },
+    {
+     "rows": [
+      [
+       "000977.SZ",
+       "浪潮信息",
+       "",
+       null,
+       null,
+       1,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       2,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       3,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       4,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       5,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       6,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       7,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       8,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       9,
+       1647.82,
+       null,
+       null
+      ],
+      [
+       "000977.SZ",
+       "浪潮信息",
+       null,
+       null,
+       null,
+       10,
+       1647.82,
+       null,
+       null
+      ]
+     ],
+     "columns": [
+      {
+       "name": "Wind代码",
+       "type": "string"
+      },
+      {
+       "name": "证券简称",
+       "type": "string"
+      },
+      {
+       "name": "2025年年报主营地区名称",
+       "type": "string"
+      },
+      {
+       "name": "2025年年报主营地区收入",
+       "type": "number",
+       "unit": "元"
+      },
+      {
+       "name": "2025年年报主营地区毛利",
+       "type": "number",
+       "unit": "元"
+      },
+      {
+       "name": "名次",
+       "type": "number"
+      },
+      {
+       "name": "2025年年报营业总收入",
+       "type": "number",
+       "unit": "亿元"
+      },
+      {
+       "name": "2025年年报主营地区收入占比",
+       "type": "number",
+       "unit": "%"
+      },
+      {
+       "name": "2025年年报主营地区毛利占总营收收入占比",
+       "type": "number",
+       "unit": "%"
+      }
+     ]
+    }
+   ]
+  },
+  "error": null
+ }
+}

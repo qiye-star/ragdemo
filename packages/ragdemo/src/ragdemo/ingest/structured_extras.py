@@ -24,6 +24,7 @@ import psycopg
 from ragdemo.adapters.base import FetchContext
 from ragdemo.adapters.cfets import PAIRS, CfetsAdapter
 from ragdemo.adapters.errors import AdapterError
+from ragdemo.adapters.snapshot_replay import NoSnapshot
 from ragdemo.adapters.wind import WindResponseRejected
 from ragdemo.adapters.wind_structured import (
     WindHoldersAdapter,
@@ -61,6 +62,8 @@ class IngestSummary:
     skipped_no_disclosure: list[str] = field(default_factory=list)
     rejected: dict[str, str] = field(default_factory=dict)
     unreconciled_to_fin_fact: list[str] = field(default_factory=list)
+    # 只拿到部分维度（Wind 对某个维度返回了空表）：已入库的部分是对的，缺的是覆盖缺口。
+    partial_dimensions: dict[str, list[str]] = field(default_factory=dict)
     aborted: str | None = None
 
     def count(self, outcome: Outcome) -> None:
@@ -157,6 +160,10 @@ def ingest_holders(
                 summary.wind_calls += 1
                 (raw,) = adapter.fetch(ctx, windcode=ent.windcode, name=ent.name, period=period)
                 failures = 0
+            except NoSnapshot as exc:  # 回放模式：没有留存响应不算网关故障
+                summary.wind_calls -= 1
+                summary.rejected[key] = str(exc)
+                continue
             except AdapterError as exc:
                 failures += 1
                 summary.rejected[key] = f"取数失败：{exc}"
@@ -219,6 +226,10 @@ def ingest_segments(
                 summary.wind_calls += 1
                 (raw,) = adapter.fetch(ctx, windcode=ent.windcode, name=ent.name, period=period)
                 failures = 0
+            except NoSnapshot as exc:  # 回放模式：没有留存响应不算网关故障
+                summary.wind_calls -= 1
+                summary.rejected[key] = str(exc)
+                continue
             except AdapterError as exc:
                 failures += 1
                 summary.rejected[key] = f"取数失败：{exc}"
@@ -229,12 +240,21 @@ def ingest_segments(
             snapshot_id = record_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=blob)
             conn.commit()
             try:
-                rows = adapter.parse(raw)
+                parsed = adapter.parse(raw)
+                rows = parsed.rows
                 revenue = revenue_lookup(conn, ent.entity_id, period, now())
-                if revenue is None:
-                    summary.unreconciled_to_fin_fact.append(key)
-                else:
+                if revenue is not None:
                     check_against_revenue(rows, revenue)
+                elif not parsed.reconciled_internally:
+                    # 响应里没有总收入列、库里也没有该期营收：没有任何可对账的锚，不入库。
+                    raise WindResponseRejected(
+                        "响应没有总收入列，且 fin_fact 没有该期营业收入，无法对账"
+                    )
+                else:
+                    summary.unreconciled_to_fin_fact.append(key)
+                missing = sorted({"product", "region"} - parsed.dimensions)
+                if missing:
+                    summary.partial_dimensions[key] = missing
                 outcome = write_segments(
                     conn,
                     entity_id=ent.entity_id,
