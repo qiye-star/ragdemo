@@ -19,6 +19,7 @@ from ragdemo.adapters.mcp_gateway import gateway_client_from_env
 from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
 from ragdemo.adapters.wind_structured import WindHoldersAdapter, WindSegmentsAdapter
 from ragdemo.config import load_config
+from ragdemo.ingest.stage2_crosscheck import crosscheck_holders
 from ragdemo.ingest.stage2_verify import verify_stage2
 from ragdemo.ingest.structured_extras import (
     HOLDER_KINDS,
@@ -246,4 +247,21 @@ def verify_stage2_command() -> None:
     errors = [f for f in findings if f.severity == "error"]
     click.echo(f"错误 {len(errors)}，警告 {len(findings) - len(errors)}")
     if errors:
+        raise SystemExit(1)
+
+
+@click.command("crosscheck-holders")
+def crosscheck_holders_command() -> None:
+    """股东数据的独立核对：Wind 入库的前十大股东 vs 已解析的公告原文表格（逐股相等）。
+    原文没解析的期别如实报告为"无来源"，不当作通过；有一处对不上以非零码退出。"""
+    with psycopg.connect(_dsn()) as conn:
+        report = crosscheck_holders(conn)
+    click.echo(
+        f"核对 {report.checked} 名股东，与原文一致 {report.matched}，对不上 {len(report.mismatched)}"
+    )
+    for line in report.mismatched:
+        click.echo(f"[对不上] {line}", err=True)
+    if report.no_source:
+        click.echo(f"[无来源] {len(report.no_source)} 个期别没有可核对的已解析原文", err=True)
+    if report.mismatched:
         raise SystemExit(1)
