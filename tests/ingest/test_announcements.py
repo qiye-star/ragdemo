@@ -203,9 +203,12 @@ def test_cninfo_healthy_writes_index_and_advances_watermark(
 
     # 同一分区重跑：游标已经推进到 partition_date，不应再发起任何请求。
     calls: list[str] = []
-    empty_deps = _cninfo_deps(
-        lambda r: (calls.append(r.url.path), httpx.Response(500))[1], LocalBlobStore(tmp_path)
-    )
+
+    def _record_500(r: httpx.Request) -> httpx.Response:
+        calls.append(r.url.path)
+        return httpx.Response(500)
+
+    empty_deps = _cninfo_deps(_record_500, LocalBlobStore(tmp_path))
     _run(conn, health, backlog, _sources(cninfo=empty_deps), tmp_path)
     assert calls == []
 
@@ -380,7 +383,8 @@ def test_recovery_refetches_backlog_window_and_supersedes_degraded_rows(
         if "hisAnnouncement" in request.url.path:
             body = dict(httpx.QueryParams(request.content.decode()))
             seen_since.append(body.get("seDate", ""))
-        return _cninfo_ok([CN_ANNOUNCEMENT_SAME_AS_IFIND])(request)
+        response: httpx.Response = _cninfo_ok([CN_ANNOUNCEMENT_SAME_AS_IFIND])(request)
+        return response
 
     ok_deps = _cninfo_deps(capturing_handler, LocalBlobStore(tmp_path))
     _run(
@@ -414,3 +418,79 @@ def test_only_download_entities_get_full_text_others_index_only(
     conn.commit()
     row = conn.execute("SELECT has_full_text FROM core.announcement_index").fetchone()
     assert row == (True,), "688041.SH 在 DOWNLOAD_ENTITIES 里，应该拿到全文"
+
+
+def _recording_handler(rows: list[dict[str, object]], seen: list[str]) -> Any:  # noqa: ANN401
+    inner = _cninfo_ok(rows)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "topSearch" not in request.url.path:
+            body = dict(httpx.QueryParams(request.content.decode()))
+            if body["column"] != "sse":
+                seen.append(body["seDate"])
+        response: httpx.Response = inner(request)
+        return response
+
+    return handler
+
+
+@pytest.mark.db
+def test_earlier_backfill_since_refetches_the_uncovered_earlier_window_once(
+    conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
+) -> None:
+    """回归：游标只往后追，首跑窗口之前的公告永远补不回来（688041 从 2024-04-12
+    起、000977 从 2025-02-18 起）。覆盖下界（floor）没到 backfill_since 要整段重取。"""
+    health, backlog = MemorySourceHealth(), Backlog(state)
+    seen: list[str] = []
+
+    def deps() -> CninfoLayerDeps:
+        return _cninfo_deps(_recording_handler([CN_ANNOUNCEMENT], seen), LocalBlobStore(tmp_path))
+
+    _run(conn, health, backlog, _sources(cninfo=deps()), tmp_path, backfill_since=date(2026, 6, 1))
+    assert seen[-1].startswith("2026-06-01")
+
+    # 第二天、更早的 backfill_since：必须从 2026-01-01 起整段重取。
+    _run(
+        conn,
+        health,
+        backlog,
+        _sources(cninfo=deps()),
+        tmp_path,
+        partition_date=date(2026, 9, 29),
+        backfill_since=date(2026, 1, 1),
+    )
+    assert seen[-1].startswith("2026-01-01")
+
+    # 第三天：下界已到 2026-01-01，只追新（游标次日）。
+    _run(
+        conn,
+        health,
+        backlog,
+        _sources(cninfo=deps()),
+        tmp_path,
+        partition_date=date(2026, 9, 30),
+        backfill_since=date(2026, 1, 1),
+    )
+    assert seen[-1].startswith("2026-09-30")
+
+
+@pytest.mark.db
+def test_legacy_cursor_without_floor_is_refetched_from_backfill_since(
+    conn: psycopg.Connection, state: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.ingest.reconcile import write_watermark
+
+    write_watermark(conn, "announcements:cn:688041.SH", date(2026, 9, 28), "2026-09-28")
+    conn.commit()
+    seen: list[str] = []
+    deps = _cninfo_deps(_recording_handler([CN_ANNOUNCEMENT], seen), LocalBlobStore(tmp_path))
+    _run(
+        conn,
+        MemorySourceHealth(),
+        Backlog(state),
+        _sources(cninfo=deps),
+        tmp_path,
+        partition_date=date(2026, 9, 29),
+        backfill_since=date(2026, 1, 1),
+    )
+    assert seen[-1].startswith("2026-01-01")

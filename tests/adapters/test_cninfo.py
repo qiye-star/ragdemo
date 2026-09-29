@@ -106,8 +106,8 @@ def test_resolve_org_id_raises_when_not_found() -> None:
         adapter.resolve_org_id("000001")
 
 
-def test_fetch_queries_both_exchange_columns_and_paginates() -> None:
-    """`column` 参数（szse/sse）两个都要查一遍；命中的那个还要按 totalpages 翻页。"""
+def test_fetch_paginates_and_only_tries_the_second_column_when_the_first_is_empty() -> None:
+    """先试 szse 并翻页；szse 有结果就不再试 sse。"""
     seen: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -149,13 +149,15 @@ def test_fetch_queries_both_exchange_columns_and_paginates() -> None:
             until=datetime(2025, 12, 31, tzinfo=UTC),
         )
     )
-    # szse 两页 + sse 一页（0 条但 totalpages=0，循环只跑一次就停）= 3 个 RawResponse。
-    assert len(raws) == 3
-    szse_calls = [b for b in seen if b["column"] == "szse"]
-    assert [b["pageNum"] for b in szse_calls] == ["1", "2"]
+    # szse 两页；szse 已有结果，不再试 sse（见 fetch 的 docstring）。
+    assert len(raws) == 2
+    assert [b["pageNum"] for b in seen if b["column"] == "szse"] == ["1", "2"]
+    assert not [b for b in seen if b["column"] == "sse"]
 
 
-def test_parse_announcements_skips_entries_without_pdf() -> None:
+def test_parse_announcements_lists_entries_without_pdf_but_marks_them_not_downloadable() -> None:
+    """公告目录必须列全：没有 PDF 附件的公告照样是一份公告，只是拿不到可解析原文。
+    以前这里直接跳过，等于目录里凭空少一条（2026-09-29 用真实接口核对总数时发现）。"""
     raw = RawResponse(
         provider="cninfo",
         endpoint="/new/hisAnnouncement/query",
@@ -165,7 +167,30 @@ def test_parse_announcements_skips_entries_without_pdf() -> None:
         fetched_at=datetime.now(UTC),
     )
     refs = list(CninfoAdapter(_client(lambda r: httpx.Response(200))).parse_announcements(raw))
-    assert [r.announcement_id for r in refs] == ["1224906228"]
+    assert [r.announcement_id for r in refs] == ["1224906228", "1224900001"]
+    assert [r.downloadable for r in refs] == [True, False]
+
+
+@pytest.mark.parametrize("adjunct_type", ["PDF", ".PDF", ".pdf", "pdf"])
+def test_adjunct_type_is_normalised_before_deciding_downloadable(adjunct_type: str) -> None:
+    """近期公告的 adjunctType 是 ".PDF"（带点）——`!= "PDF"` 会把它们当成无附件丢掉。"""
+    row = {**ANNOUNCEMENT_WITH_PDF, "adjunctType": adjunct_type}
+    raw = RawResponse(
+        provider="cninfo", endpoint="", params={}, payload={"announcements": [row]},
+        http_status=200, fetched_at=datetime.now(UTC),
+    )  # fmt: skip
+    (ref,) = CninfoAdapter(_client(lambda r: httpx.Response(200))).parse_announcements(raw)
+    assert ref.downloadable
+
+
+def test_non_pdf_attachment_is_listed_but_not_downloadable() -> None:
+    row = {**ANNOUNCEMENT_WITH_PDF, "adjunctType": "DOC", "adjunctUrl": "finalpage/x/1.DOC"}
+    raw = RawResponse(
+        provider="cninfo", endpoint="", params={}, payload={"announcements": [row]},
+        http_status=200, fetched_at=datetime.now(UTC),
+    )  # fmt: skip
+    (ref,) = CninfoAdapter(_client(lambda r: httpx.Response(200))).parse_announcements(raw)
+    assert not ref.downloadable
 
 
 def test_pdf_path_is_absolute_from_adjunct_url() -> None:
@@ -204,3 +229,80 @@ def test_fetch_full_text_downloads_from_the_static_host() -> None:
     )
     body = CninfoAdapter(_client(lambda r: httpx.Response(200))).fetch_full_text(ref, static_client)
     assert body == b"%PDF-1.4 fake bytes"
+
+
+def _paged_handler(total: int, page_size: int, floor_totalpages: bool) -> Any:  # noqa: ANN401
+    """模拟巨潮真实行为：`totalpages` 向下取整（433 条→14 页而不是 15），
+    最后一个不满页只能靠 `hasMore` 判断。"""
+    ids = [str(1000 + i) for i in range(total)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "topSearch" in request.url.path:
+            return httpx.Response(200, json=TOPSEARCH_688041)
+        body = dict(httpx.QueryParams(request.content.decode()))
+        page = int(body["pageNum"])
+        chunk = ids[(page - 1) * page_size : page * page_size]
+        rows = [{**ANNOUNCEMENT_WITH_PDF, "announcementId": i} for i in chunk]
+        pages = total // page_size if floor_totalpages else -(-total // page_size)
+        return httpx.Response(
+            200,
+            json={
+                "announcements": rows,
+                "totalpages": pages,
+                "totalAnnouncement": total,
+                "hasMore": page * page_size < total,
+            },
+        )
+
+    return handler
+
+
+def test_fetch_retrieves_the_last_partial_page_even_when_totalpages_is_floored() -> None:
+    """回归：`totalpages` 是向下取整的，旧代码翻到 totalpages 就停，每家实体最后
+    一个不满页（0–29 条）被系统性丢掉——真实接口 totalAnnouncement=433 只拿到 420，
+    抽查的 8 家实体入库条数全是 30 的整数倍。"""
+    adapter = CninfoAdapter(_client(_paged_handler(total=433, page_size=30, floor_totalpages=True)))
+    ctx = FetchContext(ingest_run_id="t", partition_date=datetime(2026, 9, 28).date())
+    raws = list(
+        adapter.fetch(
+            ctx,
+            stock_code="688041",
+            since=datetime(2023, 1, 1, tzinfo=UTC),
+            until=datetime(2025, 12, 31, tzinfo=UTC),
+        )
+    )
+    ids = {r.announcement_id for raw in raws for r in adapter.parse_announcements(raw)}
+    assert len(ids) == 433
+    assert adapter.expected_total(raws) == 433
+
+
+def test_second_column_is_only_queried_when_the_first_returned_nothing() -> None:
+    """真实接口对 stock 已定的查询不看 column，沪深两个 column 返回同样的全量结果——
+    两个都翻一遍等于对没有 SLA 的站点白白翻倍请求。第一个 column 有结果就不再试第二个。"""
+    columns: list[str] = []
+    inner = _paged_handler(total=10, page_size=30, floor_totalpages=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "hisAnnouncement" in request.url.path:
+            columns.append(dict(httpx.QueryParams(request.content.decode()))["column"])
+        return inner(request)  # type: ignore[no-any-return]
+
+    adapter = CninfoAdapter(_client(handler))
+    ctx = FetchContext(ingest_run_id="t", partition_date=datetime(2026, 9, 28).date())
+    list(
+        adapter.fetch(
+            ctx,
+            stock_code="688041",
+            since=datetime(2025, 1, 1, tzinfo=UTC),
+            until=datetime(2025, 12, 31, tzinfo=UTC),
+        )
+    )
+    assert set(columns) == {"szse"}
+
+
+def test_expected_total_is_none_when_the_response_has_no_total() -> None:
+    raw = RawResponse(
+        provider="cninfo", endpoint="", params={}, payload={"announcements": []},
+        http_status=200, fetched_at=datetime.now(UTC),
+    )  # fmt: skip
+    assert CninfoAdapter(_client(lambda r: httpx.Response(200))).expected_total([raw]) is None

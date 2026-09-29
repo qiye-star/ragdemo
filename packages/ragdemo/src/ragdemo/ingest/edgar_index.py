@@ -76,11 +76,13 @@ def run_edgar_layer(
     download: bool,
     ingest_run_id: str,
     dry_run: bool,
+    since: date | None = None,
+    cost_per_page_cny: Decimal | None = None,
 ) -> LayerReport:
     report = LayerReport()
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
     refs: dict[str, FilingRef] = {}
-    for raw in deps.adapter.fetch(ctx, cik=cik):
+    for raw in deps.adapter.fetch(ctx, cik=cik, since=since):
         if not dry_run:
             record_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=deps.blob)
         for ref in deps.adapter.parse_filings(raw):
@@ -160,7 +162,9 @@ def run_edgar_layer(
     if pending:
         docs_only = [doc for doc, _ in pending]
         prepared = prepare_documents(docs_only, deps.parser, deps.blob, budget, owner_user=None)
-        record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
+        record_parse_snapshots(
+            conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=cost_per_page_cny
+        )
         for item, (_, index_id) in zip(prepared, pending, strict=False):
             chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer

@@ -162,3 +162,58 @@ def test_fetch_full_text_raises_on_persistent_failure() -> None:
         assert "404" in str(exc)
     else:
         raise AssertionError("expected an UpstreamUnavailable for a 404")
+
+
+def test_fetch_follows_older_filing_pages_that_cover_since() -> None:
+    """回归：只读 filings.recent 会漏掉更早的申报（高频申报公司 recent 不足一年）。
+    `filings.files` 指向的分页文件要按 `since` 取回，与 since 无交集的不取。"""
+    from datetime import date
+
+    def cols(acc: str, day: str) -> dict[str, list[str]]:
+        return {
+            "accessionNumber": [acc],
+            "form": ["8-K"],
+            "filingDate": [day],
+            "acceptanceDateTime": [f"{day}T10:00:00.000Z"],
+            "primaryDocument": ["a.htm"],
+        }
+
+    envelope = {
+        "cik": "1045810",
+        "filings": {
+            "recent": cols("0-recent", "2026-01-05"),
+            "files": [
+                {
+                    "name": "CIK0001045810-submissions-001.json",
+                    "filingFrom": "2022-01-01",
+                    "filingTo": "2025-12-31",
+                },
+                {
+                    "name": "CIK0001045810-submissions-002.json",
+                    "filingFrom": "2010-01-01",
+                    "filingTo": "2021-12-31",
+                },
+            ],
+        },
+    }
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path.endswith("001.json"):
+            return httpx.Response(200, json=cols("0-older", "2024-03-01"))
+        return httpx.Response(200, json=envelope)
+
+    client = HttpClient(
+        provider="edgar",
+        base_url="https://data.sec.gov",
+        policy=RetryPolicy(max_attempts=1, backoff_base_s=0.0),
+        bucket=TokenBucket(rate_per_minute=10_000),
+        transport=httpx.MockTransport(handler),
+    )
+    adapter = EdgarAdapter(client=client)
+    ctx = FetchContext(ingest_run_id="t", partition_date=date(2026, 9, 29))
+    raws = list(adapter.fetch(ctx, cik=1045810, since=date(2023, 1, 1)))
+    accessions = {f.accession for raw in raws for f in adapter.parse_filings(raw)}
+    assert accessions == {"0-recent", "0-older"}
+    assert not any(p.endswith("002.json") for p in requested)

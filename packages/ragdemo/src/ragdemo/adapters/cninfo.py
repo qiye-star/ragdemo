@@ -29,17 +29,19 @@ registry.sql`），公开的 `publish_at` 原样传公告发布日的午夜即�
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ragdemo.adapters.base import FetchContext, RawResponse
+from ragdemo.adapters.errors import AdapterError
 from ragdemo.adapters.http import HttpClient
 
 PROVIDER = "cninfo"
 PAGE_SIZE = 30
+MAX_PAGES = 300  # 防死循环；30 条/页 × 300 页 = 9000 条，远超单个实体三年的公告量
 _BEIJING = ZoneInfo("Asia/Shanghai")
 
 # column 参数按上市板块选交易所路由；深市/北交所与沪市各有独立取值，
@@ -55,15 +57,39 @@ class AnnouncementRef:
     org_id: str
     title: str
     publish_at: datetime
-    adjunct_url: str
+    adjunct_url: str | None
+    adjunct_type: str | None = None
+
+    @property
+    def downloadable(self) -> bool:
+        """有 PDF 附件才能下载并解析。没有附件（或附件不是 PDF）的公告照样是一份
+        公告、必须进目录——只是拿不到可解析原文。`adjunctType` 近期公告是 ".PDF"
+        （带点），必须归一化后再比，否则近期公告会被误判成无附件。"""
+        kind = (self.adjunct_type or "").strip().lstrip(".").upper()
+        return bool(self.adjunct_url) and kind == "PDF"
 
     @property
     def pdf_path(self) -> str:
+        assert self.adjunct_url is not None, "只有 downloadable 的公告才有 PDF 路径"
         return f"/{self.adjunct_url}"
+
+    @property
+    def detail_url(self) -> str:
+        """公告详情页，没有 PDF 时目录行用它当链接。"""
+        return (
+            "https://www.cninfo.com.cn/new/disclosure/detail"
+            f"?stockCode={self.sec_code}&announcementId={self.announcement_id}"
+            f"&orgId={self.org_id}&announcementTime={self.publish_at.date().isoformat()}"
+        )
 
 
 class CninfoOrgIdNotFound(RuntimeError):
     """topSearch 按股票代码查不到对应的巨潮 orgId。"""
+
+
+class CninfoListingIncomplete(AdapterError):
+    """列出的公告条数与接口自报总数对不上，或窗口大到翻页上限——目录不完整，
+    宁可这一次失败也不静默少写（`AdapterError`：归为 REJECTED，不冷却这一层）。"""
 
 
 class CninfoAdapter:
@@ -102,15 +128,21 @@ class CninfoAdapter:
         """按页拉取公告列表，一页一个 `RawResponse`（与 `EdgarAdapter.fetch()`
         "一次 HTTP 调用一个 RawResponse" 同一个约定）。
 
-        沪深两个 `column` 值要各查一遍——查询前不知道这支股票在哪个交易所，
-        查错交易所不报错、只返回 0 条（模块顶部 `_COLUMNS` 注释）。空交易所
-        的分页在 `totalpages<=1` 时天然只有一页，不会白白多翻页。
+        **翻页以 `hasMore` 为准，不以 `totalpages` 为准**：`totalpages` 是向下取整的
+        （totalAnnouncement=433、每页 30 条时它报 14 而不是 15），翻到它就停会
+        系统性丢掉最后一个不满页——2026-09-29 抽查 8 家实体，入库条数全是 30 的
+        整数倍。响应没有 `hasMore` 字段时退回 `totalpages`（旧版/测试夹具）。
+
+        沪深两个 `column` 依次试：第一个有结果就不再试第二个（真实接口在 `stock`
+        已定时两个 column 返回同样的全量结果，两个都翻等于白白翻倍请求）；
+        第一个 0 条才试第二个。
         """
         org_id = self.resolve_org_id(stock_code)
         se_date = f"{since.date().isoformat()}~{until.date().isoformat()}"
         for column in _COLUMNS:
+            got_rows = False
             page = 1
-            while True:
+            while page <= MAX_PAGES:
                 params = {
                     "stock": f"{stock_code},{org_id}",
                     "tabName": "fulltext",
@@ -122,26 +154,42 @@ class CninfoAdapter:
                 }
                 raw = self._client.post_form("/new/hisAnnouncement/query", params)
                 yield raw
-                total_pages = int((raw.payload or {}).get("totalpages") or 0)
-                if page >= total_pages:
+                payload = raw.payload or {}
+                rows = payload.get("announcements") or []
+                got_rows = got_rows or bool(rows)
+                if not rows or not _has_more(payload, page):
                     break
                 page += 1
+            else:
+                raise CninfoListingIncomplete(
+                    f"{stock_code} 翻到 {MAX_PAGES} 页仍有更多，窗口 {se_date} 太大，请缩小"
+                )
+            if got_rows:
+                return
+
+    @staticmethod
+    def expected_total(raws: Sequence[RawResponse]) -> int | None:
+        """接口自报的公告总数（`totalAnnouncement`），供调用方与实际列出的条数对账。
+        响应里没有这个字段返回 `None`（无法对账，不是 0）。"""
+        totals = [
+            int(p["totalAnnouncement"])
+            for raw in raws
+            if isinstance(p := raw.payload, dict) and p.get("totalAnnouncement") is not None
+        ]
+        return max(totals) if totals else None
 
     def parse_announcements(self, raw: RawResponse) -> Iterator[AnnouncementRef]:
         for row in (raw.payload or {}).get("announcements") or []:
             adjunct_url = row.get("adjunctUrl")
-            if not adjunct_url or str(row.get("adjunctType")).upper() != "PDF":
-                # 没有附件或附件不是 PDF（少数公告只有正文没有附件）——
-                # 这份公告拿不到可解析的原文，跳过而不是报错，让批量抓取
-                # 能处理完其余的公告；由调用方统计跳过数。
-                continue
+            adjunct_type = row.get("adjunctType")
             yield AnnouncementRef(
                 announcement_id=str(row["announcementId"]),
                 sec_code=str(row["secCode"]),
                 org_id=str(row["orgId"]),
                 title=str(row["announcementTitle"]),
                 publish_at=_parse_announcement_time(row["announcementTime"]),
-                adjunct_url=str(adjunct_url),
+                adjunct_url=str(adjunct_url) if adjunct_url else None,
+                adjunct_type=str(adjunct_type) if adjunct_type else None,
             )
 
     def fetch_full_text(self, ref: AnnouncementRef, static_client: HttpClient) -> bytes:
@@ -157,3 +205,10 @@ def _parse_announcement_time(value: Any) -> datetime:  # noqa: ANN401
     time_precision` 统一处理（模块 docstring）。
     """
     return datetime.fromtimestamp(int(value) / 1000, tz=UTC).astimezone(_BEIJING)
+
+
+def _has_more(payload: dict[str, Any], page: int) -> bool:
+    """还有没有下一页。优先看接口自己的 `hasMore`；没有这个字段才退回 `totalpages`。"""
+    if "hasMore" in payload:
+        return bool(payload["hasMore"])
+    return page < int(payload.get("totalpages") or 0)

@@ -21,10 +21,14 @@ from decimal import Decimal
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
-from ragdemo.adapters.base import FetchContext
-from ragdemo.adapters.hkexnews import HkAnnouncementRef, HkexnewsAdapter
+from ragdemo.adapters.base import FetchContext, RawResponse
+from ragdemo.adapters.hkexnews import (
+    HkAnnouncementRef,
+    HkexnewsAdapter,
+    HkexnewsListingIncomplete,
+)
 from ragdemo.adapters.http import HttpClient
-from ragdemo.ingest.announcement_index import IndexEntry, IndexWriter
+from ragdemo.ingest.announcement_index import IndexEntry, IndexOutcome, IndexWriter
 from ragdemo.ingest.assets_docs import (
     build_chunks_and_descriptions,
     prepare_documents,
@@ -39,6 +43,23 @@ from ragdemo.parse.textin import DocumentParser, PageBudget
 from ragdemo_core.blob import BlobStore
 
 STATIC_PROVIDER = "hkexnews"
+
+
+def collect_hk_refs(
+    adapter: HkexnewsAdapter, raws: list[RawResponse], *, stock_code: str
+) -> dict[str, HkAnnouncementRef]:
+    """把各子窗口的响应合成按 NEWS_ID 去重的表，并与各完整子窗口自报的 `recordCnt`
+    之和对账；对不上抛 `HkexnewsListingIncomplete`（目录少一条就是公告遗漏）。"""
+    refs: dict[str, HkAnnouncementRef] = {}
+    for raw in raws:
+        for ref in adapter.parse_announcements(raw):
+            refs[ref.news_id] = ref
+    expected = adapter.expected_total(raws)
+    if expected is not None and len(refs) != expected:
+        raise HkexnewsListingIncomplete(
+            f"{stock_code}：披露易自报 {expected} 条公告，实际列出 {len(refs)} 条"
+        )
+    return refs
 
 
 @dataclass(frozen=True)
@@ -63,19 +84,23 @@ def run_hkexnews_layer(
     download: bool,
     ingest_run_id: str,
     dry_run: bool,
+    cost_per_page_cny: Decimal | None = None,
 ) -> LayerReport:
     report = LayerReport()
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
-    refs: dict[str, HkAnnouncementRef] = {}
+    raws: list[RawResponse] = []
     for raw in deps.adapter.fetch(ctx, stock_code=stock_code, since=since, until=until):
         if not dry_run:
             record_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=deps.blob)
-        for ref in deps.adapter.parse_announcements(raw):
-            refs[ref.news_id] = ref
+        raws.append(raw)
+    refs = collect_hk_refs(deps.adapter, raws, stock_code=stock_code)
     report.listed = len(refs)
+    report.source_total = deps.adapter.expected_total(raws)
 
     if dry_run:
         for ref in refs.values():
+            if not ref.downloadable:
+                continue
             tier = parse_tier(ref.title)
             report.estimated_pages[tier] = (
                 report.estimated_pages.get(tier, 0) + ESTIMATED_PAGES[tier]
@@ -88,7 +113,8 @@ def run_hkexnews_layer(
     pending: list[tuple[NormalizedDocument, int]] = []
 
     for ref in refs.values():
-        _outcome, index_id = index.write(
+        can_download = download and ref.downloadable
+        outcome, index_id = index.write(
             IndexEntry(
                 entity_ref=entity_ref,
                 source="hkexnews",
@@ -96,12 +122,17 @@ def run_hkexnews_layer(
                 title=ref.title,
                 publish_date=ref.publish_at.date(),
                 known_at=ref.publish_at,  # 分钟精度，已经是真实发布时刻
-                has_full_text=download,
-                url=f"https://www1.hkexnews.hk{ref.pdf_path}",
+                has_full_text=can_download,
+                url=f"https://www1.hkexnews.hk{ref.pdf_path}" if ref.downloadable else None,
             )
         )
         report.indexed += 1
-        if not download:
+        if not ref.downloadable:
+            report.no_attachment += 1
+        if not can_download:
+            continue
+        if outcome is IndexOutcome.SKIPPED and index.linked_doc_id(index_id) is not None:
+            report.already_downloaded += 1
             continue
 
         body = deps.adapter.fetch_full_text(ref, deps.static_client)
@@ -147,7 +178,9 @@ def run_hkexnews_layer(
     if pending:
         docs_only = [doc for doc, _ in pending]
         prepared = prepare_documents(docs_only, deps.parser, deps.blob, budget, owner_user=None)
-        record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
+        record_parse_snapshots(
+            conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=cost_per_page_cny
+        )
         for item, (_, index_id) in zip(prepared, pending, strict=False):
             chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer

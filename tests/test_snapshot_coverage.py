@@ -36,6 +36,10 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("ingest/edgar_docs.py", "list_filings"): (
         "dry run 专用：只列申报、不写库；--yes 走 ingest_edgar_filings，那里留底"
     ),
+    ("ingest/announcement_verify.py", "verify_entity"): (
+        "对账专用：只比较来源自报总数与库里行数、不入库任何数据（没有可溯源的数值产出）；"
+        "被对账的那次入库运行已经留了快照"
+    ),
     ("ingest/cninfo_docs.py", "list_announcements"): (
         "dry run 专用：只列公告、不写库；--yes 走 ingest_cninfo_announcements，那里留底"
     ),

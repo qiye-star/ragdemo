@@ -232,3 +232,43 @@ def test_snapshot_id_is_stored(conn: psycopg.Connection) -> None:
         "SELECT snapshot_id FROM core.announcement_index WHERE index_id = %s", (index_id,)
     ).fetchone()
     assert row == (1,)
+
+
+@pytest.mark.db
+def test_linked_doc_id_is_none_until_a_document_is_linked(conn: psycopg.Connection) -> None:
+    writer = _writer(conn)
+    _, index_id = writer.write(_entry())
+    conn.commit()
+    assert writer.linked_doc_id(index_id) is None
+
+
+@pytest.mark.db
+def test_full_text_arriving_later_supersedes_the_same_source_row_without_it(
+    conn: psycopg.Connection,
+) -> None:
+    """先只建目录（has_full_text=False，如实体当时不在下载范围内），之后同一来源同一
+    公告带着全文再来：不能因为 (source, source_ref) 已存在就 SKIPPED——那样目录行永远
+    写着"没有全文"，而 core.document 里其实已经有了。旧行被取代、新行带全文。"""
+    writer = _writer(conn)
+    _, first = writer.write(_entry(has_full_text=False))
+    conn.commit()
+    outcome, second = writer.write(_entry(has_full_text=True))
+    conn.commit()
+    assert outcome is IndexOutcome.SUPERSEDED_DEGRADED
+    assert second != first
+    live = conn.execute(
+        "SELECT index_id, has_full_text FROM core.announcement_index"
+        " WHERE source = 'cninfo' AND source_ref = '1' AND superseded_at IS NULL"
+    ).fetchall()
+    assert live == [(second, True)]
+
+
+@pytest.mark.db
+def test_same_source_row_with_full_text_is_never_downgraded_by_a_later_listing_only_write(
+    conn: psycopg.Connection,
+) -> None:
+    writer = _writer(conn)
+    _, first = writer.write(_entry(has_full_text=True))
+    conn.commit()
+    outcome, again = writer.write(_entry(has_full_text=False))
+    assert outcome is IndexOutcome.SKIPPED and again == first

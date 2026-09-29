@@ -328,9 +328,9 @@ def test_every_announcement_is_indexed_and_downloaded_but_only_first_tier_is_par
         " LEFT JOIN core.doc_block b USING (doc_id) WHERE d.source = 'cninfo'"
         " GROUP BY d.doc_id, d.title ORDER BY d.title"
     ).fetchall()
-    by_title = dict(parsed)
-    assert by_title[ANNOUNCEMENT_QUARTERLY["announcementTitle"]] == 3  # 季报被解析，有块
-    assert by_title[ANNOUNCEMENT_A["announcementTitle"]] == 0  # 决议公告未命中首批档，无块
+    by_title: dict[str, int] = dict(parsed)
+    assert by_title[str(ANNOUNCEMENT_QUARTERLY["announcementTitle"])] == 3  # 季报被解析，有块
+    assert by_title[str(ANNOUNCEMENT_A["announcementTitle"])] == 0  # 决议公告未命中首批档，无块
 
     linked = conn.execute(
         "SELECT count(*) FROM core.announcement_index WHERE doc_id IS NOT NULL"
@@ -484,3 +484,134 @@ def test_a_documents_own_validation_failure_does_not_crash_the_whole_batch(
     assert row is not None, "校验失败的文档也该留一行 document 供目录关联，不能悄悄丢掉"
     blocks = conn.execute("SELECT count(*) FROM core.doc_block WHERE doc_id = %s", row).fetchone()
     assert blocks == (0,)
+
+
+# --- 公告不遗漏：目录列全、与来源自报总数对账、补全文、不重复下载 ------------------
+
+ANNOUNCEMENT_NO_PDF = {
+    "secCode": "688041",
+    "orgId": "9900048365",
+    "announcementId": "1224900002",
+    "announcementTitle": "海光信息技术股份有限公司关于某事项的公告",
+    "announcementTime": 1767024000000,
+    "adjunctUrl": None,
+    "adjunctType": None,
+}
+
+
+def _run_layer(
+    conn: psycopg.Connection,
+    deps: CninfoLayerDeps,
+    *,
+    download: bool,
+    dry_run: bool = False,
+) -> object:
+    since, until = _window()
+    return run_cninfo_layer(
+        conn,
+        deps=deps,
+        index=_index(conn),
+        entity_ref="688041.SH",
+        stock_code="688041",
+        since=since,
+        until=until,
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=download,
+        ingest_run_id="t",
+        dry_run=dry_run,
+    )
+
+
+@pytest.mark.db
+def test_announcement_without_a_pdf_is_still_indexed_and_never_downloaded(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    deps = _deps(
+        _query_client_with(ANNOUNCEMENT_QUARTERLY, ANNOUNCEMENT_NO_PDF),
+        calls,
+        LocalBlobStore(tmp_path),
+    )
+    report = _run_layer(conn, deps, download=True)
+    conn.commit()
+    assert report.indexed == 2 and report.no_attachment == 1 and report.downloaded == 1  # type: ignore[attr-defined]
+    assert len(calls) == 1  # 只下载了有 PDF 的那份
+    rows: dict[str, bool] = dict(
+        conn.execute(
+            "SELECT source_ref, has_full_text FROM core.announcement_index"
+            " WHERE superseded_at IS NULL"
+        ).fetchall()
+    )
+    assert rows == {"1224906300": True, "1224900002": False}
+    url = conn.execute(
+        "SELECT url FROM core.announcement_index WHERE source_ref = '1224900002'"
+    ).fetchone()
+    assert url is not None and "disclosure/detail" in url[0]
+
+
+@pytest.mark.db
+def test_listing_that_disagrees_with_the_source_total_fails_loudly_and_writes_nothing(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.adapters.cninfo import CninfoListingIncomplete
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "topSearch" in request.url.path:
+            return httpx.Response(200, json=TOPSEARCH_688041)
+        # 接口自报 5 条，只给了 1 条且声称没有更多——目录不完整。
+        return httpx.Response(
+            200,
+            json={
+                "announcements": [ANNOUNCEMENT_QUARTERLY],
+                "totalpages": 1,
+                "totalAnnouncement": 5,
+                "hasMore": False,
+            },
+        )
+
+    client = HttpClient(
+        "cninfo",
+        "https://www.cninfo.com.cn",
+        policy=RetryPolicy(max_attempts=1, backoff_base_s=0),
+        bucket=TokenBucket(rate_per_minute=6000),
+        transport=httpx.MockTransport(handler),
+    )
+    deps = _deps(client, [], LocalBlobStore(tmp_path))
+    with pytest.raises(CninfoListingIncomplete, match="自报 5 条"):
+        _run_layer(conn, deps, download=False)
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM core.announcement_index").fetchone() == (0,)
+
+
+@pytest.mark.db
+def test_already_downloaded_announcements_are_not_downloaded_again(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    deps = _deps(_query_client_with(ANNOUNCEMENT_QUARTERLY), calls, LocalBlobStore(tmp_path))
+    _run_layer(conn, deps, download=True)
+    conn.commit()
+    assert len(calls) == 1
+    report = _run_layer(conn, deps, download=True)
+    conn.commit()
+    assert len(calls) == 1, "往前回填会重叠窗口，已经下载并落了 document 的公告不该再下一遍"
+    assert report.already_downloaded == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.db
+def test_entity_added_to_the_download_scope_later_gets_full_text_on_the_existing_row(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    deps = _deps(_query_client_with(ANNOUNCEMENT_QUARTERLY), calls, LocalBlobStore(tmp_path))
+    _run_layer(conn, deps, download=False)
+    conn.commit()
+    assert calls == []
+    _run_layer(conn, deps, download=True)
+    conn.commit()
+    live = conn.execute(
+        "SELECT has_full_text, doc_id IS NOT NULL FROM core.announcement_index"
+        " WHERE source_ref = '1224906300' AND superseded_at IS NULL"
+    ).fetchall()
+    assert live == [(True, True)]

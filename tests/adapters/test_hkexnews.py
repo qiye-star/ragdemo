@@ -28,7 +28,8 @@ HKT = timezone(timedelta(hours=8))
 
 
 def _fixture() -> dict[str, Any]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    return data
 
 
 def _client(handler: Any) -> HttpClient:  # noqa: ANN401
@@ -147,7 +148,9 @@ def test_fetch_full_text_downloads_the_pdf() -> None:
     assert body == b"%PDF-fake"
 
 
-def test_non_pdf_entries_are_skipped() -> None:
+def test_non_pdf_entries_are_listed_but_not_downloadable() -> None:
+    """没有 PDF 的条目（HTM、无附件）照样是一份公告、必须进目录——2026-09-29 实测
+    商汤 132 条只入 130，多家有类型为空或 HTM 的条目被过滤掉。"""
     fixture = _fixture()
     fixture["titlesearch_result"].append(
         {
@@ -159,7 +162,23 @@ def test_non_pdf_entries_are_skipped() -> None:
             "STOCK_CODE": "09988",
         }
     )
+    fixture["titlesearch_recordCnt"] = len(fixture["titlesearch_result"])
+    adapter = HkexnewsAdapter(_client(_handler_from(fixture)))
+    ctx = FetchContext(ingest_run_id="t", partition_date=date(2026, 9, 28))
+    raws = list(
+        adapter.fetch(
+            ctx,
+            stock_code="09988",
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            until=datetime(2026, 9, 28, tzinfo=UTC),
+        )
+    )
+    refs = {r.news_id: r for raw in raws for r in adapter.parse_announcements(raw)}
+    assert "999" in refs and not refs["999"].downloadable
+    assert all(r.downloadable for k, r in refs.items() if k != "999")
 
+
+def _handler_from(fixture: dict[str, Any]) -> Any:  # noqa: ANN401
     def handler(request: httpx.Request) -> httpx.Response:
         if "prefix.do" in request.url.path:
             return httpx.Response(200, text=fixture["prefix"])
@@ -171,15 +190,85 @@ def test_non_pdf_entries_are_skipped() -> None:
             },
         )
 
-    adapter = HkexnewsAdapter(_client(handler))
+    return handler
+
+
+def _capped_handler(total: int, cap: int) -> Any:  # noqa: ANN401
+    """模拟披露易的 rowRange 上限：一个窗口内公告超过 `cap` 条时只装载前 `cap` 条，
+    `recordCnt` 仍是真实总数，`hasNextRow=True`。公告均匀分布在 2023-01-01 起每天一条。"""
+    base = _fixture()
+    template = base["titlesearch_result"][0]
+    start = date(2023, 1, 1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "prefix.do" in request.url.path:
+            return httpx.Response(200, text=base["prefix"])
+        q = dict(request.url.params)
+        lo = datetime.strptime(q["fromDate"], "%Y%m%d").date()
+        hi = datetime.strptime(q["toDate"], "%Y%m%d").date()
+        days = [start + timedelta(days=i) for i in range(total)]
+        inside = [d for d in days if lo <= d <= hi]
+        rows = [
+            {**template, "NEWS_ID": f"n{d.isoformat()}", "DATE_TIME": d.strftime("%d/%m/%Y 09:00")}
+            for d in inside[:cap]
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "recordCnt": len(inside),
+                "loadedRecord": len(rows),
+                "hasNextRow": len(inside) > cap,
+                "result": json.dumps(rows, ensure_ascii=False),
+            },
+        )
+
+    return handler
+
+
+def test_window_over_the_row_cap_is_split_until_every_announcement_is_listed() -> None:
+    """回归：腾讯 3 年窗口 recordCnt=535 只装载 500（hasNextRow=True），旧代码一次查询
+    就交差，超出上限的公告静默丢失。"""
+    adapter = HkexnewsAdapter(_client(_capped_handler(total=535, cap=500)))
     ctx = FetchContext(ingest_run_id="t", partition_date=date(2026, 9, 28))
-    raw = next(
+    raws = list(
         adapter.fetch(
             ctx,
             stock_code="09988",
-            since=datetime(2026, 1, 1, tzinfo=UTC),
-            until=datetime(2026, 9, 28, tzinfo=UTC),
+            since=datetime(2023, 1, 1, tzinfo=UTC),
+            until=datetime(2025, 12, 31, tzinfo=UTC),
         )
     )
-    refs = list(adapter.parse_announcements(raw))
-    assert all(r.news_id != "999" for r in refs)
+    ids = {r.news_id for raw in raws for r in adapter.parse_announcements(raw)}
+    assert len(ids) == 535
+    assert adapter.expected_total(raws) == 535
+    assert any(raw.params.get("truncated") for raw in raws), "被截断的那次响应照样留下（快照）"
+
+
+def test_a_single_day_over_the_cap_fails_loudly() -> None:
+    from ragdemo.adapters.hkexnews import HkexnewsListingIncomplete
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "prefix.do" in request.url.path:
+            return httpx.Response(200, text=_fixture()["prefix"])
+        row = _fixture()["titlesearch_result"][0]
+        return httpx.Response(
+            200,
+            json={
+                "recordCnt": 900,
+                "loadedRecord": 500,
+                "hasNextRow": True,
+                "result": json.dumps([row] * 500, ensure_ascii=False),
+            },
+        )
+
+    adapter = HkexnewsAdapter(_client(handler))
+    ctx = FetchContext(ingest_run_id="t", partition_date=date(2026, 9, 28))
+    with pytest.raises(HkexnewsListingIncomplete, match="一天内"):
+        list(
+            adapter.fetch(
+                ctx,
+                stock_code="09988",
+                since=datetime(2026, 1, 1, tzinfo=UTC),
+                until=datetime(2026, 1, 3, tzinfo=UTC),
+            )
+        )

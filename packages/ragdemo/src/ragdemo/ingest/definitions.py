@@ -251,7 +251,7 @@ def announcement_backlog_resource(_context: InitResourceContext) -> Backlog:
 
 # 首次为某实体建目录时的回填起点；此后每个实体走自己的 `core.ingest_watermark`
 # 增量水位线，不会重复回填到这么早——与 D1-D5 计划的 2025 全年试点范围一致。
-ANNOUNCEMENTS_BACKFILL_SINCE = date(2025, 1, 1)
+ANNOUNCEMENTS_BACKFILL_SINCE = date(2023, 1, 1)  # 与 2026-09-29 全量回填的起点一致
 
 # 单次 run 的页数预算上限，与 `assets_docs.py::MAX_PAGES_PER_PREPARE_RUN` 同一个
 # 理由：TextIn 按页计费，回填历史分区时没有这道闸门会一次性把预算烧穿。
@@ -287,6 +287,7 @@ def announcements_daily(
         tiers=frozenset({ParseTier.FIRST}),
         budget=PageBudget(MAX_PAGES_PER_ANNOUNCEMENTS_RUN),
         ingest_run_id=run_id,
+        cost_per_page_cny=load_config().textin_cost_per_page_cny,
     )
     context.log.info(
         "announcements ingested",

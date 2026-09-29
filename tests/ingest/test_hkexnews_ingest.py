@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,7 +17,7 @@ from ragdemo.adapters.hkexnews import HkexnewsAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.ingest.announcement_index import IndexWriter
 from ragdemo.ingest.hkexnews_docs import HkexnewsLayerDeps, run_hkexnews_layer
-from ragdemo.ingest.parse_policy import ParseTier
+from ragdemo.ingest.parse_policy import LayerReport, ParseTier
 from ragdemo.parse.textin import MockDocumentParser, PageBudget
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
@@ -59,7 +59,7 @@ def conn(temp_db: str) -> Iterator[psycopg.Connection]:
     c.close()
 
 
-def _query_client(*rows: dict[str, object]) -> HttpClient:
+def _query_client(*rows: Mapping[str, object]) -> HttpClient:
     def handler(request: httpx.Request) -> httpx.Response:
         if "prefix.do" in request.url.path:
             return httpx.Response(200, text=PREFIX_FIXTURE)
@@ -159,3 +159,89 @@ def test_downloaded_documents_use_minute_precision_known_at(
     assert known_at is not None
     hkt_hour = known_at[0].astimezone(__import__("zoneinfo").ZoneInfo("Asia/Hong_Kong")).hour
     assert hkt_hour == 18, "分钟精度的来源直接用真实发布时刻，不套用巨潮那种当日 23:59 上界"
+
+
+ANNOUNCEMENT_HTML_ONLY = {
+    "NEWS_ID": "3",
+    "TITLE": "只有网页版的通告",
+    "DATE_TIME": "02/06/2026 09:00",
+    "FILE_TYPE": "HTM",
+    "FILE_LINK": "/listedco/listconews/sehk/2026/0602/notice.htm",
+    "STOCK_CODE": "09988",
+}
+
+
+def _run(
+    conn: psycopg.Connection,
+    deps: HkexnewsLayerDeps,
+    *,
+    download: bool,
+) -> LayerReport:
+    return run_hkexnews_layer(
+        conn,
+        deps=deps,
+        index=_index(conn),
+        entity_ref="09988.HK",
+        stock_code="09988",
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        until=datetime(2026, 9, 28, tzinfo=UTC),
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        download=download,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+
+
+@pytest.mark.db
+def test_non_pdf_announcement_is_indexed_but_never_downloaded(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    deps = _deps(
+        _query_client(ANNOUNCEMENT_ANNUAL, ANNOUNCEMENT_HTML_ONLY), calls, LocalBlobStore(tmp_path)
+    )
+    report = _run(conn, deps, download=True)
+    conn.commit()
+    assert report.indexed == 2 and report.no_attachment == 1 and report.downloaded == 1
+    assert len(calls) == 1
+    rows: dict[str, bool] = dict(
+        conn.execute(
+            "SELECT source_ref, has_full_text FROM core.announcement_index"
+            " WHERE superseded_at IS NULL"
+        ).fetchall()
+    )
+    assert rows == {"1": True, "3": False}
+
+
+@pytest.mark.db
+def test_listing_that_disagrees_with_record_cnt_fails_loudly_and_writes_nothing(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.adapters.hkexnews import HkexnewsListingIncomplete
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "prefix.do" in request.url.path:
+            return httpx.Response(200, text=PREFIX_FIXTURE)
+        # 自报 5 条，只给 1 条、声称装载完毕——目录不完整。
+        return httpx.Response(
+            200,
+            json={
+                "recordCnt": 5,
+                "loadedRecord": 1,
+                "hasNextRow": False,
+                "result": __import__("json").dumps([ANNOUNCEMENT_ANNUAL]),
+            },
+        )
+
+    client = HttpClient(
+        "hkexnews",
+        "https://www1.hkexnews.hk",
+        policy=RetryPolicy(max_attempts=1, backoff_base_s=0),
+        bucket=TokenBucket(rate_per_minute=6000),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(HkexnewsListingIncomplete):
+        _run(conn, _deps(client, [], LocalBlobStore(tmp_path)), download=False)
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM core.announcement_index").fetchone() == (0,)

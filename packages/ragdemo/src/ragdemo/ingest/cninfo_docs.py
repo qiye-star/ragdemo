@@ -21,10 +21,15 @@ from decimal import Decimal
 import psycopg
 
 from ragdemo.adapters.announcements import NormalizedDocument
-from ragdemo.adapters.base import FetchContext
-from ragdemo.adapters.cninfo import AnnouncementRef, CninfoAdapter
+from ragdemo.adapters.base import FetchContext, RawResponse
+from ragdemo.adapters.cninfo import AnnouncementRef, CninfoAdapter, CninfoListingIncomplete
 from ragdemo.adapters.http import HttpClient
-from ragdemo.ingest.announcement_index import IndexEntry, IndexWriter, known_at_for_day
+from ragdemo.ingest.announcement_index import (
+    IndexEntry,
+    IndexOutcome,
+    IndexWriter,
+    known_at_for_day,
+)
 from ragdemo.ingest.assets_docs import (
     build_chunks_and_descriptions,
     prepare_documents,
@@ -49,16 +54,32 @@ def list_announcements(
     until: datetime,
     ingest_run_id: str,
 ) -> list[AnnouncementRef]:
-    """只列公告、不写库（dry run 用）。跳过没有 PDF 附件的公告，去重
-    （沪深两个 column 各查一遍可能对同一份公告各命中一次，实测未见过，
-    但去重不依赖这个假设成立）。
+    """只列公告、不写库（dry run 用）。列全（含没有 PDF 附件的），按公告 ID 去重，
+    并与接口自报的总数对账。
     """
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
-    seen: dict[str, AnnouncementRef] = {}
-    for raw in adapter.fetch(ctx, stock_code=stock_code, since=since, until=until):
+    raws = list(adapter.fetch(ctx, stock_code=stock_code, since=since, until=until))
+    return list(collect_refs(adapter, raws, stock_code=stock_code).values())
+
+
+def collect_refs(
+    adapter: CninfoAdapter, raws: list[RawResponse], *, stock_code: str
+) -> dict[str, AnnouncementRef]:
+    """把各页响应合成一张按公告 ID 去重的表，并与接口自报的 `totalAnnouncement` 对账。
+
+    对不上就抛 `CninfoListingIncomplete`（REJECTED，不冷却这一层）：目录少一条
+    就是"公告遗漏"，宁可这一次失败让待补清单记下来，也不静默少写。
+    """
+    refs: dict[str, AnnouncementRef] = {}
+    for raw in raws:
         for ref in adapter.parse_announcements(raw):
-            seen[ref.announcement_id] = ref
-    return list(seen.values())
+            refs[ref.announcement_id] = ref
+    expected = adapter.expected_total(raws)
+    if expected is not None and len(refs) != expected:
+        raise CninfoListingIncomplete(
+            f"{stock_code}：接口自报 {expected} 条公告，实际列出 {len(refs)} 条"
+        )
+    return refs
 
 
 def ingest_cninfo_announcements(
@@ -77,12 +98,13 @@ def ingest_cninfo_announcements(
 ) -> list[tuple[AnnouncementRef, DocumentWriteResult]]:
     """拉公告列表、逐份取 PDF 存 blob、写 core.document；返回每份公告与它的写入结果。"""
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
-    refs: dict[str, AnnouncementRef] = {}
+    raws: list[RawResponse] = []
     for raw in adapter.fetch(ctx, stock_code=stock_code, since=since, until=until):
         record_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=blob)
-        for ref in adapter.parse_announcements(raw):
-            refs[ref.announcement_id] = ref
-    ordered = list(refs.values())
+        raws.append(raw)
+    refs = collect_refs(adapter, raws, stock_code=stock_code)
+    # 这条旧路径只写 core.document（没有目录表），没有 PDF 的公告无文可存。
+    ordered = [r for r in refs.values() if r.downloadable]
     if limit is not None:
         ordered = ordered[:limit]
 
@@ -154,9 +176,13 @@ def run_cninfo_layer(
     download: bool,
     ingest_run_id: str,
     dry_run: bool,
+    cost_per_page_cny: Decimal | None = None,
 ) -> LayerReport:
     """巨潮层：列目录，按 `download` 决定要不要下载 PDF，按 `tiers` 决定下载下来的
     PDF 要不要送去解析。
+
+    目录必须列全，并与接口自报总数对账（`collect_refs`）；没有 PDF 附件的公告照样
+    入目录（`has_full_text=False`，链接指向公告详情页），只是不下载。
 
     `download=False`：只写目录行（`has_full_text=False`，`url` 指向巨潮的公告详情
     页），不下载、不写 `core.document`——用于本次不在试点范围内的实体（D2）。
@@ -172,16 +198,19 @@ def run_cninfo_layer(
     """
     report = LayerReport()
     ctx = FetchContext(ingest_run_id=ingest_run_id, partition_date=date.today())
-    refs: dict[str, AnnouncementRef] = {}
+    raws: list[RawResponse] = []
     for raw in deps.adapter.fetch(ctx, stock_code=stock_code, since=since, until=until):
         if not dry_run:
             record_snapshot(conn, raw, ingest_run_id=ingest_run_id, blob=deps.blob)
-        for ref in deps.adapter.parse_announcements(raw):
-            refs[ref.announcement_id] = ref
+        raws.append(raw)
+    refs = collect_refs(deps.adapter, raws, stock_code=stock_code)
     report.listed = len(refs)
+    report.source_total = deps.adapter.expected_total(raws)
 
     if dry_run:
         for ref in refs.values():
+            if not ref.downloadable:
+                continue
             tier = parse_tier(ref.title)
             report.estimated_pages[tier] = (
                 report.estimated_pages.get(tier, 0) + ESTIMATED_PAGES[tier]
@@ -195,7 +224,8 @@ def run_cninfo_layer(
 
     for ref in refs.values():
         known_at = known_at_for_day(ref.publish_at.date())
-        _outcome, index_id = index.write(
+        can_download = download and ref.downloadable
+        outcome, index_id = index.write(
             IndexEntry(
                 entity_ref=entity_ref,
                 source="cninfo",
@@ -203,12 +233,21 @@ def run_cninfo_layer(
                 title=ref.title,
                 publish_date=ref.publish_at.date(),
                 known_at=known_at,
-                has_full_text=download,
-                url=f"https://static.cninfo.com.cn{ref.pdf_path}",
+                has_full_text=can_download,
+                url=(
+                    f"https://static.cninfo.com.cn{ref.pdf_path}"
+                    if ref.downloadable
+                    else ref.detail_url
+                ),
             )
         )
         report.indexed += 1
-        if not download:
+        if not ref.downloadable:
+            report.no_attachment += 1
+        if not can_download:
+            continue
+        if outcome is IndexOutcome.SKIPPED and index.linked_doc_id(index_id) is not None:
+            report.already_downloaded += 1  # 上次已经下载并落了 document，不重复下载
             continue
 
         body = deps.adapter.fetch_full_text(ref, deps.static_client)
@@ -254,7 +293,9 @@ def run_cninfo_layer(
     if pending:
         docs_only = [doc for doc, _ in pending]
         prepared = prepare_documents(docs_only, deps.parser, deps.blob, budget, owner_user=None)
-        record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
+        record_parse_snapshots(
+            conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=cost_per_page_cny
+        )
         for item, (_, index_id) in zip(prepared, pending, strict=False):
             chunks, descriptions, violations = build_chunks_and_descriptions(
                 item.doc, chunk_cfg, describer

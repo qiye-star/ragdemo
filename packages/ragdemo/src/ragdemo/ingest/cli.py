@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -832,12 +833,56 @@ def docs_announcements(
             download_entities=download_entities,
             tiers=tiers,
             budget=PageBudget(max_pages),
-            ingest_run_id="cli:docs-announcements",
+            ingest_run_id=f"cli:docs-announcements:{uuid.uuid4().hex[:12]}",
+            cost_per_page_cny=cfg.textin_cost_per_page_cny,
         )
         click.echo(
             f"索引 {report.indexed}，解析 {report.parsed_docs}（{report.parsed_pages} 页），"
             f"按层：{dict(report.by_layer)}，待补 {len(report.backlogged)}，"
             f"失败 {len(report.failed)}"
         )
+        click.echo(
+            f"无附件 {report.no_attachment}，校验失败 {report.validation_failed}，"
+            f"存而未解析 {report.stored_unparsed}，预算跳过 {report.skipped_budget}"
+        )
+        for ref, reason in report.failed.items():
+            click.echo(f"[失败] {ref}: {reason[:200]}")
         for warning in report.warnings:
             click.echo(f"[警告] {warning}")
+
+
+@docs_group.command("verify-announcements")
+@click.option("--since", required=True, help="对账窗口起点 YYYY-MM-DD")
+@click.option("--until", required=True, help="对账窗口终点 YYYY-MM-DD（含）")
+@click.option("--entity-ref", "entity_refs", multiple=True, help="只对账这些实体；不传则全部")
+@click.option("--market", "market_filter", type=click.Choice(["cn", "hk", "us"]), default=None)
+def docs_verify_announcements(
+    since: str, until: str, entity_refs: tuple[str, ...], market_filter: str | None
+) -> None:
+    """公告不遗漏的验收：重新向来源要一遍自报总数，与库里现行行数逐实体比对。
+    有任何不一致就以非零码退出。不写库（只读库、只请求来源）。"""
+    from ragdemo.ingest.announcement_verify import verify_announcements
+
+    cfg = _load_config()
+    with psycopg.connect(_dsn()) as conn:
+        routes = entity_routes(conn)
+        if entity_refs:
+            routes = [r for r in routes if r.entity_ref in set(entity_refs)]
+        if market_filter:
+            routes = [r for r in routes if market_group(r) == market_filter]
+        rows = verify_announcements(
+            conn,
+            routes,
+            build_announcement_sources(cfg),
+            since=date.fromisoformat(since),
+            until=date.fromisoformat(until),
+        )
+    bad = [r for r in rows if not r.ok]
+    for r in rows:
+        click.echo(
+            f"{'OK ' if r.ok else 'BAD'} {r.entity_ref:<14} 来源 {r.source_total}  库 {r.db_count}"
+            f"  {r.note}"
+        )
+    click.echo(f"对账 {len(rows)} 家，不一致 {len(bad)} 家")
+    if bad:
+        raise SystemExit(1)

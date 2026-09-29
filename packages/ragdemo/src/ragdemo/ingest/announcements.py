@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -130,6 +131,10 @@ class AnnouncementRunReport:
     indexed: int = 0
     parsed_docs: int = 0
     parsed_pages: int = 0
+    validation_failed: int = 0
+    stored_unparsed: int = 0
+    skipped_budget: int = 0
+    no_attachment: int = 0
     backlogged: dict[str, str] = field(default_factory=dict)  # entity_ref → 原因
     failed: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -175,6 +180,7 @@ def ingest_announcements(
     tiers: frozenset[ParseTier],
     budget: PageBudget,
     ingest_run_id: str,
+    cost_per_page_cny: Decimal | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> AnnouncementRunReport:
     report = AnnouncementRunReport()
@@ -192,8 +198,16 @@ def ingest_announcements(
 
         capability = _CAPABILITY_BY_GROUP[group]
         watermark_source = f"announcements:{group}:{route.entity_ref}"
+        floor_source = f"announcements-floor:{group}:{route.entity_ref}"
         cursor = read_watermark(conn, watermark_source, partition_date)
+        floor_raw = read_watermark(conn, floor_source, partition_date)
+        floor = date.fromisoformat(floor_raw) if floor_raw else None
         since = date.fromisoformat(cursor) + timedelta(days=1) if cursor else backfill_since
+        if cursor and (floor is None or floor > backfill_since):
+            # 游标只管"往后追新"，不保证更早的区间也覆盖过（首跑窗口可能比现在的
+            # backfill_since 晚）。覆盖下界（floor）没到 backfill_since 就整段重取一次，
+            # 已入库的行由 IndexWriter 幂等跳过；没有下界记录的老游标同样重取。
+            since = min(since, backfill_since)
 
         open_items = {i.entity_ref: i for i in backlog.open_items(capability)}
         if route.entity_ref in open_items:
@@ -214,6 +228,7 @@ def ingest_announcements(
             budget=budget,
             download=download,
             ingest_run_id=ingest_run_id,
+            cost_per_page_cny=cost_per_page_cny,
         )
         if not layers:
             report.warnings.append(f"{route.entity_ref}: 没有配置任何可用来源，本次跳过")
@@ -235,6 +250,10 @@ def ingest_announcements(
             report.indexed += routed.value.indexed
             report.parsed_docs += routed.value.parsed_docs
             report.parsed_pages += routed.value.parsed_pages
+            report.validation_failed += routed.value.validation_failed
+            report.stored_unparsed += routed.value.stored_unparsed
+            report.skipped_budget += routed.value.skipped_budget
+            report.no_attachment += routed.value.no_attachment
 
         if routed.degraded:
             # 降级层成功：目录有了，全文还没到——记入待补，不推进游标。
@@ -249,6 +268,8 @@ def ingest_announcements(
         else:
             backlog.resolve(capability, route.entity_ref, covered_since=since, now=now())
             write_watermark(conn, watermark_source, partition_date, partition_date.isoformat())
+            covered_from = since if floor is None else min(floor, since)
+            write_watermark(conn, floor_source, partition_date, covered_from.isoformat())
 
     return report
 
@@ -266,6 +287,7 @@ def _layers_for(
     budget: PageBudget,
     download: bool,
     ingest_run_id: str,
+    cost_per_page_cny: Decimal | None,
 ) -> list[Layer[Any]]:
     layers: list[Layer[Any]] = []
     if group == "cn":
@@ -291,6 +313,7 @@ def _layers_for(
                         download=download,
                         ingest_run_id=ingest_run_id,
                         dry_run=False,
+                        cost_per_page_cny=cost_per_page_cny,
                     ),
                 )
             )
@@ -338,6 +361,7 @@ def _layers_for(
                     download=download,
                     ingest_run_id=ingest_run_id,
                     dry_run=False,
+                    cost_per_page_cny=cost_per_page_cny,
                 ),
             )
         )
@@ -360,6 +384,8 @@ def _layers_for(
                     download=download,
                     ingest_run_id=ingest_run_id,
                     dry_run=False,
+                    since=since,
+                    cost_per_page_cny=cost_per_page_cny,
                 ),
             )
         )

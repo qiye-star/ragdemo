@@ -102,12 +102,21 @@ class IndexWriter:
         entity_id = self._entity_id(entry.entity_ref)
         with self.conn.transaction():
             existing = self.conn.execute(
-                "SELECT index_id FROM core.announcement_index"
+                "SELECT index_id, has_full_text FROM core.announcement_index"
                 " WHERE source = %s AND source_ref = %s AND superseded_at IS NULL",
                 (entry.source, entry.source_ref),
             ).fetchone()
+            supersede_same_source: int | None = None
             if existing is not None:
-                return IndexOutcome.SKIPPED, int(existing[0])
+                if entry.has_full_text and not existing[1]:
+                    # 同一来源的同一份公告，之前只建了目录（如实体当时不在下载范围内），
+                    # 这次带着全文再来：旧行取代、新行带全文。不能因为 (source,
+                    # source_ref) 已存在就 SKIPPED——那样目录永远写着"没有全文"，
+                    # 而 core.document 里其实已经有了。反过来（旧行有全文、新写入
+                    # 只是目录）不降级，仍然 SKIPPED。
+                    supersede_same_source = int(existing[0])
+                else:
+                    return IndexOutcome.SKIPPED, int(existing[0])
 
             title_norm = normalize_title(entry.title, self._short_names(entity_id))
             match = self.conn.execute(
@@ -118,7 +127,14 @@ class IndexWriter:
             ).fetchone()
 
             outcome = IndexOutcome.INSERTED
-            if match is not None:
+            if supersede_same_source is not None:
+                self.conn.execute(
+                    "UPDATE core.announcement_index SET superseded_at = %s,"
+                    " source_note = %s WHERE index_id = %s",
+                    (self._now(), "同来源补全文，由带全文的新行取代", supersede_same_source),
+                )
+                outcome = IndexOutcome.SUPERSEDED_DEGRADED
+            elif match is not None:
                 match_id, match_full_text = match
                 if entry.has_full_text and not match_full_text:
                     # 主源到达：取代已有的降级行。
@@ -158,6 +174,12 @@ class IndexWriter:
             ).fetchone()
             assert row is not None
             return outcome, int(row[0])
+
+    def linked_doc_id(self, index_id: int) -> int | None:
+        row = self.conn.execute(
+            "SELECT doc_id FROM core.announcement_index WHERE index_id = %s", (index_id,)
+        ).fetchone()
+        return int(row[0]) if row is not None and row[0] is not None else None
 
     def link_document(self, index_id: int, doc_id: int) -> None:
         self.conn.execute(

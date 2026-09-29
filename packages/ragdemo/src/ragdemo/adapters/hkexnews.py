@@ -15,22 +15,24 @@
 走这条换算，改走公告目录直接存 `known_at`——本模块只产出 `HkAnnouncementRef`，
 真正落 `known_at` 是 `ingest/hkexnews_docs.py` 的事）。
 
-分页：实测 `rowRange` 可以开到至少 500 且服务端按请求返回，本模块因此固定用一次
-较大的 `rowRange` 覆盖查询窗口，不做真正的翻页（`pageNo` 类参数实测不生效）。
-超过这个上限的公司/窗口组合会漏掉更早的公告——3 年窗口内实测阿里巴巴共 551 条，
-属于极端量级；`parse_announcements` 返回的条数与响应里的 `recordCnt` 不一致时，
-调用方应该能看到这个信号（`RawResponse.payload` 里两者都在）。
+分页：`rowRange` 上限 500，`pageNo` 类参数实测不生效，没有真正的翻页。响应里的
+`recordCnt` 是窗口内的真实总数、`loadedRecord`/`hasNextRow` 说明这次装载了多少——
+装不下时（2026-09-29 实测腾讯 3 年窗口 recordCnt=535 只装载 500）**把日期窗口二分
+再各查一次**，直到每个子窗口都装得下；单日仍装不下就抛 `HkexnewsListingIncomplete`。
+被截断的那次响应照样 yield 出去（每次真实抓取都要留快照，CLAUDE.md §1.5），
+用 `params["truncated"]` 标记，`expected_total` 不计它。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ragdemo.adapters.base import FetchContext, RawResponse
+from ragdemo.adapters.errors import AdapterError
 from ragdemo.adapters.http import HttpClient
 
 PROVIDER = "hkexnews"
@@ -44,15 +46,27 @@ class HkAnnouncementRef:
     stock_code: str
     title: str
     publish_at: datetime  # 分钟精度，香港时间
-    file_link: str
+    file_link: str  # 没有附件时为空串
+    file_type: str = "PDF"
+
+    @property
+    def downloadable(self) -> bool:
+        """有 PDF 附件才能下载并解析；其余（HTM、无附件）照样是一份公告、必须进目录。"""
+        return bool(self.file_link) and self.file_type.strip().lstrip(".").upper() == "PDF"
 
     @property
     def pdf_path(self) -> str:
+        assert self.file_link, "只有 downloadable 的公告才有 PDF 路径"
         return self.file_link
 
 
 class HkexnewsStockIdNotFound(RuntimeError):
     """prefix.do 按股票代码查不到对应的披露易 stockId。"""
+
+
+class HkexnewsListingIncomplete(AdapterError):
+    """列出的公告条数与响应自报的 `recordCnt` 对不上，或单日仍超过 `rowRange`——
+    目录不完整（`AdapterError`：归为 REJECTED，不冷却这一层）。"""
 
 
 def _parse_jsonp(body: str) -> Any:  # noqa: ANN401
@@ -94,8 +108,13 @@ class HkexnewsAdapter:
     def fetch(
         self, ctx: FetchContext, *, stock_code: str, since: datetime, until: datetime
     ) -> Iterator[RawResponse]:
-        """一次查询覆盖整个窗口（模块文档字符串"分页"一节）。"""
+        """装不下就二分日期窗口（模块文档字符串"分页"一节）。"""
         stock_id = self.resolve_stock_id(stock_code)
+        yield from self._fetch_range(stock_id, stock_code, since.date(), until.date())
+
+    def _fetch_range(
+        self, stock_id: str, stock_code: str, start: date, end: date
+    ) -> Iterator[RawResponse]:
         params = {
             "sortDir": "0",
             "sortByOptions": "DateTime",
@@ -103,8 +122,8 @@ class HkexnewsAdapter:
             "market": "SEHK",
             "stockId": stock_id,
             "documentType": "-1",
-            "fromDate": since.strftime("%Y%m%d"),
-            "toDate": until.strftime("%Y%m%d"),
+            "fromDate": start.strftime("%Y%m%d"),
+            "toDate": end.strftime("%Y%m%d"),
             "title": "",
             "searchType": "0",
             "t1code": "-2",
@@ -114,21 +133,44 @@ class HkexnewsAdapter:
             "lang": "zh",
         }
         raw = self._client.get_json("/search/titleSearchServlet.do", params)
-        yield raw
+        payload = raw.payload if isinstance(raw.payload, dict) else {}
+        loaded = len(json.loads(payload.get("result") or "[]"))
+        record_cnt = int(payload.get("recordCnt") or 0)
+        truncated = bool(payload.get("hasNextRow")) or loaded < record_cnt
+        if not truncated:
+            yield raw
+            return
+        if start >= end:
+            raise HkexnewsListingIncomplete(
+                f"{stock_code} 在 {start} 一天内就有 {record_cnt} 条，超过 rowRange={ROW_RANGE}"
+            )
+        yield replace(raw, params={**raw.params, "truncated": "1"})
+        mid = start + (end - start) // 2
+        yield from self._fetch_range(stock_id, stock_code, start, mid)
+        yield from self._fetch_range(stock_id, stock_code, mid + timedelta(days=1), end)
+
+    @staticmethod
+    def expected_total(raws: Sequence[RawResponse]) -> int | None:
+        """各个**完整**子窗口自报的 `recordCnt` 之和（被截断的那次不计——它的行是
+        子窗口行的子集）。没有任何完整响应时返回 `None`。"""
+        counts = [
+            int(p.get("recordCnt") or 0)
+            for raw in raws
+            if isinstance(p := raw.payload, dict) and not raw.params.get("truncated")
+        ]
+        return sum(counts) if counts else None
 
     def parse_announcements(self, raw: RawResponse) -> Iterator[HkAnnouncementRef]:
         payload = raw.payload if isinstance(raw.payload, dict) else {}
         rows = json.loads(payload.get("result") or "[]")
         for row in rows:
-            file_link = str(row.get("FILE_LINK") or "")
-            if not file_link or str(row.get("FILE_TYPE")).upper() != "PDF":
-                continue  # 没有 PDF 附件的条目拿不到可解析的原文，跳过而不是报错
             yield HkAnnouncementRef(
                 news_id=str(row["NEWS_ID"]),
                 stock_code=str(row["STOCK_CODE"]).split("<br/>")[0],
                 title=str(row["TITLE"]),
                 publish_at=_parse_publish_at(str(row["DATE_TIME"])),
-                file_link=file_link,
+                file_link=str(row.get("FILE_LINK") or ""),
+                file_type=str(row.get("FILE_TYPE") or ""),
             )
 
     def fetch_full_text(self, ref: HkAnnouncementRef, client: HttpClient) -> bytes:

@@ -20,6 +20,7 @@ from ragdemo.adapters.local_manifest import CST
 from ragdemo.cli import main
 from ragdemo.ingest import assets_docs
 from ragdemo.ingest import cli as docs_cli
+from ragdemo.ingest.assets_docs import build_chunks_and_descriptions
 from ragdemo.parse.chunker import Chunk
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
@@ -129,7 +130,7 @@ def test_build_chunks_and_descriptions_returns_empty_for_unparsed_document() -> 
         page_count=None,
         blocks=[],
     )
-    chunks, descriptions, violations = docs_cli.build_chunks_and_descriptions(
+    chunks, descriptions, violations = build_chunks_and_descriptions(
         doc, ChunkConfig(), MockTableDescriber()
     )
     assert chunks == []

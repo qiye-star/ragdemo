@@ -1,6 +1,6 @@
 {
  "prefix": "callback({\"more\":\"1\",\"stockInfo\":[{\"stockId\":1000015694,\"code\":\"09988\",\"name\":\"阿里巴巴－Ｗ\"}]});\r\n",
- "titlesearch_recordCnt": 16,
+ "titlesearch_recordCnt": 8,
  "titlesearch_result": [
   {
    "FILE_INFO": "161KB",
@@ -114,5 +114,6 @@
    "STOCK_CODE": "09988<br/>89988",
    "FILE_LINK": "/listedco/listconews/sehk/2026/0820/2026082000746_c.pdf"
   }
- ]
+ ],
+ "_note": "真实抓取时 recordCnt=16，这里只保留 8 行以控制体积；recordCnt 按保留行数改写，否则会被 recordCnt 对账判为目录不完整。"
 }

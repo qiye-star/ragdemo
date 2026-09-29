@@ -97,7 +97,18 @@ class EdgarAdapter:
         assert self._client is not None
         cik = str(params["cik"]).zfill(10)
         raw = self._client.get_json(f"/submissions/CIK{cik}.json", {})
+        payload = raw.payload if isinstance(raw.payload, dict) else {}
         yield replace(raw, payload=_rows(raw.payload))
+        # `filings.recent` 只含最近约 1000 条（高频申报的公司可能不满 1 年）；更早的
+        # 申报放在 `filings.files` 指向的分页文件里。调用方给了 `since` 就把覆盖
+        # 该起点的分页文件全取回来——只读 recent 会让早于它的申报静默遗漏。
+        since = params.get("since")
+        for extra in (payload.get("filings") or {}).get("files") or []:
+            if since is not None and date.fromisoformat(str(extra["filingTo"])) < since:
+                continue
+            page = self._client.get_json(f"/submissions/{extra['name']}", {})
+            body = page.payload if isinstance(page.payload, dict) else {}
+            yield replace(page, payload=_columns_to_rows(str(payload["cik"]), body))
 
     def known_at(self, record: Any) -> datetime:  # noqa: ANN401
         """acceptanceDateTime 是 EDGAR 公开受理该申报的精确时刻。"""
@@ -146,8 +157,10 @@ def _rows(payload: Any) -> list[dict[str, Any]]:  # noqa: ANN401
     """
     if isinstance(payload, list):
         return payload
-    cik = str(payload["cik"])
-    recent = payload["filings"]["recent"]
+    return _columns_to_rows(str(payload["cik"]), payload["filings"]["recent"])
+
+
+def _columns_to_rows(cik: str, recent: dict[str, Any]) -> list[dict[str, Any]]:
     count = len(recent["accessionNumber"])
     return [
         {

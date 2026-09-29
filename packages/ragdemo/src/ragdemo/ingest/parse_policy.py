@@ -59,6 +59,12 @@ class LayerReport:
     # describe.py 的违禁词过滤拒绝）——落一行无块 document 留痕，不能让一份公告
     # 的校验失败炸穿整批（2026-09-29 对 688041.SH 真实公告实测发现）。
     validation_failed: int = 0
+    # 目录里有、但没有可下载 PDF 附件的公告（照样入目录，只是拿不到原文）。
+    no_attachment: int = 0
+    # 上次已经下载并落了 document 的公告，这次不重复下载（往前回填会重叠窗口）。
+    already_downloaded: int = 0
+    # 来源自报的公告总数（用于对账）；来源不给总数时为 None。
+    source_total: int | None = None
     estimated_pages: dict[ParseTier, int] = field(default_factory=dict)
 
 
