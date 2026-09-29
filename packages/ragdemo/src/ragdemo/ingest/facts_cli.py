@@ -20,6 +20,7 @@ from ragdemo.ingest.facts_extras_cli import (
     crosscheck_holders_command,
     fx_command,
     holders_command,
+    prices_command,
     segments_command,
     verify_stage2_command,
 )
@@ -107,3 +108,4 @@ facts_group.add_command(holders_command)
 facts_group.add_command(segments_command)
 facts_group.add_command(verify_stage2_command)
 facts_group.add_command(crosscheck_holders_command)
+facts_group.add_command(prices_command)

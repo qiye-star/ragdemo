@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import click
@@ -19,6 +20,8 @@ from ragdemo.adapters.mcp_gateway import gateway_client_from_env
 from ragdemo.adapters.snapshot_replay import SnapshotReplayGateway
 from ragdemo.adapters.wind_structured import WindHoldersAdapter, WindSegmentsAdapter
 from ragdemo.config import load_config
+from ragdemo.ingest.price_backfill import backfill_prices, tushare_codes
+from ragdemo.ingest.price_sources_build import build_price_sources
 from ragdemo.ingest.stage2_crosscheck import crosscheck_holders
 from ragdemo.ingest.stage2_verify import verify_stage2
 from ragdemo.ingest.structured_extras import (
@@ -266,3 +269,40 @@ def crosscheck_holders_command() -> None:
         click.echo(f"[无来源] {len(report.no_source)} 个期别没有可核对的已解析原文", err=True)
     if report.mismatched:
         raise SystemExit(1)
+
+
+@click.command("prices")
+@click.option("--since", required=True, help="起始日 YYYY-MM-DD")
+@click.option("--until", required=True, help="截止日 YYYY-MM-DD（含）")
+@click.option("--entity-ref", "entity_refs", multiple=True, help="只回填这些代码（如 688041.SH）")
+@click.option("--yes", is_flag=True, default=False, help="真正请求行情源并写库；不传只 dry run")
+def prices_command(since: str, until: str, entity_refs: tuple[str, ...], yes: bool) -> None:
+    """日行情区间回填 → core.price_daily（一次区间调用/实体，三层降级，每次留快照）。
+    不推进 Dagster 共用的行情游标；写入幂等，可安全重跑。"""
+    start, end = date.fromisoformat(since), date.fromisoformat(until)
+    with psycopg.connect(_dsn()) as conn:
+        codes = tushare_codes(conn, entity_refs or None)
+        if not yes:
+            click.echo(
+                f"[dry run] {len(codes)} 个实体 × 一次区间调用（{start} ~ {end}）；加 --yes 执行"
+            )
+            return
+        report = backfill_prices(
+            conn,
+            # 区间回填不启用 Wind 日 K 线降级层：它逐日调用、消耗 Wind 额度，长区间会调用成百上千次。
+            replace(build_price_sources(), wind_stock=None),
+            LocalBlobStore(load_config().blob_root),
+            ts_codes=codes,
+            since=start,
+            until=end,
+            ingest_run_id=f"cli:facts-prices:{uuid.uuid4().hex[:12]}",
+            on_progress=click.echo,
+        )
+    click.echo(
+        f"实体 {report.entities}，新增 {report.inserted}，更正 {report.corrected}，"
+        f"无变化 {report.skipped}，按层 {report.by_layer}"
+    )
+    for code, reason in report.failed.items():
+        click.echo(f"[失败] {code}: {reason}", err=True)
+    if report.failed:
+        raise click.ClickException(f"{len(report.failed)} 个实体未能回填（冷却过后重跑即可）")
