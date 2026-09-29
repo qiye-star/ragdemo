@@ -289,7 +289,7 @@ def prices_command(since: str, until: str, entity_refs: tuple[str, ...], yes: bo
             return
         report = backfill_prices(
             conn,
-            # 区间回填不启用 Wind 日 K 线降级层：它逐日调用、消耗 Wind 额度，长区间会调用成百上千次。
+            # 区间回填不启用 Wind 日 K 线降级层：它逐日调用、消耗 Wind 额度。
             replace(build_price_sources(), wind_stock=None),
             LocalBlobStore(load_config().blob_root),
             ts_codes=codes,
