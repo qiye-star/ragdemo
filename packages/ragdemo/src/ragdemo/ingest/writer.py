@@ -59,9 +59,9 @@ class PointInTimeWriter:
     def _entity_id(self, entity_ref: str) -> str:
         if entity_ref not in self._entity_cache:
             row = self.conn.execute(
-                "SELECT entity_id FROM core.entity WHERE tushare_code = %s"
+                "SELECT entity_id FROM core.entity WHERE entity_id = %s OR tushare_code = %s"
                 " OR ifind_code = %s OR wind_code = %s OR edgar_cik = %s",
-                (entity_ref, entity_ref, entity_ref, entity_ref),
+                (entity_ref, entity_ref, entity_ref, entity_ref, entity_ref),
             ).fetchone()
             if row is None:
                 raise UnknownEntityRef(f"无法解析供应商代码 {entity_ref!r} 为 entity_id")

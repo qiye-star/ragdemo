@@ -88,3 +88,35 @@ def import_command(path: Path, author: str, note: str | None, yes: bool) -> None
         f"已写入：新增 {counts[PublishOutcome.CREATED]}，"
         f"新版本 {counts[PublishOutcome.NEW_VERSION]}（旧版本保留）"
     )
+
+
+@metrics_group.command("manual-template")
+@click.option("--out", "out", required=True, type=click.Path(dir_okay=False, path_type=Path))
+def manual_template_command(out: Path) -> None:
+    """生成手工录入产业指标的 CSV 表头（列含义见 ragdemo/metrics/manual.py）。"""
+    from ragdemo.metrics.manual import write_template
+
+    write_template(out)
+    click.echo(f"已生成 {out}")
+
+
+@metrics_group.command("import-manual")
+@click.option(
+    "--file", "path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option("--yes", is_flag=True, default=False, help="真正写库；不传则只校验")
+def import_manual_command(path: Path, yes: bool) -> None:
+    """校验并导入手工录入的产业指标。每行必须有来源与出处；有任何问题整批不写。"""
+    from ragdemo.metrics.manual import ManualImportError, import_rows, parse_rows
+
+    with psycopg.connect(_dsn()) as conn:
+        try:
+            rows = parse_rows(conn, path)
+        except ManualImportError as exc:
+            raise click.ClickException(str(exc)) from None
+        click.echo(f"校验通过：{len(rows)} 行")
+        if not yes:
+            click.echo("[dry run] 未写库；加 --yes 写入")
+            return
+        counts = import_rows(conn, path, rows, now=datetime.now(UTC))
+    click.echo("已写入：" + "，".join(f"{k.value} {v}" for k, v in counts.items()))
