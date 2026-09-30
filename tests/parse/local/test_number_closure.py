@@ -71,3 +71,21 @@ def test_minus_after_cjk_is_sign() -> None:
 def test_sign_flip_is_caught() -> None:
     # 符号反转被检测到
     assert closure_violations("-91.2", "91.2") == ["-91.2"]
+
+
+def test_superscript_subscript_not_digits() -> None:
+    # 上标、下标、圈号不是数字；m² 中的 2 不是数字
+    assert closure_violations("2", "m²") == ["2"]
+    assert numbers_in("收入¹ 91.2 ①") == {"91.2": 1}
+
+
+def test_minus_after_letter_is_sign() -> None:
+    # 字母后的 "-" 是负号：EPS-0.5 → -0.5
+    assert closure_violations("EPS 0.5", "EPS-0.5") == ["0.5"]
+    assert numbers_in("EPS-0.5") == {"-0.5": 1}
+
+
+def test_unicode_minus_handled() -> None:
+    # U+2212 (Unicode 负号) 也是负号
+    assert closure_violations("3.5", "−3.5") == ["3.5"]
+    assert numbers_in("−3.5") == {"-3.5": 1}
