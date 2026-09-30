@@ -129,15 +129,34 @@
 ```
 云主机（起步：8C / 32G / 500G SSD）
 │
-├── paradedb          ParadeDB 官方镜像（PostgreSQL + pg_search + pgvector）
-│                     端口不对公网开放；数据卷独立挂载
-├── dagster-webserver  Dagster UI（内网 / VPN 访问）
-├── dagster-daemon     调度与传感器
+├── paradedb           ParadeDB 官方镜像（PostgreSQL + pg_search + pgvector）
+│                      端口不对公网开放；数据卷独立挂载；业务数据在 core / audit / …
+│                      schema，Dagster 状态在独立的 `dagster` schema
+├── chroma             向量候选生成器（adr/0009；只本地自建，不用 Chroma Cloud）
+├── egress-proxy       出网代理：域名白名单 + 凭据注入 + 调用日志
+│                      （回环反向代理端口 8081 TextIn / 8082 硅基流动 / 8083 Tushare /
+│                       8084 Wind / 8085 iFind / 8086 DeepSeek，8080 是正向代理）
+├── dagster-webserver  Dagster UI（127.0.0.1:3000，内网 / VPN 访问）
+├── dagster-daemon     调度与传感器（日度行情 / 公告 / 体检 / 泄漏重放 / 告警，见
+│                      `ingest/schedules.py`）
 ├── api                FastAPI（P1 起：内网只读诊断接口，adr/0010；P4 起对外产品接口）
 ├── worker             LangGraph Agent 执行器
-├── egress-proxy       出网代理：域名白名单 + 凭据注入 + 调用日志
 └── minio              原始 PDF、用户上传件、解析产物（JSON + Markdown）对象存储
 ```
+
+**实际状态（2026-09-30，`infra/docker-compose.yml`）**：已经在跑的是 `paradedb`、`chroma`、
+`egress-proxy`、`dagster-webserver`、`dagster-daemon` 五个容器；`api`、`worker`、`minio` 还没有：
+
+- `api` 以宿主进程形态运行（`ragdemo serve`，只绑 127.0.0.1），见下；
+- `worker`（LangGraph Agent）属于后续阶段，还没有实现；
+- **对象存储是本地文件系统**（`RAGDEMO_BLOB_ROOT`，宿主机的 `data/blob`，Dagster 容器通过 bind
+  mount 共用同一目录），不是 MinIO；`ragdemo_core.blob.BlobStore` 是抽象接口，换成 MinIO / S3
+  只需要新增一个实现，业务代码不变。
+
+Dagster 容器的镜像里**没有任何供应商密钥**：环境里只有回环地址（入口脚本把 `127.0.0.1` 改写成
+服务名 `egress-proxy`）与非密钥配置，凭据仍只在 `egress-proxy`。运行 / 事件 / 调度状态存进
+ParadeDB 的 `dagster` schema（`infra/dagster/dagster.yaml`），并发上限 1（供应商限速与冷却状态
+是全局的）。
 
 **P1 现状**：`api` 目前以宿主进程形态运行（`ragdemo serve`，只绑
 127.0.0.1），不是上面拓扑图里的容器——诊断接口的维护成本要接近零

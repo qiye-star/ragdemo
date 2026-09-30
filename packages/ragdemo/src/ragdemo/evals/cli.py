@@ -156,6 +156,13 @@ def add_retrieval(
     help="检索用的嵌入 / 重排：mock 或真实（siliconflow）",
 )
 @click.option("--rerank/--no-rerank", default=True, help="是否启用重排（消融用）")
+@click.option(
+    "--vector-backend",
+    type=click.Choice(["pg", "chroma"]),
+    default="pg",
+    show_default=True,
+    help="向量召回后端：pg = pgvector（对照组）；chroma = 自建 Chroma（ADR-0009）",
+)
 @click.option("--w-bm25", type=float, default=None, help="BM25 一路的融合权重")
 @click.option("--w-vec", type=float, default=None, help="向量一路的融合权重")
 @click.option("--candidate-k", type=int, default=None, help="每一路的候选数")
@@ -166,6 +173,7 @@ def run(
     gate: bool,
     models: str,
     rerank: bool,
+    vector_backend: str,
     w_bm25: float | None,
     w_vec: float | None,
     candidate_k: int | None,
@@ -188,7 +196,15 @@ def run(
     config.validate()
     synonyms = load_synonyms() if rewrite else None
     with psycopg.connect(_dsn()) as conn:
-        service = RetrievalService(conn, embedder, reranker, synonyms=synonyms)
+        index = None
+        if vector_backend == "chroma":
+            from ragdemo.retrieval.vector_index import (
+                ChromaVectorIndex,
+                chroma_client_from_env,
+            )
+
+            index = ChromaVectorIndex(chroma_client_from_env())
+        service = RetrievalService(conn, embedder, reranker, synonyms=synonyms, index=index)
         # 必须在 run_retrieval_eval 把这次结果写进 evals.eval_run 之前读
         # 基线——见 fetch_baseline 的 docstring，读晚了会把这次自己的结果
         # 当成基线，--gate 形同虚设（H7 集成测试抓到的真实回归）。
@@ -201,6 +217,7 @@ def run(
             extra_config={
                 "models": models,
                 "embed_model": embedder.model,
+                "vector_backend": vector_backend,
                 "label": label,
             },
         )

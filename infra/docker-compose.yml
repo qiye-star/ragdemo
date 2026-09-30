@@ -124,6 +124,73 @@ services:
       - reverse:https://api.deepseek.com@8086
     restart: unless-stopped
 
+  # --- 阶段 4.1：Dagster 常驻（webserver + daemon）----------------------------------------
+  # 两个进程共用同一个镜像（infra/dagster/Dockerfile）与同一份环境；运行 / 事件 / 调度状态存进
+  # ParadeDB 的 `dagster` schema（迁移 024 建 schema，dagster.yaml 里 search_path=dagster）。
+  # 镜像与环境里**没有供应商密钥**——它们只在 egress-proxy；这里只传非密钥配置与回环地址
+  #（入口脚本把 127.0.0.1 改成服务名 egress-proxy）。
+  dagster-webserver:
+    build:
+      context: ..
+      dockerfile: infra/dagster/Dockerfile
+    image: ragdemo-dagster:local
+    container_name: ragdemo-dagster-webserver
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/dagster_home/workspace.yaml"]
+    environment: &dagster-env
+      DAGSTER_PG_URL: postgresql://postgres:${POSTGRES_PASSWORD:-ragdemo}@paradedb:5432/ragdemo?options=-csearch_path%3Ddagster
+      RAGDEMO_DSN: postgresql://postgres:${POSTGRES_PASSWORD:-ragdemo}@paradedb:5432/ragdemo
+      RAGDEMO_BLOB_ROOT: /app/data/blob
+      RAGDEMO_TUSHARE_MCP_URL: ${RAGDEMO_TUSHARE_MCP_URL:-}
+      RAGDEMO_TUSHARE_REST_URL: ${RAGDEMO_TUSHARE_REST_URL:-}
+      RAGDEMO_WIND_MCP_URL: ${RAGDEMO_WIND_MCP_URL:-}
+      RAGDEMO_IFIND_MCP_BASE: ${RAGDEMO_IFIND_MCP_BASE:-}
+      RAGDEMO_CNINFO_USER_AGENT: ${RAGDEMO_CNINFO_USER_AGENT:-}
+      EDGAR_USER_AGENT: ${EDGAR_USER_AGENT:-}
+      TEXTIN_BASE_URL: ${TEXTIN_BASE_URL:-}
+      TEXTIN_MAX_PAGES_PER_RUN: ${TEXTIN_MAX_PAGES_PER_RUN:-}
+      TEXTIN_COST_PER_PAGE_CNY: ${TEXTIN_COST_PER_PAGE_CNY:-}
+      RAGDEMO_MONTHLY_BUDGET_CNY: ${RAGDEMO_MONTHLY_BUDGET_CNY:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_KIND: ${ALERT_WEBHOOK_KIND:-}
+    volumes:
+      - ../data:/app/data
+    ports:
+      - "127.0.0.1:${RAGDEMO_DAGSTER_PORT:-3000}:3000"
+    depends_on:
+      paradedb:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:3000/server_info', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  dagster-daemon:
+    image: ragdemo-dagster:local
+    container_name: ragdemo-dagster-daemon
+    command: ["dagster-daemon", "run", "-w", "/dagster_home/workspace.yaml"]
+    environment: *dagster-env
+    volumes:
+      - ../data:/app/data
+    depends_on:
+      paradedb:
+        condition: service_healthy
+      dagster-webserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "dagster-daemon", "liveness-check"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   chromadata:

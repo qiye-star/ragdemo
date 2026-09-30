@@ -435,6 +435,54 @@ def docs_embed(limit: int | None, models: str) -> None:
     )
 
 
+# --- docs reconcile-index（PG ↔ Chroma 一致性核对与修复，ADR-0009 后果 2）-----------
+
+
+@docs_group.command("reconcile-index")
+@click.option(
+    "--repair/--check-only",
+    default=False,
+    help="--repair：把 PG 有而 Chroma 没有的块补写进去、删掉 Chroma 里的孤儿；"
+    "默认只核对（不改 Chroma）",
+)
+def docs_reconcile_index(repair: bool) -> None:
+    """核对 PG（时点权威）与 Chroma（向量候选生成器）是否一致：偏移必须为 0。"""
+    from ragdemo.embed.reconcile import reconcile_index
+    from ragdemo.retrieval.vector_index import (
+        ChromaVectorIndex,
+        chroma_client_from_env,
+    )
+
+    index = ChromaVectorIndex(chroma_client_from_env())
+    with psycopg.connect(_dsn()) as conn:
+        if repair:
+            drift = reconcile_index(conn, index)
+            click.echo(
+                f"核对 {drift.checked} 个候选：补写 {len(drift.missing_in_index)}，"
+                f"删除孤儿 {len(drift.orphan_in_index)}"
+            )
+            again = reconcile_index(conn, index)
+        else:
+            valid = [
+                int(r[0])
+                for r in conn.execute(
+                    "SELECT block_id FROM core.doc_block WHERE is_leaf AND embedding IS NOT NULL"
+                    " AND superseded_at IS NULL AND owner_user IS NULL ORDER BY block_id"
+                ).fetchall()
+            ]
+            present = index.existing_ids(valid)
+            missing = [b for b in valid if b not in present]
+            click.echo(f"PG 有向量的叶子块 {len(valid)}，Chroma 缺 {len(missing)}（未修复）")
+            if missing:
+                raise click.ClickException("PG 与 Chroma 有偏移；加 --repair 修复")
+            return
+    if again.missing_in_index or again.orphan_in_index:
+        raise click.ClickException(
+            f"修复后仍有偏移：缺 {len(again.missing_in_index)}，孤儿 {len(again.orphan_in_index)}"
+        )
+    click.echo("修复后复核：偏移为 0")
+
+
 # --- docs ingest-edgar（阶段 F：F5，全文抓取此前完全没有代码）----------------
 
 
