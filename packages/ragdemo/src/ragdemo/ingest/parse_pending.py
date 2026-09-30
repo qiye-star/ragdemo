@@ -194,7 +194,12 @@ def run_parse_pending(
         )
 
         prepared = prepare_documents([doc], parser, blob, budget, owner_user=None)
-        record_parse_snapshots(conn, prepared, ingest_run_id=ingest_run_id, cost_per_page_cny=None)
+        record_parse_snapshots(
+            conn,
+            prepared,
+            ingest_run_id=ingest_run_id,
+            cost_per_page_cny=load_config().textin_cost_per_page_cny,
+        )
         if not prepared:
             # 预算在这份文档身上耗尽（prepare_documents 在调用 parser 前检查），
             # 或者是 ParseRetryable——两种都不留记号，下次跑自然重试。
