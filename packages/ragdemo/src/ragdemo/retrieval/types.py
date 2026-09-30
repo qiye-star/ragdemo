@@ -22,6 +22,9 @@ class RetrievalConfig:
     oversample_growth: int = 4
     rewrite_enabled: bool = False
     rerank_enabled: bool = True
+    # 期别感知的排序偏置（retrieval/period.py）：问题里有唯一明确年份时，同年份文档的块
+    # 分数 ×(1+boost)、别的年份 ×(1−boost)。0 = 关闭（默认，行为与加这个字段之前一致）。
+    period_boost: float = 0.0
 
     def validate(self) -> None:
         if self.top_k > self.fusion_k:
@@ -32,6 +35,8 @@ class RetrievalConfig:
             raise ValueError("两路权重不能同时为 0")
         if self.rrf_k <= 0:
             raise ValueError("rrf_k 必须为正")
+        if not 0.0 <= self.period_boost < 1.0:
+            raise ValueError(f"period_boost 必须在 [0, 1) 内，收到 {self.period_boost}")
         if self.oversample_growth < 2:
             # 等于 1 会让迭代过采样原地踏步（k 永远不变），直接死循环。
             raise ValueError("oversample_growth 必须至少为 2，否则过采样不会增长")

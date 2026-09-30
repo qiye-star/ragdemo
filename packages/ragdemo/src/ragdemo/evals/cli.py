@@ -167,6 +167,7 @@ def add_retrieval(
 @click.option("--w-vec", type=float, default=None, help="向量一路的融合权重")
 @click.option("--candidate-k", type=int, default=None, help="每一路的候选数")
 @click.option("--rewrite/--no-rewrite", default=False, help="是否启用同义词查询改写")
+@click.option("--period-boost", type=float, default=0.0, help="期别感知排序偏置，0 = 关闭")
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 def run(
     suite: str,
@@ -178,6 +179,7 @@ def run(
     w_vec: float | None,
     candidate_k: int | None,
     rewrite: bool,
+    period_boost: float,
     label: str,
 ) -> None:
     """跑评测并写 eval_run（配置与模型模式一并记录）。"""
@@ -192,6 +194,7 @@ def run(
         w_vec=w_vec if w_vec is not None else base.w_vec,
         rerank_enabled=rerank,
         rewrite_enabled=rewrite,
+        period_boost=period_boost,
     )
     config.validate()
     synonyms = load_synonyms() if rewrite else None

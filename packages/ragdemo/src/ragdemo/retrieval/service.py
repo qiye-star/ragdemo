@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 import uuid
@@ -24,6 +25,7 @@ from ragdemo.embed.base import Embedder
 from ragdemo.retrieval.expand import expand_to_evidence
 from ragdemo.retrieval.fusion import FusedHit, weighted_rrf
 from ragdemo.retrieval.lexical import bm25_search
+from ragdemo.retrieval.period import boost_fused, boost_scores
 from ragdemo.retrieval.rerank import Reranker, RerankOutcome, rerank_or_degrade
 from ragdemo.retrieval.rewrite import expand_synonyms
 from ragdemo.retrieval.types import (
@@ -131,6 +133,9 @@ class RetrievalService:
                 )
                 fused = _merge(fused, variant_fused, cfg.fusion_k)
 
+            if cfg.period_boost > 0:
+                fused = boost_fused(conn, req.query, fused, cfg.period_boost)
+
             ms_rerank = 0.0
             if cfg.rerank_enabled and fused:
                 contents = _leaf_contents(conn, [f.block_id for f in fused])
@@ -145,6 +150,15 @@ class RetrievalService:
                     order=[f.block_id for f in head],
                     scores={f.block_id: f.score for f in head},
                     degraded=False,
+                )
+
+            if cfg.period_boost > 0 and outcome.order:
+                adjusted = boost_scores(conn, req.query, outcome.scores, cfg.period_boost)
+                position = {b: i for i, b in enumerate(outcome.order)}
+                outcome = dataclasses.replace(
+                    outcome,
+                    order=sorted(outcome.order, key=lambda b: (-adjusted[b], position[b])),
+                    scores=adjusted,
                 )
 
             blocks = expand_to_evidence(
