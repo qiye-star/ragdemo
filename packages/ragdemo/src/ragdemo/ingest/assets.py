@@ -31,7 +31,9 @@ from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.ingest.writer import PointInTimeWriter, WriteOutcome
 from ragdemo_core.blob import BlobStore
 
-DAILY = DailyPartitionsDefinition(start_date="2022-01-01", timezone="Asia/Shanghai")
+# end_offset=1：把"今天"这个分区也算进来。默认只有已经结束的日子才是分区，盘后 17:00
+# 的行情调度请求当天分区会报 DagsterUnknownPartitionError（2026-09-30 测试暴露）。
+DAILY = DailyPartitionsDefinition(start_date="2022-01-01", timezone="Asia/Shanghai", end_offset=1)
 
 
 def _run_id(context: AssetExecutionContext) -> str:

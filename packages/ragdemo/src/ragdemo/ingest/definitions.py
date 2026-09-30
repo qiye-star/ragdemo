@@ -73,6 +73,7 @@ from ragdemo.ingest.documents import DocumentWriter
 from ragdemo.ingest.parse_policy import ParseTier
 from ragdemo.ingest.price_sources_build import build_price_sources
 from ragdemo.ingest.prices import PriceSources
+from ragdemo.ingest.schedules import ALL_JOBS, ALL_SCHEDULES, ALL_SENSORS
 from ragdemo.ingest.writer import PointInTimeWriter
 from ragdemo.parse.textin import (
     XPARSE_PARAMS_HIGH_PRECISION,
@@ -323,8 +324,9 @@ defs = Definitions(
         announcements_daily,
     ],
     asset_checks=list(ALL_CHECKS),
-    jobs=[_document_reaction_job],
-    sensors=[new_document_sensor],
+    jobs=[_document_reaction_job, *ALL_JOBS],
+    schedules=ALL_SCHEDULES,
+    sensors=[new_document_sensor, *ALL_SENSORS],
     resources={
         "adapter": MockFactAdapter(),
         "writer": writer_resource,
