@@ -48,7 +48,8 @@ def _table_markdowns(layout: PageLayout) -> list[str]:
 def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[PageResult]:
     results: list[PageResult] = []
     for layout in extract_pages(pdf_bytes):
-        if len(layout.text.strip()) < MIN_CHARS_PER_PAGE and not layout.words:
+        # 文字层不足 MIN_CHARS_PER_PAGE 字符（无论有无零星词，如页码/水印）一律退回，防扫描件静默 ok
+        if len(layout.text.strip()) < MIN_CHARS_PER_PAGE:
             results.append(PageResult(layout.page, "no_text_layer", "", layout.text))
             continue
         tables = _table_markdowns(layout)

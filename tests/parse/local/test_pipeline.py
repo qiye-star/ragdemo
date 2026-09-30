@@ -57,3 +57,27 @@ def test_a_page_without_a_text_layer_is_handed_back(tmp_path: Path) -> None:
         w.write(fh)
     (page,) = parse_pages_local(path.read_bytes(), EchoStructurer())
     assert page.status == "no_text_layer" and page.markdown == ""
+
+
+class RecordingStructurer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def structure(self, page_text: str, table_markdowns: Sequence[str]) -> str:
+        self.calls += 1
+        return page_text
+
+
+def test_a_scanned_page_with_only_a_stray_word_is_handed_back_not_ok() -> None:
+    from io import BytesIO
+
+    from reportlab.pdfgen import canvas
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=(595, 842))
+    c.drawString(280, 30, "12")  # 扫描件上仅有的页码文字层
+    c.save()
+    s = RecordingStructurer()
+    (page,) = parse_pages_local(buf.getvalue(), s)
+    assert page.status == "no_text_layer" and page.markdown == ""
+    assert s.calls == 0
