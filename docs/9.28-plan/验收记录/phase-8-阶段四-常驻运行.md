@@ -58,12 +58,12 @@
 |---|---|---|---|
 | 1 | 告警渠道 | 企业微信群机器人 | `.env` 已设 `ALERT_WEBHOOK_KIND=wecom`；**`ALERT_WEBHOOK_URL` 待填**（含 key，只放 `.env`）。填好后 `docker compose -f infra/docker-compose.yml --env-file .env up -d --force-recreate --no-deps dagster-daemon dagster-webserver`，再触发 `alert_selftest_job` 验证群里收到消息，即关闭 4.3 |
 | 2 | Wind 月度额度 | 无上限 | 代码里本就没有 Wind 调用上限闸门，无需改动；`infra/backfill.md` §3 的"先估再跑"保留为习惯性 dry run，不再作为限额。是否补全 46 家 A 股的 Wind 财务 / 股东 / 分部，见下方待确认 |
-| 3 | 研报 | "全部公开可见" | **暂未落地，需先对齐——见下方"研报：与产品边界冲突"** |
+| 3 | 研报 | 选定方案 A：入库用于检索与内部研究，**不展示原文** | [ADR-0014](../../adr/0014-research-reports-internal-retrieval-only.md)；迁移 027 登记 `eastmoney-research`（`can_show_raw=false`）；`docs ingest --kind research` 单独入库。**91 份尚未解析入库——等 TextIn 充值** |
 | 4 | 人工标注 | 需要做 | 已提供 `eval label-sheet` / `eval label-import` / `eval run --author-prefix human:`（`evals/human_labels.py`，测试 5 个）；等标注员按手册填表 |
 | 5 | 重排 | 不关闭 | 默认不变（`rerank_enabled=True`）；关重排时 recall@10 0.81 对 0.76 仅作为消融记录，待人工标注集复核 |
 | 6 | 行业报告录入 | 有人录 CSV | 已写 [行业指标录入手册](../行业指标录入手册.md)（含 CSV 格式、校验规则、18 个 `vendor_api` 指标清单与单位），导入命令 `ragdemo metrics import-manual` |
 
-### 研报：与产品边界冲突（未落地）
+### 研报：与产品边界冲突（已按方案 A 解决，2026-09-30）
 
 "研报全部公开可见"与仓库里两处硬约束冲突，需要你确认如何取舍：
 
@@ -76,6 +76,5 @@
 另外，解析 91 份研报需要 TextIn 额度（当前余额不足，你此前决定暂停解析），所以即使选定口径，入库也要等充值。
 
 ## 待确认
-- 研报走 A 还是 B？
 - Wind 无上限：是否现在补全 46 家 A 股的财务 / 股东 / 分部（全量约 674 次调用，数据会按首次披露日写入）？
 - 企业微信机器人 Webhook 地址请填进 `.env` 的 `ALERT_WEBHOOK_URL`。

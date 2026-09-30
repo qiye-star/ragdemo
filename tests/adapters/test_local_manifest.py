@@ -199,3 +199,27 @@ trailer<</Root 1 0 R>>
 
 def test_count_pdf_pages_returns_zero_for_non_pdf_bytes() -> None:
     assert count_pdf_pages(b"not a pdf at all") == 0
+
+
+def test_research_is_loaded_only_when_asked_for_and_is_typed_research_report(
+    tmp_path: Path,
+) -> None:
+    ann = _entry(tmp_path, local_path="announcements/a.pdf")
+    research = _entry(tmp_path, local_path="research/r.pdf", kind="research")
+    manifest_path = _write_manifest(tmp_path, [ann, research])
+    blob = LocalBlobStore(tmp_path / "blob")
+
+    docs = load_documents(manifest_path, blob, entity_ref="688041.SH", kinds=("research",))
+    assert [d.provider_doc_id for d in docs] == [research["source_id"]]
+    assert docs[0].doc_type == "research_report"
+
+
+def test_research_cannot_be_mixed_with_other_kinds(tmp_path: Path) -> None:
+    manifest_path = _write_manifest(tmp_path, [])
+    with pytest.raises(ValueError, match="单独入库"):
+        load_documents(
+            manifest_path,
+            LocalBlobStore(tmp_path / "blob"),
+            entity_ref="688041.SH",
+            kinds=("announcement", "research"),
+        )

@@ -38,6 +38,7 @@ from ragdemo.adapters.cninfo import CninfoAdapter
 from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.local_manifest import (
+    RESEARCH_SOURCE_ID,
     ManifestError,
     count_pdf_pages,
     load_documents_with_raw,
@@ -188,7 +189,14 @@ def _dry_run(
     help="mock 用于离线开发与测试，完全不发网络请求",
 )
 @click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
-@click.option("--source", "source_name", default="cninfo", help="写入 core.document.source 的值")
+@click.option("--source", "source_name", default=None, help="写入 core.document.source 的值")
+@click.option(
+    "--kind",
+    type=click.Choice(["announcement", "research"]),
+    default="announcement",
+    show_default=True,
+    help="research = 券商研报：来源固定为 eastmoney-research（can_show_raw=false，ADR-0014）",
+)
 def docs_ingest(
     manifest_path: Path,
     entity_ref: str,
@@ -197,16 +205,29 @@ def docs_ingest(
     yes: bool,
     parser_kind: str,
     blob_root_opt: Path | None,
-    source_name: str,
+    source_name: str | None,
+    kind: str,
 ) -> None:
-    """本地公告 manifest → 解析 → 切块 → 入库。默认 dry run；--yes 才真正花钱写库。"""
+    """本地公告 / 研报 manifest → 解析 → 切块 → 入库。默认 dry run；--yes 才真正花钱写库。"""
+    if kind == "research":
+        if source_name not in (None, RESEARCH_SOURCE_ID):
+            raise click.ClickException(
+                f"研报的来源必须是 {RESEARCH_SOURCE_ID}（决定 can_show_raw=false），"
+                f"不能用 {source_name}"
+            )
+        source_name = RESEARCH_SOURCE_ID
+    source_name = source_name or "cninfo"
     cfg = _load_config()
     blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
     max_pages = max_pages_opt if max_pages_opt is not None else cfg.textin_max_pages_per_run
 
     try:
         pairs = load_documents_with_raw(
-            manifest_path, blob, entity_ref=entity_ref, select_title=select_title
+            manifest_path,
+            blob,
+            entity_ref=entity_ref,
+            select_title=select_title,
+            kinds=(kind,),
         )
     except ManifestError as exc:
         raise click.ClickException(str(exc)) from exc

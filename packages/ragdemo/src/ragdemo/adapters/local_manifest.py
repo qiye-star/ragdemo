@@ -47,8 +47,12 @@ from ragdemo_core.blob import BlobStore
 # 时间语境是中国大陆 A 股披露，固定 +08:00，不随本机时区变化。
 CST = timezone(timedelta(hours=8))
 
-_ONLY_KIND = "announcement"  # research（券商研报）按 ADR-0008 后果 1 与
-# README 的著作权限制不外送、不入库，见 load_documents 里的过滤。
+_ANNOUNCEMENT_KIND = "announcement"
+_RESEARCH_KIND = "research"
+# 券商研报（ADR-0014）：只入库用于检索与内部研究，登记来源 can_show_raw = false，
+# 原文不对外展示。默认不加载研报——必须显式传 kinds=("research",)，且与公告分开入库
+# （同一次入库只有一个来源登记，混在一起会把公告错登成不可展示、或研报错登成可展示）。
+RESEARCH_SOURCE_ID = "eastmoney-research"
 
 _QUARTERLY_MARKERS = ("季度报告", "半年度报告")
 _ANNUAL_MARKER = "年度报告"
@@ -82,7 +86,7 @@ class ManifestEntry:
 
 
 def doc_type_for(title: str) -> str:
-    """年度报告 → annual_report；季度报告 / 半年度报告 → quarterly；其余 → announcement。
+    """（公告）年度报告 → annual_report；季度报告 / 半年度报告 → quarterly；其余 → announcement。
 
     对照 `ingest/definitions.py` 的 `TRACKED_DOC_TYPES`，这样新文档触发传感器
     才能被看到。**半年度报告的标题本身也包含"年度报告"四个连续字**（"半"
@@ -222,7 +226,7 @@ def to_normalized_document(
     return NormalizedDocument(
         provider_doc_id=entry.source_id,
         entity_ref=entity_ref,
-        doc_type=doc_type_for(entry.title),
+        doc_type="research_report" if entry.kind == _RESEARCH_KIND else doc_type_for(entry.title),
         title=entry.title,
         period=None,
         # NormalizedDocument 只有 publish_at 这一个时间戳字段；manifest 只给
@@ -273,16 +277,20 @@ def load_documents_with_raw(
     *,
     entity_ref: str,
     select_title: str | None = None,
+    kinds: tuple[str, ...] = (_ANNOUNCEMENT_KIND,),
 ) -> list[tuple[RawResponse, NormalizedDocument]]:
     """加载 manifest，过滤，逐条校验并放进 blob，返回（原始记录, 文档）对。
 
-    只保留 `kind == "announcement"`——研报（`kind == "research"`）著作权归
-    发布券商所有，`docs/rawdata/688041-hygon/README.md` 明确写了不得对外
-    分发；这条过滤没有开关，不是一个可选策略。
+    默认只保留 `kind == "announcement"`。研报（`kind == "research"`）著作权归发布券商所有，
+    `docs/rawdata/688041-hygon/README.md` 写明不得对外分发：只有显式传
+    `kinds=("research",)` 才加载，且入库时必须用 `eastmoney-research` 来源
+    （`can_show_raw = false`，原文不展示），见 ADR-0014。研报不与公告混在同一次加载里。
     """
+    if _RESEARCH_KIND in kinds and len(kinds) > 1:
+        raise ValueError("研报必须单独入库（来源登记不同），不能与其他 kind 混在一起")
     pairs: list[tuple[RawResponse, NormalizedDocument]] = []
     for entry in iter_manifest_entries(manifest_path):
-        if entry.kind != _ONLY_KIND:
+        if entry.kind not in kinds:
             continue
         if select_title and select_title not in entry.title:
             continue
@@ -298,9 +306,10 @@ def load_documents(
     *,
     entity_ref: str,
     select_title: str | None = None,
+    kinds: tuple[str, ...] = (_ANNOUNCEMENT_KIND,),
 ) -> list[NormalizedDocument]:
     """只要文档、不写快照的场景（dry run）用这个；真正入库走 load_documents_with_raw。"""
     pairs = load_documents_with_raw(
-        manifest_path, blob, entity_ref=entity_ref, select_title=select_title
+        manifest_path, blob, entity_ref=entity_ref, select_title=select_title, kinds=kinds
     )
     return [doc for _, doc in pairs]
