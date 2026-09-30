@@ -33,7 +33,6 @@ from datetime import datetime
 
 import psycopg
 
-from ragdemo.adapters.siliconflow import client_from_config
 from ragdemo.api.errors import ApiError, ErrorCode
 from ragdemo.api.schemas import (
     CoverageInfo,
@@ -44,12 +43,10 @@ from ragdemo.api.schemas import (
 )
 from ragdemo.api.serialize import as_int, as_optional_int, as_str
 from ragdemo.api.settings import ApiSettings
-from ragdemo.config import load_config
 from ragdemo.embed.base import Embedder
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.embed.siliconflow import SiliconFlowEmbedder
+from ragdemo.retrieval.models import build_models
 from ragdemo.retrieval.rerank import MockReranker, Reranker
-from ragdemo.retrieval.rerank_siliconflow import SiliconFlowReranker
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest, RetrievalTrace
 from ragdemo_core.db.session import as_of_session
@@ -117,19 +114,8 @@ def _cache_key(
 
 
 def _build_models(settings: ApiSettings) -> tuple[Embedder, Reranker]:
-    if settings.retrieval_models == "mock":
-        return MockEmbedder(), MockReranker()
-
-    # "siliconflow"：from_env() 已经把这个值校验成只能是这两者之一。
-    config = load_config()
-    base_url = config.require_siliconflow_base_url()
-    # 嵌入与重排是同一个供应商——共用一个 HttpClient 实例，令牌桶/日配额
-    # 因此正确地按供应商而不是按操作类型计数（http.py::HttpClient 的类
-    # docstring："一个供应商一个实例"）。
-    http = client_from_config(base_url)
-    embedder = SiliconFlowEmbedder(http, model=config.siliconflow_embed_model)
-    reranker = SiliconFlowReranker(http, model=config.siliconflow_rerank_model)
-    return embedder, reranker
+    # `from_env()` 已经把 retrieval_models 校验成只能是 "mock" / "siliconflow" 之一。
+    return build_models(settings.retrieval_models)
 
 
 def _vector_path_is_meaningful(active_model: str, corpus_versions: Sequence[str]) -> bool:

@@ -44,7 +44,6 @@ from ragdemo.adapters.local_manifest import (
 )
 from ragdemo.config import ConfigError, load_config
 from ragdemo.embed.batch import embed_pending_blocks
-from ragdemo.embed.mock import MockEmbedder
 from ragdemo.ingest.announcement_sources import build_announcement_sources
 from ragdemo.ingest.announcements import (
     DOWNLOAD_ENTITIES,
@@ -76,6 +75,7 @@ from ragdemo.parse.textin import (
     param_fingerprint,
 )
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
+from ragdemo.retrieval.models import build_models
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
 from ragdemo_core.blob import BlobStore, LocalBlobStore
@@ -417,10 +417,18 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
 
 @docs_group.command("embed")
 @click.option("--limit", type=int, default=None, help="本次最多嵌入多少块；不传则不设上限")
-def docs_embed(limit: int | None) -> None:
-    """跑一次 `embed_pending_blocks`（`MockEmbedder`）。真实嵌入器留给 Phase 1.4。"""
+@click.option(
+    "--models",
+    type=click.Choice(["mock", "siliconflow"]),
+    default="mock",
+    show_default=True,
+    help="mock = 确定性 Mock（离线 / 测试）；siliconflow = 真实 bge-m3（经出网代理）",
+)
+def docs_embed(limit: int | None, models: str) -> None:
+    """跑一次 `embed_pending_blocks`：给还没有向量的叶子块生成嵌入。"""
+    embedder, _ = build_models(models, _load_config())
     with psycopg.connect(_dsn()) as conn:
-        stats = embed_pending_blocks(conn, MockEmbedder(), limit=limit)
+        stats = embed_pending_blocks(conn, embedder, limit=limit)
     click.echo(
         f"pending={stats.pending} from_cache={stats.from_cache} "
         f"computed={stats.computed} written={stats.written}"

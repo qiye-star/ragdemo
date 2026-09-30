@@ -16,7 +16,6 @@ from pathlib import Path
 import click
 import psycopg
 
-from ragdemo.embed.mock import MockEmbedder
 from ragdemo.evals.freeze import (
     create_freeze,
     diff_against_current_corpus,
@@ -30,7 +29,7 @@ from ragdemo.evals.sampler import (
     sample_candidates,
     write_candidates_csv,
 )
-from ragdemo.retrieval.rerank import MockReranker
+from ragdemo.retrieval.models import build_models
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
 
@@ -103,8 +102,14 @@ def eval_group() -> None:
 @click.option("--entity", "entities", multiple=True, help="实体过滤，可多次指定")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--author", required=True)
+@click.option("--models", type=click.Choice(["mock", "siliconflow"]), default="mock")
 def add_retrieval(
-    question: str, as_of_raw: str, entities: tuple[str, ...], difficulty: str, author: str
+    question: str,
+    as_of_raw: str,
+    entities: tuple[str, ...],
+    difficulty: str,
+    author: str,
+    models: str,
 ) -> None:
     """交互式录入一条检索评测用例：跑一次检索，选出正确的块。"""
     as_of = datetime.fromisoformat(as_of_raw)
@@ -112,7 +117,8 @@ def add_retrieval(
         raise click.ClickException("--as-of 必须带时区")
 
     with psycopg.connect(_dsn()) as conn:
-        service = RetrievalService(conn, MockEmbedder(), MockReranker())
+        embedder, reranker = build_models(models)
+        service = RetrievalService(conn, embedder, reranker)
         result = service.search(
             RetrievalRequest(query=question, as_of=as_of, entity_ids=list(entities) or None)
         )
@@ -140,10 +146,18 @@ def add_retrieval(
 @eval_group.command("run")
 @click.option("--suite", type=click.Choice(["retrieval"]), default="retrieval")
 @click.option("--gate/--no-gate", default=False, help="与基线比对，回退超容差则以非零码退出")
-def run(suite: str, gate: bool) -> None:
+@click.option(
+    "--models",
+    type=click.Choice(["mock", "siliconflow"]),
+    default="mock",
+    show_default=True,
+    help="检索用的嵌入 / 重排：mock 或真实（siliconflow）",
+)
+def run(suite: str, gate: bool, models: str) -> None:
     """跑评测并写 eval_run。"""
+    embedder, reranker = build_models(models)
     with psycopg.connect(_dsn()) as conn:
-        service = RetrievalService(conn, MockEmbedder(), MockReranker())
+        service = RetrievalService(conn, embedder, reranker)
         # 必须在 run_retrieval_eval 把这次结果写进 evals.eval_run 之前读
         # 基线——见 fetch_baseline 的 docstring，读晚了会把这次自己的结果
         # 当成基线，--gate 形同虚设（H7 集成测试抓到的真实回归）。
@@ -229,3 +243,58 @@ def freeze_diff(freeze_path: Path) -> None:
     for d in diffs:
         click.echo(f"[不一致] {d}")
     sys.exit(1)
+
+
+@eval_group.command("generate")
+@click.option("--n", "n", type=int, default=100, show_default=True, help="生成多少条检索用例")
+@click.option("--seed", type=int, default=DEFAULT_SEED, show_default=True)
+@click.option(
+    "--replace-auto",
+    is_flag=True,
+    default=False,
+    help="先删除此前生成的合成用例（author 以 auto: 开头），人工用例不动",
+)
+@click.option("--yes", is_flag=True, default=False, help="真正调用模型并写库；不传只 dry run")
+def generate(n: int, seed: int, replace_auto: bool, yes: bool) -> None:
+    """据真实语料合成检索评测用例（模型写问题、分层抽样选块、同文块并列为 gold）。
+    author 记为 auto:<模型>:v1，notes 记生成参数——合成集与人工标注集始终可区分。"""
+    from datetime import UTC
+
+    from ragdemo.config import load_config
+    from ragdemo.evals.generate import PROMPT_VERSION, generate_cases, insert_cases
+    from ragdemo.parse.describer_factory import deepseek_client
+
+    cfg = load_config()
+    with psycopg.connect(_dsn()) as conn:
+        existing = conn.execute(
+            "SELECT count(*) FILTER (WHERE author LIKE 'auto:%'), count(*)"
+            " FROM evals.eval_retrieval"
+        ).fetchone()
+        assert existing is not None
+        auto_n, total_n = int(existing[0]), int(existing[1])
+        click.echo(f"当前评测集 {total_n} 条，其中合成 {auto_n} 条")
+        if auto_n and not replace_auto:
+            raise click.ClickException("已有合成用例；要重新生成请加 --replace-auto")
+        if not yes:
+            click.echo(f"[dry run] 将生成 {n} 条（约 {n} 次模型调用）；加 --yes 执行")
+            return
+        if not cfg.model_base_url:
+            raise click.ClickException("MODEL_BASE_URL 未设置：生成用例需要真实模型")
+        http = deepseek_client(cfg.model_base_url)
+        cases, report = generate_cases(conn, http, model=cfg.model_name, n=n, seed=seed)
+        if replace_auto:
+            conn.execute("DELETE FROM evals.eval_retrieval WHERE author LIKE 'auto:%'")
+        inserted = insert_cases(
+            conn,
+            cases,
+            as_of=datetime.now(UTC),
+            author=f"auto:{cfg.model_name}:{PROMPT_VERSION}",
+        )
+    by_difficulty: dict[str, int] = {}
+    for c in cases:
+        by_difficulty[c.difficulty] = by_difficulty.get(c.difficulty, 0) + 1
+    click.echo(f"生成并入库 {inserted} 条；难度（按实测词面重合度）{by_difficulty}")
+    if report.skipped:
+        click.echo(f"跳过的候选：{report.skipped}")
+    if inserted < n:
+        click.echo(f"[警告] 只凑到 {inserted} 条（目标 {n}）", err=True)
