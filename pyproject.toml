@@ -25,6 +25,7 @@ dev = [
     "pre-commit>=3.8",
     "detect-secrets>=1.5",
     "types-PyYAML>=6.0",
+    "reportlab>=4.0",
     "dagster-webserver>=1.8",
     "types-openpyxl>=3.1",
 ]
