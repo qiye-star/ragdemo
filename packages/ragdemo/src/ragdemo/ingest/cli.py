@@ -399,6 +399,13 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
             artifacts=artifacts,
             chunking_version=chunk_cfg.version,
         )
+        # 公告目录里指向旧文档的链接换成新文档——旧文档已被取代，不再从 asof 视图可见，
+        # 留着旧 doc_id 会让 list_announcements 给出一个 get_document 查不到的引用。
+        conn.execute(
+            "UPDATE core.announcement_index SET doc_id = %s WHERE doc_id = %s",
+            (write_result.doc_id, doc_id),
+        )
+        conn.commit()
 
     click.echo(
         f"重新切块完成：新 doc_id={write_result.doc_id} blocks={len(write_result.block_ids)}"

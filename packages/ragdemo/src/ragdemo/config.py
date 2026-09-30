@@ -27,7 +27,7 @@ DEFAULT_MAX_PAGES_PER_RUN = 500
 DEFAULT_SILICONFLOW_EMBED_MODEL = "BAAI/bge-m3"
 DEFAULT_SILICONFLOW_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 DEFAULT_MODEL_NAME = "deepseek-chat"
-DEFAULT_DESCRIBE_PROMPT = "v2"
+DEFAULT_DESCRIBE_PROMPT = "v3"
 
 # 环境变量里"真"的拼写变体。没有出现在这里的一律按 False 处理——
 # 包括空字符串（未设置等价于默认值 False，而不是报错）。

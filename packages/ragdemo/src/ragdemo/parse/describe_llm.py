@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from ragdemo.adapters.http import HttpClient
-from ragdemo.parse.describe import DescriptionRejected, validate_description
+from ragdemo.parse.describe import (
+    FORBIDDEN_PATTERNS,
+    INTERPRETATION_PATTERNS,
+    DescriptionRejected,
+    validate_description,
+)
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "agents" / "prompts" / "table_describe"
 CHAT_ENDPOINT = "/chat/completions"
@@ -52,7 +57,7 @@ class LlmTableDescriber:
         http: HttpClient,
         *,
         model: str,
-        prompt_version: str = "v2",
+        prompt_version: str = "v3",
         max_attempts: int = 3,
         prompt_dir: Path = PROMPT_DIR,
     ) -> None:
@@ -79,13 +84,16 @@ class LlmTableDescriber:
             except DescriptionRejected as exc:
                 last_reason = str(exc)
                 self.usage.rejected_attempts += 1
+                hits = _offending_words(reply)
+                named = "、".join(f"“{w}”" for w in hits) or "被拦截的词"
                 messages += [
                     {"role": "assistant", "content": reply},
                     {
                         "role": "user",
-                        "content": f"上一句不合格：{last_reason}。请只陈述表里有什么，"
-                        "用中性说法改写（不要评价、预测，也不要出现买卖 / 评级类字样），"
-                        "重新输出一句，不要解释。",
+                        "content": f"上一句不合格：{last_reason}。其中触发拦截的字样是 {named}。"
+                        f"请重写：整句里**不要出现** {named}——表里如果有同名的列，"
+                        "就不要提这一列，只写其余列；只陈述表里有什么，不要评价、预测，"
+                        "也不要出现买卖 / 评级类字样。只输出一句，不要解释。",
                     },
                 ]
         raise DescriptionRejected(f"模型 {self._max_attempts} 次输出都被拦截：{last_reason}")
@@ -129,6 +137,18 @@ class LlmTableDescriber:
         self.usage.prompt_tokens += int(usage.get("prompt_tokens") or 0)
         self.usage.completion_tokens += int(usage.get("completion_tokens") or 0)
         return content
+
+
+def _offending_words(text: str) -> list[str]:
+    """回复里实际触发拦截的字样（含紧随其后的一个实词，如"说明列"），回给模型让它避开。"""
+    found: list[str] = []
+    for pattern in (*FORBIDDEN_PATTERNS, *INTERPRETATION_PATTERNS):
+        for m in pattern.finditer(text):
+            end = min(len(text), m.end() + 1)
+            word = text[m.start() : end].strip("，。；、 ")
+            if word and word not in found:
+                found.append(word)
+    return found
 
 
 def _one_sentence(reply: str) -> str:

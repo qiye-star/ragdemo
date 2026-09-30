@@ -512,7 +512,8 @@ def test_ingest_latency_check_passes_within_threshold(conn: psycopg.Connection) 
 def test_leaf_length_is_measured_on_the_body_not_the_section_path_prefix(
     conn: psycopg.Connection,
 ) -> None:
-    """char_len 含"章节路径\n"前缀：60 字路径 + 100 字正文 = 161，按整体算"够长"，按正文算是碎块。"""
+    """char_len 含章节路径前缀：60 字路径 + 100 字正文 = 161，
+    按整体算够长，按正文算是碎块。"""
     _seed_document(conn, doc_id=1, content_hash="h1")
     path = "路" * 60
     for i in range(3):  # 三个 100 字正文的叶子连着排在同一小节同一页：能合并却没合并
