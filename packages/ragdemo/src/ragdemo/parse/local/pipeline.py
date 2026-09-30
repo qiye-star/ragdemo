@@ -33,6 +33,7 @@ class PageResult:
     markdown: str
     source_text: str
     violations: list[str] = field(default_factory=list)
+    reason: str = ""  # 非 ok 状态的原因（实验复盘用：区分虚警与真编造）
 
 
 def _table_markdowns(layout: PageLayout) -> list[str]:
@@ -45,23 +46,42 @@ def _table_markdowns(layout: PageLayout) -> list[str]:
     return out
 
 
+def _needs_handback(text: str) -> str | None:
+    """文字层不可用则返回原因，否则 None。"""
+    # 文字层不足 MIN_CHARS_PER_PAGE 字符（无论有无零星词，如页码/水印）一律退回，防扫描件静默 ok
+    if len(text.strip()) < MIN_CHARS_PER_PAGE:
+        return f"文字层不足 {MIN_CHARS_PER_PAGE} 字符"
+    if "(cid:" in text:  # pdfminer 对无法映射的字形输出 (cid:N)，N 会被当成数字
+        return "文字层乱码（cid）"
+    return None
+
+
 def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[PageResult]:
     results: list[PageResult] = []
     for layout in extract_pages(pdf_bytes):
-        # 文字层不足 MIN_CHARS_PER_PAGE 字符（无论有无零星词，如页码/水印）一律退回，防扫描件静默 ok
-        if len(layout.text.strip()) < MIN_CHARS_PER_PAGE:
-            results.append(PageResult(layout.page, "no_text_layer", "", layout.text))
+        handback = _needs_handback(layout.text)
+        if handback is not None:
+            results.append(PageResult(layout.page, "no_text_layer", "", layout.text, [], handback))
             continue
         tables = _table_markdowns(layout)
         try:
             markdown = structurer.structure(layout.text, tables)
         except ClosureFailed as exc:
             results.append(
-                PageResult(layout.page, "closure_failed", "", layout.text, exc.violations)
+                PageResult(
+                    layout.page,
+                    "closure_failed",
+                    "",
+                    layout.text,
+                    exc.violations,
+                    f"数字闭合失败：{exc.violations}",
+                )
             )
             continue
-        except StructureFailed:  # 截断 / 空回复 / 畸形响应 / 丢失数字：这一页不可信
-            results.append(PageResult(layout.page, "structure_failed", "", layout.text))
+        except StructureFailed as exc:  # 截断 / 空回复 / 畸形响应 / 丢失内容：这一页不可信
+            results.append(
+                PageResult(layout.page, "structure_failed", "", layout.text, [], str(exc))
+            )
             continue
         results.append(PageResult(layout.page, "ok", markdown, layout.text))
     return results

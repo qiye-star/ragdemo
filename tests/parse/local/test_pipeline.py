@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from ragdemo.parse.local.pipeline import parse_pages_local
+from ragdemo.parse.local.pipeline import _needs_handback, parse_pages_local
 from ragdemo.parse.local.structure import ClosureFailed, StructureFailed
 
 FIXTURE = Path("tests/fixtures/pdf/table_sample.pdf")
@@ -39,12 +39,14 @@ class BrokenStructurer:
 def test_a_truncated_or_empty_reply_is_recorded_as_structure_failed() -> None:
     (page,) = parse_pages_local(FIXTURE.read_bytes(), BrokenStructurer())
     assert page.status == "structure_failed" and page.markdown == "" and page.violations == []
+    assert page.reason == "回复被截断（finish_reason=length）"
 
 
 def test_a_failed_closure_is_recorded_not_raised() -> None:
     (page,) = parse_pages_local(FIXTURE.read_bytes(), InventingStructurer())
     assert page.status == "closure_failed" and page.violations == ["999.9"]
     assert page.markdown == ""
+    assert "999.9" in page.reason and "数字闭合失败" in page.reason
 
 
 def test_a_page_without_a_text_layer_is_handed_back(tmp_path: Path) -> None:
@@ -57,6 +59,7 @@ def test_a_page_without_a_text_layer_is_handed_back(tmp_path: Path) -> None:
         w.write(fh)
     (page,) = parse_pages_local(path.read_bytes(), EchoStructurer())
     assert page.status == "no_text_layer" and page.markdown == ""
+    assert page.reason == "文字层不足 40 字符"
 
 
 class RecordingStructurer:
@@ -81,3 +84,14 @@ def test_a_scanned_page_with_only_a_stray_word_is_handed_back_not_ok() -> None:
     (page,) = parse_pages_local(buf.getvalue(), s)
     assert page.status == "no_text_layer" and page.markdown == ""
     assert s.calls == 0
+
+
+def test_ok_page_has_empty_reason() -> None:
+    (page,) = parse_pages_local(FIXTURE.read_bytes(), EchoStructurer())
+    assert page.reason == ""
+
+
+def test_needs_handback_decision() -> None:
+    assert _needs_handback("短") == "文字层不足 40 字符"
+    assert _needs_handback("正常文字" * 20 + "(cid:123)") == "文字层乱码（cid）"
+    assert _needs_handback("正常文字" * 20) is None
