@@ -8,7 +8,7 @@
 |---|---|---|
 | 4.1 常驻容器 | 完成 | `ragdemo-dagster-ui`、`ragdemo-dagster-daemon` 均 healthy；Dagster 存储在 ParadeDB `dagster` schema（迁移 024）；QueuedRunCoordinator 并发 1 |
 | 4.2 调度 | 完成 | 行情 17:00（周一至周五）、公告 20:30、阶段二核对 21:30、泄漏回放 03:30、质量告警 22:00、公告对账 周日 23:00；Wind 定时作业**保持停用**（积分） |
-| 4.3 告警 | 部分完成 | run 失败 sensor → `ops/alerts.py`（日志 + `audit.alert_log` + 可选 webhook，同 key 冷却 6h）；自检作业 `alert_selftest_job` 验证过日志与落库；**真实推送渠道未配置**（需 `ALERT_WEBHOOK_URL` / `ALERT_WEBHOOK_KIND`） |
+| 4.3 告警 | **完成**（2026-09-30 已推送，待负责人确认群里收到） | run 失败 sensor → `ops/alerts.py`（日志 + `audit.alert_log` + 可选 webhook，同 key 冷却 6h）；自检作业 `alert_selftest_job` 验证过日志与落库；**真实推送渠道未配置**（需 `ALERT_WEBHOOK_URL` / `ALERT_WEBHOOK_KIND`） |
 | 4.6 恢复演练 | 完成 | `scripts/restore_drill.sh`：独立临时容器还原，40 张表 / 97,211 行逐表校验和一致，`db check` 通过；`infra/runbook-backup.md` 记录已知问题（重聚合含向量列可能使 pg_search 后台进程崩溃，校验和已排除嵌入列并单独校验） |
 | 4.7 文档同步 | 完成 | `docs/01-architecture.md` 部署段、runbook、backfill 说明 |
 
@@ -78,3 +78,15 @@
 ## 待确认
 - Wind 无上限：是否现在补全 46 家 A 股的财务 / 股东 / 分部（全量约 674 次调用，数据会按首次披露日写入）？
 - 企业微信机器人 Webhook 地址请填进 `.env` 的 `ALERT_WEBHOOK_URL`。
+
+
+## 4.3 告警通路验收（2026-09-30）
+
+- 企业微信机器人 Webhook 已配置并注入 Dagster 容器（`ALERT_WEBHOOK_KIND=wecom`，URL 只在 `.env`）。
+- 触发 `alert_selftest_job`：run 按预期失败，`alert_on_run_failure` 传感器产生告警，**被 6 小时冷却拦下**（当天早些时候的自检用同一个 key），只落库未推送——冷却机制按设计工作。
+- 另用独立 key 直接调用 `raise_alert` 发送一条测试消息：`{'log': 'ok', 'webhook': 'ok', 'db': 'ok'}`（`webhook: ok` 已校验企业微信返回的 `errcode == 0`）。**请确认群里收到了"告警通路自检（企业微信）"**。
+- 自检作业加了 `dagster/max_retries: 0`，避免 run 自动重试（见上文）把一次故意失败放大成 3 条告警。
+
+## 决定补充
+
+- **不补全 46 家 A 股的 Wind 数据**：需要时直接通过 Wind MCP 查询，不批量入库（也就不产生对应的 `provider_snapshot` / 点时表行）。

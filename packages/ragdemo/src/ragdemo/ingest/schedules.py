@@ -241,7 +241,7 @@ def alert_selftest_op() -> None:
     raise RuntimeError("告警自检：这是一次人为制造的失败，收到告警说明通路正常")
 
 
-@job
+@job(tags={"dagster/max_retries": 0})  # 故意失败的作业不重试，否则群里会收到 3 条
 def alert_selftest_job() -> None:
     alert_selftest_op()
 
