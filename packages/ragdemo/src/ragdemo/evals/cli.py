@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from ragdemo.evals.sampler import (
     write_candidates_csv,
 )
 from ragdemo.retrieval.models import build_models
+from ragdemo.retrieval.rewrite import load_synonyms
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
 
@@ -153,21 +155,62 @@ def add_retrieval(
     show_default=True,
     help="检索用的嵌入 / 重排：mock 或真实（siliconflow）",
 )
-def run(suite: str, gate: bool, models: str) -> None:
-    """跑评测并写 eval_run。"""
+@click.option("--rerank/--no-rerank", default=True, help="是否启用重排（消融用）")
+@click.option("--w-bm25", type=float, default=None, help="BM25 一路的融合权重")
+@click.option("--w-vec", type=float, default=None, help="向量一路的融合权重")
+@click.option("--candidate-k", type=int, default=None, help="每一路的候选数")
+@click.option("--rewrite/--no-rewrite", default=False, help="是否启用同义词查询改写")
+@click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
+def run(
+    suite: str,
+    gate: bool,
+    models: str,
+    rerank: bool,
+    w_bm25: float | None,
+    w_vec: float | None,
+    candidate_k: int | None,
+    rewrite: bool,
+    label: str,
+) -> None:
+    """跑评测并写 eval_run（配置与模型模式一并记录）。"""
     embedder, reranker = build_models(models)
+    base = RetrievalConfig()
+    cand = candidate_k if candidate_k is not None else base.candidate_k
+    config = dataclasses.replace(
+        base,
+        candidate_k=cand,
+        fusion_k=min(base.fusion_k, cand * 2),
+        w_bm25=w_bm25 if w_bm25 is not None else base.w_bm25,
+        w_vec=w_vec if w_vec is not None else base.w_vec,
+        rerank_enabled=rerank,
+        rewrite_enabled=rewrite,
+    )
+    config.validate()
+    synonyms = load_synonyms() if rewrite else None
     with psycopg.connect(_dsn()) as conn:
-        service = RetrievalService(conn, embedder, reranker)
+        service = RetrievalService(conn, embedder, reranker, synonyms=synonyms)
         # 必须在 run_retrieval_eval 把这次结果写进 evals.eval_run 之前读
         # 基线——见 fetch_baseline 的 docstring，读晚了会把这次自己的结果
         # 当成基线，--gate 形同虚设（H7 集成测试抓到的真实回归）。
         prior_baseline = fetch_baseline(conn, suite, "recall_at_10") if gate else None
-        result = run_retrieval_eval(conn, service, git_sha=_git_sha(), config=RetrievalConfig())
+        result = run_retrieval_eval(
+            conn,
+            service,
+            git_sha=_git_sha(),
+            config=config,
+            extra_config={
+                "models": models,
+                "embed_model": embedder.model,
+                "label": label,
+            },
+        )
         click.echo("| 指标 | 本次 |")
         click.echo("|---|---|")
         click.echo(f"| recall@10 | {result.recall_at_10:.4f} |")
         click.echo(f"| recall@50 | {result.recall_at_50:.4f} |")
         click.echo(f"| MRR@10 | {result.mrr_at_10:.4f} |")
+        click.echo(f"| p50 延迟 | {result.latency_p50_ms:.0f} ms |")
+        click.echo(f"| p95 延迟 | {result.latency_p95_ms:.0f} ms |")
         click.echo(f"| 用例数 | {result.n_cases} |")
 
         if gate:

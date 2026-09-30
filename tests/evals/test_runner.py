@@ -74,3 +74,14 @@ def test_empty_eval_set_raises_rather_than_reporting_perfect_score(
     service = RetrievalService(corpus, MockEmbedder(), MockReranker())
     with pytest.raises(ValueError, match="评测集为空"):
         run_retrieval_eval(corpus, service, git_sha="x", config=RetrievalConfig())
+
+
+def test_percentile_uses_nearest_rank_without_interpolation() -> None:
+    from ragdemo.evals.runner import _percentile
+
+    values = [float(v) for v in range(1, 101)]  # 1..100
+    assert _percentile(values, 0.95) == 95.0
+    assert _percentile(values, 0.50) == 50.0
+    assert _percentile([7.0], 0.95) == 7.0
+    assert _percentile([], 0.95) == 0.0
+    assert _percentile([3.0, 1.0, 2.0], 0.95) == 3.0  # 乱序输入也按排序后取
