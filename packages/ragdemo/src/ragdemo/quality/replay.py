@@ -109,6 +109,12 @@ def _initial_probe_moments(conn: psycopg.Connection, block_id: int) -> list[date
 def _replay_hash(conn: psycopg.Connection, block_id: int, as_of: datetime) -> str:
     """在给定 `as_of` 下经 `asof.doc_block` 视图查这个块，把结果集哈希。
 
+    哈希只含 `block_id`、`content`、`known_at`，**不含 `superseded_at`**：块在 `as_of` 之后才被
+    合法更正（`superseded_at` 被填上）时，历史 `as_of` 下的这一行不该被判成"变了"——更正是被允许的
+    状态变化，篡改不是（2026-09-30 用 rechunk 更正了 21 份文档，旧基线里的 `superseded_at=None`
+    与现在对不上，抽样重放一次报出 26 处假不一致）。块该不该在这个 `as_of` 下可见由"行是否
+    存在"（`ABSENT`）判定；`known_at` 与 `content` 被就地改写才是真正的泄漏信号。
+
     `set_config` 的第三个参数（`is_local=true`）把 GUC 限定在当前事务内，
     不会泄漏到这个连接上后续的其他查询——每次探测都在自己的
     `with conn.transaction()` 块里设置、查询、结束，互不干扰。
@@ -116,8 +122,7 @@ def _replay_hash(conn: psycopg.Connection, block_id: int, as_of: datetime) -> st
     with conn.transaction():
         conn.execute("SELECT set_config('app.as_of', %s, true)", (as_of.isoformat(),))
         row = conn.execute(
-            "SELECT block_id, content, known_at, superseded_at"
-            "  FROM asof.doc_block WHERE block_id = %s",
+            "SELECT block_id, content, known_at  FROM asof.doc_block WHERE block_id = %s",
             (block_id,),
         ).fetchone()
     if row is None:

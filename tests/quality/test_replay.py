@@ -120,6 +120,20 @@ def test_a_corrected_document_produces_no_mismatch(conn: psycopg.Connection) -> 
     assert replay_and_check(conn, PARTITION, size=10) == []
 
 
+@pytest.mark.db
+def test_a_correction_made_after_the_baseline_is_not_a_mismatch(conn: psycopg.Connection) -> None:
+    """回归（2026-09-30）：先记基线（此时 superseded_at 为空），之后块被合法更正——历史 as_of
+    下这一行的内容与 known_at 没变，不该被判成泄漏。旧哈希含 superseded_at，这里会误报。"""
+    _add_block(conn, block_id=1, known_at=BASE_PUBLISH_AT)
+    assert replay_and_check(conn, PARTITION, size=10) == []  # 记基线
+    conn.execute(
+        "UPDATE core.doc_block SET superseded_at = %s WHERE block_id = 1",
+        (datetime(2024, 11, 1, tzinfo=UTC),),
+    )
+    conn.commit()
+    assert replay_and_check(conn, PARTITION, size=10) == []
+
+
 # --- 篡改检测（核心场景） -------------------------------------------------------
 
 

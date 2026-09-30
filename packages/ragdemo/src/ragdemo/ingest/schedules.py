@@ -16,6 +16,7 @@ CLAUDE.md §1.6）：
 - `quality_alerts_job`：每天 22:00，当天未通过的质量指标与预算状态 → 告警；
 - `announcement_reconcile_job`：周日 23:00，公告总数对账（来源自报总数 vs 库里行数），
   不一致告警，只读来源（免费）；
+- `alert_selftest_job`：只手动触发，故意失败一次，验证失败告警通路；
 - `wind_facts_job`：**默认关闭**，Wind 财务增量（已有财务数据的实体），**耗 Wind 额度**，
   需人工在 Dagster 里打开。
 
@@ -224,6 +225,18 @@ def wind_facts_op(context: OpExecutionContext, conn: ResourceParam[psycopg.Conne
     return report.written
 
 
+@op
+def alert_selftest_op() -> None:
+    """告警通路自检：故意失败一次，验证"作业失败 → 传感器 → 告警渠道"整条链是通的
+    （总计划 4.3 的验收：人为制造一次失败能收到告警）。只手动触发，没有调度。"""
+    raise RuntimeError("告警自检：这是一次人为制造的失败，收到告警说明通路正常")
+
+
+@job
+def alert_selftest_job() -> None:
+    alert_selftest_op()
+
+
 @job
 def stage2_verify_job() -> None:
     stage2_verify_op()
@@ -305,6 +318,7 @@ ALL_JOBS: "list[JobDefinition | UnresolvedAssetJobDefinition]" = [
     quality_alerts_job,
     announcement_reconcile_job,
     wind_facts_job,
+    alert_selftest_job,
 ]
 ALL_SCHEDULES: list[ScheduleDefinition] = [
     prices_schedule,
