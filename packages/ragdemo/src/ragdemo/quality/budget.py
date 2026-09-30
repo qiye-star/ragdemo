@@ -74,14 +74,21 @@ def _month_bounds(now: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
+# 按人民币计费、且必须记账的供应商。Wind / iFind 是预付额度（积分），单次调用没有人民币单价；
+# 免费来源（Tushare、巨潮、披露易、EDGAR、CFETS）不计费——它们的快照 cost_cents 为 NULL 不代表
+# "单价未知"，不该让预算看板永远告警（2026-09-30：8 条 Wind 快照让 `unknown` 告警每天推送）。
+RMB_BILLED_PROVIDERS: tuple[str, ...] = ("textin",)
+
+
 def month_to_date(conn: psycopg.Connection, *, now: datetime, cap_cny: Decimal) -> BudgetStatus:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError(f"now 必须带时区，收到 naive datetime: {now!r}")
     start, end = _month_bounds(now)
     row = conn.execute(
-        "SELECT coalesce(sum(cost_cents), 0), count(*) FILTER (WHERE cost_cents IS NULL)"
+        "SELECT coalesce(sum(cost_cents), 0),"
+        "       count(*) FILTER (WHERE cost_cents IS NULL AND provider = ANY(%s))"
         "  FROM core.provider_snapshot WHERE fetched_at >= %s AND fetched_at < %s",
-        (start, end),
+        (list(RMB_BILLED_PROVIDERS), start, end),
     ).fetchone()
     assert row is not None
     cents, unknown = row

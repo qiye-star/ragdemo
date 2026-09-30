@@ -175,3 +175,20 @@ def test_docs_ingest_cli_refuses_to_spend_once_the_budget_is_used_up(
     assert "预算" in result.output
     row = conn.execute("SELECT count(*) FROM core.document").fetchone()
     assert row is not None and row[0] == 0
+
+
+@pytest.mark.db
+def test_null_cost_snapshots_of_credit_or_free_providers_are_not_unknown_cost(
+    conn: psycopg.Connection,
+) -> None:
+    """Wind / iFind 是预付额度、免费来源不计费：它们的 cost_cents 为 NULL 不是"单价未知"。"""
+    for provider in ("wind", "tushare", "cninfo"):
+        conn.execute(
+            "INSERT INTO core.provider_snapshot (provider, endpoint, params, response_ref,"
+            " http_status, ingest_run_id, cost_cents, fetched_at)"
+            " VALUES (%s, 'x', '{}', 'x.json', 200, 't', NULL, %s)",
+            (provider, NOW),
+        )
+    conn.commit()
+    status = month_to_date(conn, now=NOW, cap_cny=CAP)
+    assert status.unknown_cost_calls == 0 and status.level is BudgetLevel.OK
