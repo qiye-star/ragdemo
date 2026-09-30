@@ -148,8 +148,14 @@ def _ask(http: HttpClient, model: str, prompt: str) -> str:
     return ""
 
 
+# 指代不明的说法：评测问题必须自成一体，否则没有实体过滤时无法判断问的是哪家公司、哪一期。
+_DEICTIC = re.compile(r"这份|该公司|该报告|本公司|本期报告|上述|该文")
+
+
 def _clean_question(question: str) -> str | None:
     q = question.strip()
+    if _DEICTIC.search(q):
+        return None
     if not q or not q.endswith(("？", "?")) or len(q) < 8 or len(q) > 120:
         return None
     if any(p.search(q) for p in FORBIDDEN_PATTERNS):

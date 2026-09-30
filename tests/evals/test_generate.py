@@ -124,3 +124,10 @@ def test_identical_text_in_several_blocks_makes_all_of_them_gold(
     cases, _ = generate_cases(corpus, http, model="m", n=50, min_body_chars=10)
     multi = [c for c in cases if len(c.gold_block_ids) > 1]
     assert multi, "同一实体两个文档里同一段话应当都被列为 gold"
+
+
+def test_questions_with_vague_references_are_rejected() -> None:
+    from ragdemo.evals.generate import _clean_question
+
+    assert _clean_question("根据这份报告，该公司的营业收入是多少？") is None
+    assert _clean_question("海光信息 2025 年半年度报告里的营业收入是多少？") is not None
