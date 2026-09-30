@@ -188,3 +188,21 @@ def test_fetch_daily_result_feeds_parse_prices_directly() -> None:
     assert row.entity_ref == "688256.SH"
     assert row.close == 50.0
     assert row.adj_factor == 1.0  # daily 工具不带这个字段，parse_prices 兜底
+
+
+def test_range_across_a_holiday_yields_only_trading_days_and_keeps_the_limit_up_day() -> None:
+    """边界样本（2026-09-29 经 Tushare MCP 真实录制）：688041.SH 在 2024-10-01 ~ 10-10 的区间。
+    国庆休市 10-01 ~ 10-07 没有行，节后首个交易日 10-08 涨停（+20.0039%，科创板 ±20% 限制）。
+    休市日不能被补成行（"没有行情"不是"价格为 0"），涨停日的价格照实入库。"""
+    adapter = TushareAdapter.for_replay(FIXTURES)
+    rows = list(
+        adapter.parse_prices(_raw("mcp_daily_range_across_national_day_688041.json", "/daily"))
+    )
+    assert sorted(r.trade_date for r in rows) == [
+        date(2024, 10, 8),
+        date(2024, 10, 9),
+        date(2024, 10, 10),
+    ]
+    limit_up = next(r for r in rows if r.trade_date == date(2024, 10, 8))
+    assert limit_up.close == 123.94 and limit_up.open == limit_up.high == 123.94
+    assert all(r.known_at.astimezone(CST).hour == 15 for r in rows)
