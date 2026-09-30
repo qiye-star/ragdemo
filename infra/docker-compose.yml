@@ -157,6 +157,11 @@ services:
       ALERT_WEBHOOK_KIND: ${ALERT_WEBHOOK_KIND:-}
     volumes:
       - ../data:/app/data
+      # 开发环境：把工作区源码与配置只读挂进容器（镜像里 uv sync 装的是可编辑安装，指向 /app/packages），
+      # 改代码后 `docker compose restart dagster-webserver dagster-daemon` 即生效，不必重建镜像
+      #（重建要解包 ~366 MB，Windows 上耗时十几分钟）。生产部署去掉这两行，用镜像里烤进去的代码。
+      - ../packages:/app/packages:ro
+      - ../config:/app/config:ro
     ports:
       - "127.0.0.1:${RAGDEMO_DAGSTER_PORT:-3000}:3000"
     depends_on:
@@ -178,6 +183,8 @@ services:
     environment: *dagster-env
     volumes:
       - ../data:/app/data
+      - ../packages:/app/packages:ro
+      - ../config:/app/config:ro
     depends_on:
       paradedb:
         condition: service_healthy

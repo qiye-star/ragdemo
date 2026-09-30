@@ -52,6 +52,7 @@ from ragdemo.ingest.assets import DAILY, price_daily_loaded, price_normalized
 from ragdemo.ingest.stage2_verify import verify_stage2
 from ragdemo.ops.alerts import Alert, raise_alert
 from ragdemo.ops.quality_alerts import evaluate_quality_alerts
+from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo.quality.replay import replay_and_check
 
 if TYPE_CHECKING:  # 顶层没有导出这个类型，只在类型检查时导入
@@ -127,7 +128,15 @@ def stage2_verify_op(context: OpExecutionContext, conn: ResourceParam[psycopg.Co
 
 @op
 def leak_replay_op(context: OpExecutionContext, conn: ResourceParam[psycopg.Connection]) -> int:
-    mismatches = replay_and_check(conn, datetime.now(CST).date())
+    today = datetime.now(CST).date()
+    mismatches = replay_and_check(conn, today)
+    record_metric(
+        conn,
+        today,
+        MetricResult(
+            "asof_replay_mismatch_count", float(len(mismatches)), not mismatches, threshold=0.0
+        ),
+    )
     if mismatches:
         first = mismatches[0]
         raise_alert(
