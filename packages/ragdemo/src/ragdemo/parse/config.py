@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 # 只覆盖"用同一套算法、换了参数值"这种变化；算法本身变了（比如换一种句子
 # 边界判定方式）要手动把这个常量升到下一版，否则旧算法产出的块会被误判成
 # "参数没变、可以复用"。
-_ALGORITHM_VERSION = "v1"
+_ALGORITHM_VERSION = "v2"  # v2：同小节同页的相邻短段落合并（2026-09-30）
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,11 @@ class ChunkConfig:
     overlap_ratio: float = 0.12
     keep_table_whole: bool = True
     drop_boilerplate: bool = True
+    # 同一小节、同一页里相邻的段落块，前一块不足 leaf_min_chars 时把后一块并进来
+    # （合并后不超过 leaf_max_chars）。公告的小节常常只有一两句话，逐块成叶子会产出
+    # 大量几十字的碎块，稀释检索信号。不跨小节、不跨页（页码是引用的一部分）、
+    # 不跨表格——docs/05 §3 的三条硬规则不变。
+    merge_short_paragraphs: bool = True
 
     @property
     def overlap_chars(self) -> int:

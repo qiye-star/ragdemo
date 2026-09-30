@@ -173,30 +173,67 @@ def leaf_length_compliance_check(
     context: AssetCheckExecutionContext, conn: ResourceParam[psycopg.Connection]
 ) -> AssetCheckResult:
     """告警级别：块长偏离区间不影响正确性，只影响检索信号质量
-    （方案 §2.3：短于下限切断因果链，长于上限稀释向量信号）。"""
+    （方案 §2.3：短于下限切断因果链，长于上限稀释向量信号）。
+
+    **度量的是正文长度**：`char_len` 含块首拼接的章节路径（`章节路径\n正文`），而切块器的
+    200–400 字约束作用在正文上；路径动辄六七十字，不扣掉会把合规的块误判为超长、把碎块
+    误判为够长（2026-09-30 对海光公告实测：路径占短叶子字符的 44%）。
+
+    **硬边界处的短叶子算合规**：切块器有三条不能破的规则——块不跨小节、不跨页（页码是引用的
+    一部分）、表格块独立。一个短于下限的叶子，如果它是文档最后一个叶子，或紧随其后的叶子在
+    另一小节 / 另一页 / 不是段落，那它无法再合并，短是内容决定的（如整个小节只有一句话），
+    不是切块器的失误。真正的违规是：能合并却没合并的短叶子，和超长的叶子。
+    原始（不做上述豁免）的比例另记为 `leaf_length_raw_rate`，只做参考，不参与通过判定。"""
     since, until = partition_window(context)
-    total, in_range = conn.execute(
-        "SELECT count(*), count(*) FILTER (WHERE b.char_len BETWEEN %s AND %s)"
-        "  FROM core.doc_block b JOIN core.document d USING (doc_id)"
-        " WHERE d.publish_at > %s AND d.publish_at <= %s"
-        "   AND b.is_leaf AND b.block_type = 'paragraph'",
-        (
-            _DEFAULT_CHUNK_CFG.leaf_min_chars,
-            _DEFAULT_CHUNK_CFG.leaf_max_chars,
-            since,
-            until,
-        ),
+    total, compliant, raw_in_range = conn.execute(
+        """
+        WITH leaves AS (
+          SELECT b.block_type,
+                 b.char_len - CASE WHEN b.section_path <> ''
+                                   THEN length(b.section_path) + 1 ELSE 0 END AS body_len,
+                 b.section_path, b.page,
+                 LEAD(b.ordinal) OVER w IS NULL AS is_last,
+                 LEAD(b.section_path) OVER w AS next_section,
+                 LEAD(b.page) OVER w AS next_page,
+                 LEAD(b.block_type) OVER w AS next_type
+            FROM core.doc_block b JOIN core.document d USING (doc_id)
+           WHERE d.publish_at > %(since)s AND d.publish_at <= %(until)s
+             AND b.is_leaf AND b.superseded_at IS NULL
+          WINDOW w AS (PARTITION BY b.doc_id ORDER BY b.ordinal)
+        )
+        SELECT count(*),
+               count(*) FILTER (
+                 WHERE body_len BETWEEN %(lo)s AND %(hi)s
+                    OR (body_len < %(lo)s AND (is_last
+                        OR next_section IS DISTINCT FROM section_path
+                        OR next_page IS DISTINCT FROM page
+                        OR next_type <> 'paragraph'))),
+               count(*) FILTER (WHERE body_len BETWEEN %(lo)s AND %(hi)s)
+          FROM leaves WHERE block_type = 'paragraph'
+        """,
+        {
+            "since": since,
+            "until": until,
+            "lo": _DEFAULT_CHUNK_CFG.leaf_min_chars,
+            "hi": _DEFAULT_CHUNK_CFG.leaf_max_chars,
+        },
     ).fetchone()  # type: ignore[misc]
-    rate = 1.0 if total == 0 else in_range / total
+    rate = 1.0 if total == 0 else compliant / total
+    raw_rate = 1.0 if total == 0 else raw_in_range / total
     passed = rate >= LEAF_LENGTH_COMPLIANCE_THRESHOLD
     record_metric(
         conn,
         _partition_date(context),
         MetricResult("leaf_length_compliance_rate", rate, passed, LEAF_LENGTH_COMPLIANCE_THRESHOLD),
     )
+    record_metric(
+        conn,
+        _partition_date(context),
+        MetricResult("leaf_length_raw_rate", raw_rate, True, None, note="仅供参考：不做硬边界豁免"),
+    )
     return AssetCheckResult(
         passed=passed,
-        metadata={"rate": rate, "paragraph_leaf_count": total},
+        metadata={"rate": rate, "raw_rate": raw_rate, "paragraph_leaf_count": total},
         severity=AssetCheckSeverity.WARN,
     )
 

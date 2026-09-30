@@ -201,3 +201,81 @@ def test_absorb_short_tail_is_a_noop_when_the_tail_already_meets_leaf_min() -> N
 
 def test_absorb_short_tail_is_a_noop_for_a_single_span() -> None:
     assert _absorb_short_tail([(0, 300)], CFG) == [(0, 300)]
+
+
+# --- 同小节同页相邻短段落合并（2026-09-30，切块算法 v2）------------------------------
+
+
+def _paras(*specs: tuple[str, int, str]) -> list[NormalizedBlock]:
+    return [
+        NormalizedBlock(i, "paragraph", section, text, page=page)
+        for i, (section, page, text) in enumerate(specs)
+    ]
+
+
+def test_adjacent_short_paragraphs_in_the_same_section_and_page_are_merged() -> None:
+    chunks = chunk_document(_doc(_paras(("第一节", 1, "甲" * 80), ("第一节", 1, "乙" * 90))), CFG)
+    assert len(chunks) == 1
+    assert chunks[0].content == "第一节\n" + "甲" * 80 + "\n" + "乙" * 90
+
+
+def test_merging_stops_once_the_leaf_reaches_the_lower_bound() -> None:
+    """已经够长的不再被继续粘连——否则一串短块会被并成一个越滚越大的块。"""
+    blocks = _paras(("第一节", 1, "甲" * 120), ("第一节", 1, "乙" * 120), ("第一节", 1, "丙" * 60))
+    chunks = chunk_document(_doc(blocks), CFG)
+    assert [len(c.content) - len("第一节\n") for c in chunks] == [241, 60]
+
+
+def test_merging_never_exceeds_the_upper_bound() -> None:
+    blocks = _paras(("第一节", 1, "甲" * 150), ("第一节", 1, "乙" * 390))
+    chunks = chunk_document(_doc(blocks), CFG)
+    assert len(chunks) == 2  # 150 + 1 + 390 > 400，不并
+
+
+def test_short_paragraphs_are_not_merged_across_sections_pages_or_tables() -> None:
+    across_sections = chunk_document(
+        _doc(_paras(("第一节", 1, "甲" * 80), ("第二节", 1, "乙" * 80))), CFG
+    )
+    assert len(across_sections) == 2
+    across_pages = chunk_document(
+        _doc(_paras(("第一节", 1, "甲" * 80), ("第一节", 2, "乙" * 80))), CFG
+    )
+    assert len(across_pages) == 2  # 页码是引用的一部分，不能把第 2 页的内容标成第 1 页
+    with_table = chunk_document(
+        _doc(
+            [
+                NormalizedBlock(0, "paragraph", "第一节", "甲" * 80, page=1),
+                NormalizedBlock(1, "table", "第一节", "| a | b |", page=1),
+                NormalizedBlock(2, "paragraph", "第一节", "乙" * 80, page=1),
+            ]
+        ),
+        CFG,
+    )
+    assert [c.block_type for c in with_table] == ["paragraph", "table", "paragraph"]
+
+
+def test_merged_chunk_keeps_first_page_and_the_union_of_bboxes() -> None:
+    blocks = [
+        NormalizedBlock(0, "paragraph", "第一节", "甲" * 80, page=3, bbox=(0.1, 0.2, 0.5, 0.3)),
+        NormalizedBlock(1, "paragraph", "第一节", "乙" * 80, page=3, bbox=(0.05, 0.31, 0.9, 0.4)),
+    ]
+    (chunk,) = chunk_document(_doc(blocks), CFG)
+    assert chunk.page == 3
+    assert chunk.bbox == (0.05, 0.2, 0.9, 0.4)
+
+
+def test_a_boilerplate_block_between_short_paragraphs_is_a_hard_boundary() -> None:
+    blocks = _paras(
+        ("第一节", 1, "甲" * 80), ("第一节", 1, "第 12 页 共 24 页"), ("第一节", 1, "乙" * 80)
+    )
+    chunks = chunk_document(_doc(blocks), CFG)
+    assert len(chunks) == 2
+    assert all("第 12 页" not in c.content for c in chunks)
+
+
+def test_merging_can_be_switched_off_and_changes_the_chunking_version() -> None:
+    off = ChunkConfig(merge_short_paragraphs=False)
+    blocks = _paras(("第一节", 1, "甲" * 80), ("第一节", 1, "乙" * 90))
+    assert len(chunk_document(_doc(blocks), off)) == 2
+    assert off.version != ChunkConfig().version  # 评测集绑在切块结果上，版本必须能区分
+    assert "v2" in ChunkConfig().version

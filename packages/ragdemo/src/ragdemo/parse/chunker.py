@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from ragdemo.adapters.announcements import NormalizedDocument
+from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.filters import is_boilerplate
 
@@ -102,13 +102,92 @@ def split_text(text: str, cfg: ChunkConfig) -> list[str]:
     return [stripped[s:e] for s, e in spans]
 
 
+@dataclass
+class _Run:
+    """一串可以合并成一个叶子的相邻段落块（同小节、同页）。"""
+
+    section_path: str
+    page: int | None
+    texts: list[str]
+    bbox: tuple[float, float, float, float] | None
+
+    @property
+    def length(self) -> int:
+        return sum(len(t) for t in self.texts) + len(self.texts) - 1
+
+    def add(self, block: NormalizedBlock) -> None:
+        self.texts.append(block.content)
+        self.bbox = _union_bbox(self.bbox, block.bbox)
+
+
+def _union_bbox(
+    a: tuple[float, float, float, float] | None, b: tuple[float, float, float, float] | None
+) -> tuple[float, float, float, float] | None:
+    if a is None or b is None:
+        return a if b is None else b if a is None else None
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _merge_short_paragraphs(
+    blocks: list[NormalizedBlock], cfg: ChunkConfig
+) -> list[NormalizedBlock]:
+    """把同小节、同页的相邻短段落并成一块；其余块原样保留。
+
+    只在"前一串还不足下限、并入后仍不超上限"时才合并，已经够长的不会被继续粘连。
+    表格、标题、样板、跨小节、跨页都是硬边界。合并后的块沿用第一块的序号与页码，
+    bbox 取并集。"""
+    out: list[NormalizedBlock] = []
+    run: _Run | None = None
+    first: NormalizedBlock | None = None
+
+    def flush() -> None:
+        nonlocal run, first
+        if run is not None and first is not None:
+            out.append(
+                replace(first, content="\n".join(run.texts), bbox=run.bbox)
+                if len(run.texts) > 1
+                else first
+            )
+        run, first = None, None
+
+    for block in blocks:
+        if (
+            block.block_type == "paragraph"
+            and cfg.drop_boilerplate
+            and is_boilerplate(block.content)
+        ):
+            flush()  # 样板：丢弃，同时是硬边界（不跨样板合并）
+            continue
+        if block.block_type != "paragraph":
+            flush()
+            out.append(block)
+            continue
+        if (
+            run is not None
+            and run.section_path == block.section_path
+            and run.page == block.page
+            and run.length < cfg.leaf_min_chars
+            and run.length + 1 + len(block.content) <= cfg.leaf_max_chars
+        ):
+            run.add(block)
+            continue
+        flush()
+        run = _Run(block.section_path, block.page, [block.content], block.bbox)
+        first = block
+    flush()
+    return out
+
+
 def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
     """产出叶子块。父块由 parse.tree 构造。"""
     cfg.validate()
     chunks: list[Chunk] = []
     ordinal = 0
 
-    for block in doc.blocks:
+    blocks = (
+        _merge_short_paragraphs(list(doc.blocks), cfg) if cfg.merge_short_paragraphs else doc.blocks
+    )
+    for block in blocks:
         if cfg.drop_boilerplate and block.block_type != "table" and is_boilerplate(block.content):
             continue
 

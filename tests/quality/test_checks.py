@@ -97,17 +97,20 @@ def _seed_block(
     char_len: int | None = None,
     parse_confidence: float | None = None,
     embedding: str | None = None,
+    section_path: str = "",
+    page: int | None = None,
 ) -> int:
     row = conn.execute(
         "INSERT INTO core.doc_block (doc_id, parent_block_id, block_type, section_path,"
         " ordinal, content, char_len, is_leaf, entity_id, doc_type, publish_at, valid_from,"
-        " known_at, source, ingest_run_id, parse_confidence, embedding) "
-        "VALUES (%s,%s,%s,'',%s,%s,%s,%s,'CN.688256','quarterly',%s,'2024-07-01',%s,"
-        "'mock','r1',%s,%s) RETURNING block_id",
+        " known_at, source, ingest_run_id, parse_confidence, embedding, page) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'CN.688256','quarterly',%s,'2024-07-01',%s,"
+        "'mock','r1',%s,%s,%s) RETURNING block_id",
         (
             doc_id,
             parent_block_id,
             block_type,
+            section_path,
             ordinal,
             content,
             char_len if char_len is not None else len(content),
@@ -116,6 +119,7 @@ def _seed_block(
             PUBLISH_AT,
             parse_confidence,
             embedding,
+            page,
         ),
     ).fetchone()
     assert row is not None
@@ -499,3 +503,71 @@ def test_ingest_latency_check_passes_within_threshold(conn: psycopg.Connection) 
     result = _run(ingest_latency_check, conn)
 
     assert result.passed is True
+
+
+# --- leaf_length_compliance_check：正文长度与硬边界豁免（2026-09-30）-----------------
+
+
+@pytest.mark.db
+def test_leaf_length_is_measured_on_the_body_not_the_section_path_prefix(
+    conn: psycopg.Connection,
+) -> None:
+    """char_len 含"章节路径\n"前缀：60 字路径 + 100 字正文 = 161，按整体算"够长"，按正文算是碎块。"""
+    _seed_document(conn, doc_id=1, content_hash="h1")
+    path = "路" * 60
+    for i in range(3):  # 三个 100 字正文的叶子连着排在同一小节同一页：能合并却没合并
+        _seed_block(conn, doc_id=1, ordinal=i, section_path=path, page=1, char_len=60 + 1 + 100)
+    conn.commit()
+    result = _run(leaf_length_compliance_check, conn)
+    assert result.passed is False  # 只有最后一个（小节末尾）豁免：1/3
+
+
+@pytest.mark.db
+def test_a_short_leaf_before_a_hard_boundary_is_compliant_but_a_mergeable_one_is_not(
+    conn: psycopg.Connection,
+) -> None:
+    _seed_document(conn, doc_id=1, content_hash="h1")
+    # 每个短叶子后面都是硬边界：换小节 / 换页 / 表格 / 文档结尾
+    _seed_block(
+        conn, doc_id=1, ordinal=0, section_path="A", page=1, char_len=2 + 50
+    )  # 下一个换小节
+    _seed_block(conn, doc_id=1, ordinal=1, section_path="B", page=1, char_len=2 + 50)  # 下一个换页
+    _seed_block(
+        conn, doc_id=1, ordinal=2, section_path="B", page=2, char_len=2 + 50
+    )  # 下一个是表格
+    _seed_block(
+        conn, doc_id=1, ordinal=3, block_type="table", section_path="B", page=2, char_len=99
+    )
+    _seed_block(conn, doc_id=1, ordinal=4, section_path="C", page=3, char_len=2 + 50)  # 文档末尾
+    conn.commit()
+    result = _run(leaf_length_compliance_check, conn)
+    assert result.passed is True
+    assert result.metadata["rate"].value == 1.0 and result.metadata["raw_rate"].value == 0.0
+
+
+@pytest.mark.db
+def test_a_too_long_leaf_is_a_violation_and_raw_rate_is_recorded(conn: psycopg.Connection) -> None:
+    _seed_document(conn, doc_id=1, content_hash="h1")
+    _seed_block(conn, doc_id=1, ordinal=0, section_path="A", page=1, char_len=2 + 500)
+    _seed_block(conn, doc_id=1, ordinal=1, section_path="A", page=1, char_len=2 + 300)
+    conn.commit()
+    result = _run(leaf_length_compliance_check, conn)
+    assert result.passed is False and result.metadata["rate"].value == 0.5
+    raw = conn.execute(
+        "SELECT value FROM quality.quality_metric WHERE metric = 'leaf_length_raw_rate'"
+    ).fetchone()
+    assert raw == (0.5,)
+
+
+@pytest.mark.db
+def test_superseded_blocks_are_not_counted(conn: psycopg.Connection) -> None:
+    _seed_document(conn, doc_id=1, content_hash="h1")
+    old = _seed_block(conn, doc_id=1, ordinal=0, section_path="A", page=1, char_len=2 + 10)
+    conn.execute(
+        "UPDATE core.doc_block SET superseded_at = known_at + interval '1 day' WHERE block_id = %s",
+        (old,),
+    )
+    _seed_block(conn, doc_id=1, ordinal=1, section_path="A", page=1, char_len=2 + 300)
+    conn.commit()
+    result = _run(leaf_length_compliance_check, conn)
+    assert result.passed is True and result.metadata["paragraph_leaf_count"].value == 1
