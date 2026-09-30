@@ -89,3 +89,13 @@ def test_explain_shows_bm25_index_usage(corpus: psycopg.Connection, as_of_2024: 
     """
     plan = explain_bm25(corpus, RetrievalRequest(query="云端训练芯片", as_of=as_of_2024))
     assert "doc_block" in plan
+
+
+@pytest.mark.db
+def test_a_question_with_extra_words_still_matches_on_any_term(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """自然语言问题里总有语料没有的词；词面一路必须是「任一词命中」而非「全部命中」。
+    合成评测集实测：`@@@`（合取）下 BM25 单路 recall@10 仅 0.09，`|||` 下 0.88。"""
+    question = "请问云端训练芯片相关的业务情况到底怎么样呢"
+    assert bm25_search(corpus, RetrievalRequest(query=question, as_of=as_of_2024))

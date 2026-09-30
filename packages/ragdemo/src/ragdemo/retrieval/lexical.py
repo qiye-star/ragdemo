@@ -20,7 +20,7 @@ SELECT block_id,
        ROW_NUMBER() OVER (ORDER BY paradedb.score(block_id) DESC) AS rnk,
        paradedb.score(block_id) AS raw_score
   FROM asof.doc_block
- WHERE content @@@ %(query)s
+ WHERE content ||| %(query)s
  {filters}
  ORDER BY paradedb.score(block_id) DESC
  LIMIT %(candidate_k)s
