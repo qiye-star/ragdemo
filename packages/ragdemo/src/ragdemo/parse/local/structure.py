@@ -51,7 +51,7 @@ class LlmStructurer:
 
         reply = self._chat(messages)
         bad = closure_violations(reply, source)
-        lost = closure_violations(source, reply)
+        lost = closure_violations(page_text, reply)
         if not bad and not lost:
             return reply
         parts = []
@@ -70,7 +70,7 @@ class LlmStructurer:
         ]
         reply = self._chat(messages)
         bad = closure_violations(reply, source)
-        lost = closure_violations(source, reply)
+        lost = closure_violations(page_text, reply)
         if bad:
             raise ClosureFailed(bad)
         if lost:

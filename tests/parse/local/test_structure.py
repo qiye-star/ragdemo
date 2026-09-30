@@ -144,3 +144,36 @@ def test_literal_placeholder_in_page_text_is_not_substituted() -> None:
     LlmStructurer(http, model="m").structure(page, [table])
     sent = seen[0]["messages"][0]["content"]
     assert sent.count("{tables}") == 1 and sent.count(table) == 1
+
+
+_TPAGE = "项目 2024 2023 营业收入 91.2 60.1 净利润 19.3 12.7"
+_TABLE = (
+    "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 营业收入 | 91.2 | 60.1 |\n| 净利润 | 19.3 | 12.7 |"
+)
+
+
+def test_table_replacing_flat_text_is_not_reported_as_lost() -> None:
+    http, seen = _http_raw([_choice(_TABLE)])
+    assert LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE]) == _TABLE
+    assert len(seen) == 1
+
+
+def test_flat_text_and_table_both_kept_is_allowed() -> None:
+    reply = _TPAGE + "\n\n" + _TABLE
+    http, seen = _http_raw([_choice(reply)])
+    assert LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE]) == reply
+    assert len(seen) == 1
+
+
+def test_table_with_dropped_rows_is_retried_then_fails() -> None:
+    dropped = "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 营业收入 | 91.2 | 60.1 |"
+    http, seen = _http_raw([_choice(dropped)])
+    with pytest.raises(StructureFailed, match=r"19\.3"):
+        LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
+    assert len(seen) == 2
+
+
+def test_prompt_tells_model_to_replace_flat_table_text() -> None:
+    http, seen = _http_raw([_choice(_TABLE)])
+    LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
+    assert "替换" in seen[0]["messages"][0]["content"]
