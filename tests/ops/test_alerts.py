@@ -168,7 +168,8 @@ def test_budget_levels_map_to_alerts(conn: psycopg.Connection) -> None:
     def spend(cents: int) -> None:
         conn.execute(
             "INSERT INTO core.provider_snapshot (provider, endpoint, params, response,"
-            " ingest_run_id, fetched_at, cost_cents) VALUES ('textin', 'x', '{}', '{}'::jsonb, 't', %s, %s)",
+            " ingest_run_id, fetched_at, cost_cents) VALUES"
+            " ('textin', 'x', '{}', '{}'::jsonb, 't', %s, %s)",
             (NOW - timedelta(hours=1), cents),
         )
         conn.commit()
