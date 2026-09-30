@@ -34,6 +34,8 @@ BITEMPORAL_VIEWS = {
     "shareholder_holding",
     "segment_revenue",
     "fx_rate",
+    # 026：行业汇总类指标（手工录入）。
+    "industry_metric_point",
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。

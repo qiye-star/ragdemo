@@ -8,6 +8,15 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragdemo}
       POSTGRES_DB: ragdemo
+    # 关闭并行：pg_search 0.25.9 的并行 worker 会间歇崩溃（退出码 2），触发整库崩溃恢复——
+    # 并行构建 bm25 索引（迁移 004 / 建测试库时）和并行查询都中过（2026-09-29/30 共 7 次，
+    # 见 docs/9.28-plan/验收记录/phase-8）。当前数据量下并行收益可忽略。镜像默认 CMD 是 postgres。
+    command:
+      - postgres
+      - -c
+      - max_parallel_maintenance_workers=0
+      - -c
+      - max_parallel_workers_per_gather=0
     ports:
       # 只绑回环地址，不暴露公网（docs/01-architecture.md §4：端口不对公网开放）。
       # 宿主端口默认 5433 而非 5432：开发机上 5432 常被既有 postgres 占用，

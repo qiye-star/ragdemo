@@ -14,6 +14,12 @@ run_coordinator:
     # 供应商限速与冷却状态是全局的，并发只会互相挤占。
     max_concurrent_runs: 1
 
+# 数据库偶发崩溃恢复（ParadeDB 后台进程问题，见验收记录 phase-8）期间作业会连接失败；
+# 失败的 run 自动重试，避免一次瞬时故障就让当天分区缺数据。
+run_retries:
+  enabled: true
+  max_retries: 2
+
 telemetry:
   enabled: false   # 不向境外上报（CLAUDE.md §0）
 

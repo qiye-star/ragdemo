@@ -25,9 +25,18 @@
 2. Wind 月度调用上限（按需门控用）。
 3. TextIn 充值与否（海光剩余 15 份文档未解析）。
 
-## 已知问题：ParadeDB 后台进程间歇崩溃（需持续观察）
+## ParadeDB 间歇崩溃：定位与处置（2026-09-30）
 
-`ragdemo-db` 日志里 `untracked child process ... exited with exit code 2` 出现过多次（9/29 03:00、07:59；9/30 04:32、04:40、07:57、08:00 UTC），随后 Postgres 整体重新初始化、自动恢复（数据完整，`core.doc_block` 1613 行不变）。07:57 与 08:00 两次发生时没有手工查询在跑，只有常驻的 dagster daemon。**这直接影响 4.4"连续 5 天无人值守"**：崩溃恢复期间（约 5–40 秒）作业连接会失败。尚未定位触发语句；下一步：在日志里打开 `log_min_error_statement` / 给 pg_search 后台进程留 core，或对照 dagster 作业时刻排查。
+**现象：** `ragdemo-db` 日志里 `untracked child process ... exited with exit code 2`，随后整库崩溃恢复（数据完整，`core.doc_block` 1613 行不变），恢复期间连接失败。9/29–9/30 共 7 次。
+
+**定位：** 打开语句日志后，在跑测试时复现——崩溃发生在测试库执行迁移 004 的 `CREATE INDEX ... USING bm25` 期间；崩的是被登记为 untracked 的**并行 worker**。此前的几次也都是重聚合 / 重查询场景（并行查询）。结论：`pg_search 0.25.9` 的并行 worker 有缺陷（建 bm25 索引和并行查询都会中）。
+
+**处置：**
+1. `infra/docker-compose.yml` 给数据库加 `max_parallel_maintenance_workers=0`、`max_parallel_workers_per_gather=0`（当前数据量下并行收益可忽略）；
+2. `infra/dagster/dagster.yaml` 开启 `run_retries`（最多 2 次），即便再有瞬时崩溃，失败的 run 也会自动重试，不让当天分区缺数据；
+3. 已重建 dagster 镜像使重试配置生效。
+
+**验证：** 关并行后，此前崩溃的 `tests/db` + 手工录入测试（75 个）无崩溃；更大批量的压力验证结果见下方"压力验证"。**4.4 的无人值守计时仍从 2026-09-30 起算，但若再出现崩溃，需重新评估。**
 
 ## 产业指标手工录入（2026-09-30，用户选定方案 2）
 
@@ -36,4 +45,9 @@
 - `ragdemo metrics manual-template --out x.csv` 生成表头；`ragdemo metrics import-manual --file x.csv [--yes]` 校验（默认只校验）与写入。
 - 每行必须有 `source`、`source_ref`；`published_on` 即 `known_at`（日精度取当日 23:59:59.999999 北京时间）；单位必须等于指标定义；推导指标拒绝；整批一次报全、有错不写。
 - 整个 CSV 作为一条 `provider='manual'` 快照留底，事实行盖 `snapshot_id`；`metric_source_map` 自动登记 `manual`（字段名=metric_id，不换算）；重复导入跳过，改值走更正追加。
-- **限制：** 行业汇总类指标（全球出货量、渗透率等）没有对应实体，`fin_fact.entity_id` 有外键。目前只能录到已存在的实体（如英伟达、台积电）。汇总类要不要建"节点级"伪实体（会改变实体计数与环节归属语义）或单独建表，待决定。
+- **行业汇总类指标**（全球出货量、渗透率等，不属于任何一家公司）：迁移 026 新建时点表 `core.industry_metric_point`（键 = metric_id + scope + period，`asof.industry_metric_point` 视图，登记双时态）。CSV 里 `entity_id` 留空、填 `scope`（GLOBAL / CN 等），与公司口径恰填其一；规则同公司口径（来源出处必填、同值跳过、更正追加、快照留底）。
+- **未做：** DataApi 读取这张表的接口（契约升 v1.3），待有使用方时再加；目前只能 SQL 查 `asof.industry_metric_point`。
+
+## 压力验证（关并行后，2026-09-30）
+
+`tests/ingest tests/retrieval tests/metrics tests/db tests/ops` 共 **521 个测试全部通过**（5 分 01 秒），其间每个测试都新建并迁移一个带 bm25 索引的临时库；数据库日志 30 分钟内**崩溃 0 次**（关并行前同类负载下 1 次测试就能触发）。结论：并行 worker 是触发条件，处置有效；仍需靠 4.4 的 5 天实际运行继续观察。

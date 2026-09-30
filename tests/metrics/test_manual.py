@@ -117,3 +117,47 @@ def test_cli_dry_run_writes_nothing_and_yes_writes(
     assert conn.execute("SELECT count(*) FROM core.fin_fact WHERE source='manual'").fetchone() == (
         1,
     )
+
+
+SCOPE_ROW = (
+    "accelerator_card_shipment,,2026Q2,2026-06-30,1200000,pcs,2026-08-20,IDC 报告,p.8,GLOBAL"
+)
+
+
+def test_industry_level_rows_go_to_their_own_table_and_follow_the_same_rules(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    path = _csv(tmp_path, SCOPE_ROW)
+    rows = parse_rows(conn, path, today=TODAY)
+    assert import_rows(conn, path, rows, now=NOW) == {WriteOutcome.INSERTED: 1}
+    assert import_rows(conn, path, rows, now=NOW) == {WriteOutcome.SKIPPED_IDENTICAL: 1}
+    revised = _csv(tmp_path, SCOPE_ROW.replace("1200000", "1300000").replace("08-20", "09-15"))
+    assert import_rows(conn, revised, parse_rows(conn, revised, today=TODAY), now=NOW) == {
+        WriteOutcome.CORRECTED: 1
+    }
+    n = conn.execute(
+        "SELECT count(*), count(*) FILTER (WHERE superseded_at IS NULL),"
+        " count(*) FILTER (WHERE snapshot_id IS NOT NULL) FROM core.industry_metric_point"
+    ).fetchone()
+    assert n == (2, 1, 2)
+    # 时点：8 月底只能看到旧值，9 月底看到更正值
+    from ragdemo_core.db.session import as_of_session
+
+    def at(ts: datetime) -> int:
+        with as_of_session(conn, ts):
+            r = conn.execute("SELECT value FROM asof.industry_metric_point").fetchone()
+        return int(r[0]) if r else -1
+
+    assert at(datetime(2026, 8, 31, tzinfo=UTC)) == 1200000
+    assert at(datetime(2026, 9, 30, tzinfo=UTC)) == 1300000
+    assert at(datetime(2026, 8, 1, tzinfo=UTC)) == -1  # 发布前不可见
+
+
+def test_entity_and_scope_must_be_exactly_one_of_them(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    both = GOOD + ",GLOBAL"
+    neither = SCOPE_ROW.replace(",GLOBAL", ",")
+    for line in (both, neither):
+        with pytest.raises(ManualImportError, match="恰填其一"):
+            parse_rows(conn, _csv(tmp_path, line), today=TODAY)
