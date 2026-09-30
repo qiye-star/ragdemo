@@ -1,4 +1,11 @@
-from ragdemo.parse.local.compare import number_recall_precision, table_row_recall, text_coverage
+from ragdemo.parse.local.compare import (
+    _table_rows,
+    number_recall_precision,
+    plain_text_from_markdown,
+    table_row_recall,
+    text_coverage,
+)
+from ragdemo.parse.local.number_closure import numbers_in
 
 REF_TABLE = "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 收入 | 91.2 | 60.1 |\n| 利润 | 19.3 | 12.7 |"
 
@@ -27,3 +34,36 @@ def test_table_row_recall_requires_the_numbers_of_a_row_to_stay_together() -> No
     )
     assert table_row_recall(REF_TABLE, shuffled) == 0.0
     assert table_row_recall("没有表格", "x") == 1.0
+
+
+HTML_REF = (
+    '<table border="1"><tr><td colspan="2">项目</td><td>2024</td></tr>'
+    "<tr><td>收入</td><td>91.2</td><td>60.1</td></tr></table>"
+)
+PIPE_PERFECT = "| 项目 | 2024 |\n|---|---|\n| 收入 | 91.2 | 60.1 |"
+
+
+def test_html_reference_rows_are_compared_against_a_pipe_candidate() -> None:
+    assert table_row_recall(HTML_REF, PIPE_PERFECT) == 1.0
+    swapped = "| 项目 | 2024 |\n|---|---|\n| 收入 | 91.2 | 99.9 |"
+    assert table_row_recall(HTML_REF, swapped) == 0.0
+
+
+def test_html_header_row_is_skipped_and_multi_table_reference() -> None:
+    two = HTML_REF + "<p>x</p>" + HTML_REF.replace("91.2", "11.1")
+    assert len(_table_rows(two)) == 2
+    assert len(_table_rows(HTML_REF)) == 1
+
+
+def test_plain_text_drops_tags_attributes_and_comments() -> None:
+    from collections import Counter
+
+    plain = plain_text_from_markdown("<!-- 页眉 2024 -->" + HTML_REF + "A&amp;B<br/>x")
+    assert numbers_in(plain) == Counter({"2024": 1, "91.2": 1, "60.1": 1})
+    assert "页眉" not in plain and "colspan" not in plain and "<" not in plain
+    assert "A&B" in plain
+
+
+def test_text_coverage_of_plain_text_against_perfect_candidate() -> None:
+    cand = "项目 2024 收入 91.2 60.1"
+    assert text_coverage(plain_text_from_markdown(HTML_REF), cand) >= 0.99

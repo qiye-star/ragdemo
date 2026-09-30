@@ -36,19 +36,19 @@ def _http(replies: list[str]) -> tuple[HttpClient, list[dict[str, Any]]]:
 
 
 def test_a_closed_reply_is_returned_and_usage_is_tallied() -> None:
-    http, seen = _http(["# 经营情况\n\n营业收入 91.2 亿元，上年同期 60.1 亿元。"])
+    http, seen = _http(["# 营业收入 91.2 亿元，上年同期 60.1 亿元。"])
     s = LlmStructurer(http, model="deepseek-chat")
     out = s.structure(PAGE, [])
-    assert out.startswith("# 经营情况") and "91.2" in out
+    assert out.startswith("# 营业收入") and "91.2" in out
     assert (s.usage.calls, s.usage.prompt_tokens, s.usage.completion_tokens) == (1, 100, 50)
     assert PAGE in seen[0]["messages"][0]["content"]
     assert seen[0]["temperature"] == 0
 
 
 def test_an_invented_number_triggers_one_retry_naming_the_offenders() -> None:
-    http, seen = _http(["收入 91.3 亿元", "收入 91.2 亿元，上年 60.1 亿元"])
+    http, seen = _http(["收入 91.3 亿元", PAGE])
     out = LlmStructurer(http, model="m").structure(PAGE, [])
-    assert out == "收入 91.2 亿元，上年 60.1 亿元" and len(seen) == 2
+    assert out == PAGE and len(seen) == 2
     assert "91.3" in seen[1]["messages"][-1]["content"]  # 重试时点名违规数字
 
 
@@ -103,7 +103,7 @@ def test_truncated_reply_raises_without_retry_and_tallies_usage() -> None:
 
 
 def test_max_tokens_is_configurable() -> None:
-    http, seen = _http_raw([_choice("收入 91.2 上年 60.1")])
+    http, seen = _http_raw([_choice(PAGE)])
     LlmStructurer(http, model="m", max_tokens=1234).structure(PAGE, [])
     assert seen[0]["max_tokens"] == 1234
 
@@ -131,7 +131,7 @@ def test_dropped_number_survives_retry_raises_structure_failed() -> None:
 
 
 def test_dropped_number_restored_on_retry_returns_second_reply() -> None:
-    full = "收入 91.2 上年 60.1"
+    full = PAGE
     http, seen = _http_raw([_choice("收入 91.2"), _choice(full)])
     assert LlmStructurer(http, model="m").structure(PAGE, []) == full
     assert len(seen) == 2
@@ -177,3 +177,49 @@ def test_prompt_tells_model_to_replace_flat_table_text() -> None:
     http, seen = _http_raw([_choice(_TABLE)])
     LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
     assert "替换" in seen[0]["messages"][0]["content"]
+
+
+def test_unit_swap_with_intact_digits_is_rejected_after_one_retry() -> None:
+    swapped = PAGE.replace("亿元", "万元")
+    http, seen = _http_raw([_choice(swapped)])
+    with pytest.raises(StructureFailed, match="字符闭合失败") as exc:
+        LlmStructurer(http, model="m").structure(PAGE, [])
+    assert not isinstance(exc.value, ClosureFailed) and len(seen) == 2
+    assert "万" in seen[1]["messages"][-1]["content"]
+
+
+def test_faithful_reply_with_markdown_and_whitespace_changes_passes_in_one_call() -> None:
+    reply = "# 营业收入 91.2 亿元，\n\n- 上年同期\n  60.1 亿元。"
+    http, seen = _http_raw([_choice(reply)])
+    assert LlmStructurer(http, model="m").structure(PAGE, []) == reply
+    assert len(seen) == 1
+
+
+def test_swapped_cells_in_the_pasted_table_are_retried_then_rejected() -> None:
+    swapped = _TABLE.replace("| 营业收入 | 91.2 | 60.1 |", "| 营业收入 | 60.1 | 91.2 |")
+    http, seen = _http_raw([_choice(swapped)])
+    with pytest.raises(StructureFailed, match="表格未原样保留"):
+        LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
+    assert len(seen) == 2 and "第 1 张" in seen[1]["messages"][-1]["content"]
+
+
+def test_omitted_table_is_retried_then_rejected() -> None:
+    http, seen = _http_raw([_choice(_TPAGE)])  # 只留了平铺文字，没有放回表格
+    with pytest.raises(StructureFailed, match="表格未原样保留"):
+        LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
+    assert len(seen) == 2
+
+
+def test_verbatim_table_with_different_whitespace_passes_in_one_call() -> None:
+    reply = "\n\n".join(["  " + line for line in _TABLE.split("\n")])
+    http, seen = _http_raw([_choice(reply)])
+    assert LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE]) == reply.strip()
+    assert len(seen) == 1
+
+
+def test_prompt_keeps_source_numbering_and_forbids_invented_headings() -> None:
+    http, seen = _http_raw([_choice(_TABLE)])
+    LlmStructurer(http, model="m").structure(_TPAGE, [_TABLE])
+    sent = seen[0]["messages"][0]["content"]
+    assert "保持原文的编号与项目符号" in sent and "不要把它们改成 `-`" in sent
+    assert "不得添加原文中没有的标题文字" in sent

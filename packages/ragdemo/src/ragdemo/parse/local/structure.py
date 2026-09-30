@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ragdemo.adapters.http import HttpClient
 from ragdemo.parse.describe_llm import Usage, load_prompt
+from ragdemo.parse.local.char_closure import char_violations
 from ragdemo.parse.local.number_closure import closure_violations
 
 CHAT_ENDPOINT = "/chat/completions"
@@ -25,6 +27,68 @@ class ClosureFailed(StructureFailed):
     def __init__(self, violations: list[str]) -> None:
         super().__init__(f"数字闭合校验失败：{violations}")
         self.violations = violations
+
+
+@dataclass(frozen=True)
+class _Problems:
+    bad_numbers: list[str]  # 输出里有、源里没有的数字
+    lost_numbers: list[str]  # 源正文里有、输出里没有的数字
+    bad_chars: list[str]  # 输出里有、源里没有的字（单位 / 中文数字 / 方向词被改）
+    lost_chars: list[str]
+    missing_tables: list[int]  # 没有原样保留的已还原表格（从 1 起）
+
+    @property
+    def ok(self) -> bool:
+        return not (
+            self.bad_numbers
+            or self.lost_numbers
+            or self.bad_chars
+            or self.lost_chars
+            or self.missing_tables
+        )
+
+    def retry_message(self) -> str:
+        parts: list[str] = []
+        if self.bad_numbers:
+            parts.append(f"你的输出里出现了输入中没有的数字：{', '.join(self.bad_numbers)}。")
+        if self.lost_numbers:
+            parts.append(f"你的输出丢失了输入里的数字：{', '.join(self.lost_numbers)}。")
+        if self.bad_chars:
+            parts.append(f"你的输出里出现了输入中没有的字：{''.join(self.bad_chars[:20])}。")
+        if self.lost_chars:
+            parts.append(f"你的输出丢失了输入中的字：{''.join(self.lost_chars[:20])}。")
+        for n in self.missing_tables:
+            parts.append(f"你没有原样保留第 {n} 张已还原的表格。")
+        parts.append(
+            "请只做排版，不要新增、删改任何文字或数字，表格原样粘贴，重新输出整理后的 markdown。"
+        )
+        return "".join(parts)
+
+    def failure_reason(self) -> str:
+        reasons: list[str] = []
+        if self.lost_numbers:
+            reasons.append(f"整理后丢失了数字：{self.lost_numbers}")
+        if self.bad_chars:
+            reasons.append(f"字符闭合失败：新增{''.join(self.bad_chars[:20])}")
+        if self.lost_chars:
+            reasons.append(f"字符闭合失败：丢失{''.join(self.lost_chars[:20])}")
+        if self.missing_tables:
+            reasons.append("表格未原样保留")
+        return "；".join(reasons)
+
+
+def _check(reply: str, page_text: str, table_markdowns: Sequence[str], source: str) -> _Problems:
+    flat_reply = re.sub(r"\s+", "", reply)
+    missing = [
+        i for i, t in enumerate(table_markdowns, start=1) if re.sub(r"\s+", "", t) not in flat_reply
+    ]
+    return _Problems(
+        bad_numbers=closure_violations(reply, source),
+        lost_numbers=closure_violations(page_text, reply),
+        bad_chars=char_violations(reply, source),
+        lost_chars=char_violations(page_text, reply),
+        missing_tables=missing,
+    )
 
 
 class LlmStructurer:
@@ -50,31 +114,19 @@ class LlmStructurer:
         messages = [{"role": "user", "content": prompt}]
 
         reply = self._chat(messages)
-        bad = closure_violations(reply, source)
-        lost = closure_violations(page_text, reply)
-        if not bad and not lost:
+        problems = _check(reply, page_text, table_markdowns, source)
+        if problems.ok:
             return reply
-        parts = []
-        if bad:
-            parts.append(f"你的输出里出现了输入中没有的数字：{', '.join(bad)}。")
-        if lost:
-            parts.append(
-                f"你的输出丢失了输入里的数字：{', '.join(lost)}，"
-                "请完整保留所有内容与数字，只做排版。"
-            )
-        if bad:
-            parts.append("请只做排版，不要产生任何新数字，重新输出整理后的 markdown。")
         messages += [
             {"role": "assistant", "content": reply},
-            {"role": "user", "content": "".join(parts)},
+            {"role": "user", "content": problems.retry_message()},
         ]
         reply = self._chat(messages)
-        bad = closure_violations(reply, source)
-        lost = closure_violations(page_text, reply)
-        if bad:
-            raise ClosureFailed(bad)
-        if lost:
-            raise StructureFailed(f"整理后丢失了数字：{lost}")
+        problems = _check(reply, page_text, table_markdowns, source)
+        if problems.bad_numbers:
+            raise ClosureFailed(problems.bad_numbers)
+        if not problems.ok:
+            raise StructureFailed(problems.failure_reason())
         return reply
 
     def _chat(self, messages: list[dict[str, str]]) -> str:

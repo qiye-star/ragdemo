@@ -3,12 +3,26 @@
 
 from __future__ import annotations
 
+import html
 import re
 from collections import Counter
 
 from ragdemo.parse.local.number_closure import numbers_in
 
 _WS = re.compile(r"\s+")
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_TAG = re.compile(r"<[^>]*>")
+_TABLE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
+_TR = re.compile(r"<tr\b.*?</tr>", re.DOTALL | re.IGNORECASE)
+
+
+def plain_text_from_markdown(md: str) -> str:
+    """TextIn 缓存的 markdown 里表格是 HTML：去掉注释与所有标签（属性数字不得进入文本）。"""
+    text = _COMMENT.sub("", md)
+    text = _BR.sub(" ", text)
+    text = _TAG.sub(" ", text)
+    return html.unescape(text)
 
 
 def text_coverage(reference: str, candidate: str) -> float:
@@ -28,7 +42,7 @@ def number_recall_precision(reference: str, candidate: str) -> tuple[float, floa
     return recall, precision
 
 
-def _table_rows(md: str) -> list[Counter[str]]:
+def _pipe_rows(md: str) -> list[Counter[str]]:
     """每张表（连续的 `|` 行）跳过第一行（表头），其余行含 >= 2 个数字才算数据行。
 
     表头里的年份（2024 / 2023）是数字，但不是数据；若把它算进去，"数据行全部串行"
@@ -48,6 +62,23 @@ def _table_rows(md: str) -> list[Counter[str]]:
         if sum(nums.values()) >= 2:
             rows.append(nums)
     return rows
+
+
+def _html_rows(md: str) -> list[Counter[str]]:
+    """HTML 表格：每张表第一个 <tr> 是表头（跳过），其余行含 >= 2 个数字才算数据行。"""
+    rows: list[Counter[str]] = []
+    for table in _TABLE.findall(_COMMENT.sub("", md)):
+        for i, tr in enumerate(_TR.findall(table)):
+            if i == 0:
+                continue
+            nums = numbers_in(plain_text_from_markdown(tr))
+            if sum(nums.values()) >= 2:
+                rows.append(nums)
+    return rows
+
+
+def _table_rows(md: str) -> list[Counter[str]]:
+    return _pipe_rows(_TABLE.sub("\n", md)) + _html_rows(md)
 
 
 def table_row_recall(reference_md: str, candidate_md: str) -> float:
