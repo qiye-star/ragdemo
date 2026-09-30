@@ -80,11 +80,14 @@ def run_retrieval_eval(
     git_sha: str,
     config: RetrievalConfig,
     extra_config: Mapping[str, Any] | None = None,
+    author_prefix: str | None = None,
 ) -> RetrievalEvalResult:
     started_at = datetime.now(UTC)
     cases = conn.execute(
         "SELECT q_id, question, as_of, gold_block_ids, entity_filter, doc_type_filter,"
-        " difficulty FROM evals.eval_retrieval ORDER BY q_id"
+        " difficulty FROM evals.eval_retrieval WHERE (%s::text IS NULL OR author LIKE %s)"
+        " ORDER BY q_id",
+        (author_prefix, f"{author_prefix}%" if author_prefix else None),
     ).fetchall()
     if not cases:
         raise ValueError("评测集为空；空集会算出满分，让 CI 门禁形同虚设")

@@ -85,3 +85,24 @@ def test_percentile_uses_nearest_rank_without_interpolation() -> None:
     assert _percentile([7.0], 0.95) == 7.0
     assert _percentile([], 0.95) == 0.0
     assert _percentile([3.0, 1.0, 2.0], 0.95) == 3.0  # 乱序输入也按排序后取
+
+
+@pytest.mark.db
+def test_author_prefix_restricts_the_run_to_human_or_auto_cases(
+    corpus: psycopg.Connection,
+) -> None:
+    _seed_cases(corpus)  # author = 'founder'
+    corpus.execute(
+        "INSERT INTO evals.eval_retrieval (question, as_of, gold_block_ids, difficulty, author)"
+        " SELECT '寒武纪云端训练芯片业务表现如何？', %s, ARRAY[block_id], 'easy', 'human:张三'"
+        " FROM core.doc_block WHERE is_leaf LIMIT 1",
+        (datetime(2024, 12, 31, tzinfo=UTC),),
+    )
+    corpus.commit()
+    service = RetrievalService(corpus, MockEmbedder(), MockReranker())
+    cfg = RetrievalConfig()
+    assert run_retrieval_eval(corpus, service, git_sha="x", config=cfg).n_cases == 2
+    human = run_retrieval_eval(corpus, service, git_sha="x", config=cfg, author_prefix="human:")
+    assert human.n_cases == 1
+    with pytest.raises(ValueError):  # 没有 auto: 用例时不能静默给出满分
+        run_retrieval_eval(corpus, service, git_sha="x", config=cfg, author_prefix="auto:")

@@ -51,3 +51,31 @@
 ## 压力验证（关并行后，2026-09-30）
 
 `tests/ingest tests/retrieval tests/metrics tests/db tests/ops` 共 **521 个测试全部通过**（5 分 01 秒），其间每个测试都新建并迁移一个带 bm25 索引的临时库；数据库日志 30 分钟内**崩溃 0 次**（关并行前同类负载下 1 次测试就能触发）。结论：并行 worker 是触发条件，处置有效；仍需靠 4.4 的 5 天实际运行继续观察。
+
+## 负责人决定（2026-09-30）
+
+| # | 事项 | 决定 | 落地 |
+|---|---|---|---|
+| 1 | 告警渠道 | 企业微信群机器人 | `.env` 已设 `ALERT_WEBHOOK_KIND=wecom`；**`ALERT_WEBHOOK_URL` 待填**（含 key，只放 `.env`）。填好后 `docker compose -f infra/docker-compose.yml --env-file .env up -d --force-recreate --no-deps dagster-daemon dagster-webserver`，再触发 `alert_selftest_job` 验证群里收到消息，即关闭 4.3 |
+| 2 | Wind 月度额度 | 无上限 | 代码里本就没有 Wind 调用上限闸门，无需改动；`infra/backfill.md` §3 的"先估再跑"保留为习惯性 dry run，不再作为限额。是否补全 46 家 A 股的 Wind 财务 / 股东 / 分部，见下方待确认 |
+| 3 | 研报 | "全部公开可见" | **暂未落地，需先对齐——见下方"研报：与产品边界冲突"** |
+| 4 | 人工标注 | 需要做 | 已提供 `eval label-sheet` / `eval label-import` / `eval run --author-prefix human:`（`evals/human_labels.py`，测试 5 个）；等标注员按手册填表 |
+| 5 | 重排 | 不关闭 | 默认不变（`rerank_enabled=True`）；关重排时 recall@10 0.81 对 0.76 仅作为消融记录，待人工标注集复核 |
+| 6 | 行业报告录入 | 有人录 CSV | 已写 [行业指标录入手册](../行业指标录入手册.md)（含 CSV 格式、校验规则、18 个 `vendor_api` 指标清单与单位），导入命令 `ragdemo metrics import-manual` |
+
+### 研报：与产品边界冲突（未落地）
+
+"研报全部公开可见"与仓库里两处硬约束冲突，需要你确认如何取舍：
+
+1. **CLAUDE.md §0（不可协商）**：禁止输出买卖建议、目标价、评级、仓位建议。研报正文就是评级 + 目标价 + 盈利预测；`can_show_raw=true` 意味着原文对所有人展示，等于把它们原样输出。
+2. **来源使用限制**：`docs/rawdata/688041-hygon/README.md` 写明研报著作权归各券商、"仅供内部研究参考，不得对外分发或商用"；`local_manifest.load_documents` 里对 `kind=research` 的过滤"没有开关"（ADR-0008 后果 1）。"公开可见"即对外分发。
+
+可行的折中（任选，需你定）：
+- **A（推荐）**：研报入库用于**检索与内部研究**，`can_show_raw=false`（只展示元数据与溯源，不展示原文），输出里凡出现评级 / 目标价 / 盈利预测按"第三方观点"标注机构与日期（README 已要求）——符合 §0，也不违反来源限制；
+- **B**：要公开展示原文，则需要（a）书面取得券商或东方财富的转载授权，（b）入库前剔除评级、目标价、盈利预测段落，（c）新增一篇 ADR 推翻 ADR-0008 后果 1 并说明推翻条件。
+另外，解析 91 份研报需要 TextIn 额度（当前余额不足，你此前决定暂停解析），所以即使选定口径，入库也要等充值。
+
+## 待确认
+- 研报走 A 还是 B？
+- Wind 无上限：是否现在补全 46 家 A 股的财务 / 股东 / 分部（全量约 674 次调用，数据会按首次披露日写入）？
+- 企业微信机器人 Webhook 地址请填进 `.env` 的 `ALERT_WEBHOOK_URL`。

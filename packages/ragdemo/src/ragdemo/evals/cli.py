@@ -169,6 +169,11 @@ def add_retrieval(
 @click.option("--rewrite/--no-rewrite", default=False, help="是否启用同义词查询改写")
 @click.option("--period-boost", type=float, default=0.0, help="期别感知排序偏置，0 = 关闭")
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
+@click.option(
+    "--author-prefix",
+    default=None,
+    help="只跑 author 以此开头的用例：`human:` = 仅人工标注集，`auto:` = 仅合成集",
+)
 def run(
     suite: str,
     gate: bool,
@@ -181,6 +186,7 @@ def run(
     rewrite: bool,
     period_boost: float,
     label: str,
+    author_prefix: str | None,
 ) -> None:
     """跑评测并写 eval_run（配置与模型模式一并记录）。"""
     embedder, reranker = build_models(models)
@@ -222,7 +228,9 @@ def run(
                 "embed_model": embedder.model,
                 "vector_backend": vector_backend,
                 "label": label,
+                "author_prefix": author_prefix,
             },
+            author_prefix=author_prefix,
         )
         click.echo("| 指标 | 本次 |")
         click.echo("|---|---|")
@@ -361,3 +369,41 @@ def generate(n: int, seed: int, replace_auto: bool, yes: bool) -> None:
         click.echo(f"跳过的候选：{report.skipped}")
     if inserted < n:
         click.echo(f"[警告] 只凑到 {inserted} 条（目标 {n}）", err=True)
+
+
+@eval_group.command("label-sheet")
+@click.option("--out", "out", required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--n", "n", type=int, default=120, show_default=True, help="导出多少个候选段落")
+@click.option("--seed", type=int, default=DEFAULT_SEED, show_default=True)
+def label_sheet(out: Path, n: int, seed: int) -> None:
+    """导出人工标注表（段落 + 空的 question 列）；默认排除已有用例用过的源块。"""
+    from ragdemo.evals.human_labels import export_label_sheet
+
+    with psycopg.connect(_dsn()) as conn:
+        count = export_label_sheet(conn, out, n=n, seed=seed)
+    click.echo(f"已导出 {count} 个段落到 {out}；填好 question / difficulty 后用 label-import 导入")
+
+
+@eval_group.command("label-import")
+@click.option(
+    "--file", "path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option("--annotator", required=True, help="标注员名字，记为 author = human:<名字>")
+@click.option("--yes", is_flag=True, default=False, help="真正写库；不传只校验")
+def label_import(path: Path, annotator: str, yes: bool) -> None:
+    """校验并导入人工标注表；有任何问题整批不写。"""
+    from datetime import UTC
+
+    from ragdemo.evals.human_labels import LabelSheetError, insert_labeled, parse_label_sheet
+
+    with psycopg.connect(_dsn()) as conn:
+        try:
+            cases = parse_label_sheet(conn, path)
+        except LabelSheetError as exc:
+            raise click.ClickException(str(exc)) from None
+        click.echo(f"校验通过：{len(cases)} 条")
+        if not yes:
+            click.echo("[dry run] 未写库；加 --yes 写入")
+            return
+        n = insert_labeled(conn, cases, as_of=datetime.now(UTC), annotator=annotator)
+    click.echo(f"已写入 {n} 条（author = human:{annotator}）")
