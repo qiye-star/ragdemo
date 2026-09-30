@@ -24,3 +24,6 @@ build/
 # 在干净 clone 上 `make seed` 就能复现四张表的计数，忽略它等于让验收不可复现。
 data/
 *.log
+
+# 备份恢复演练的临时工作目录
+.restore-drill-*/

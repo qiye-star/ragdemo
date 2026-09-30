@@ -69,4 +69,31 @@ Chroma 没有 WAL/PITR 等价物，无法恢复到 PG 用 WAL 重放出的任意
 
 | 日期 | 耗时 | 恢复到 | 结果 | 备注 |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-30 | 102s | pg_dump 当场快照（19 MB） | 一致；db check 通过 | 40 张表 97,211 行逐表比对行数 + 内容 md5 全部一致；独立临时容器，未碰现库；`scripts/restore_drill.sh` |
+
+## 自动化演练脚本（`scripts/restore_drill.sh`）
+
+上面的手工步骤的自动化版本，**只依赖 docker**（pg_dump / pg_restore / psql 都在 paradedb 容器里）：
+当场从现库 `pg_dump` 一份快照 → 起独立临时容器（同镜像）→ 用 `template0` 建空库并恢复 → 逐表核对
+**行数 + 内容 md5**（`core` / `evals` / `audit` / `quality` 四个 schema 全部表；向量列另按行取
+md5 再聚合）→ 在恢复出来的库上跑 `ragdemo db check` → 销毁临时容器（`KEEP=1` 保留）。
+输出最后一行就是可以直接贴进上面演练日志的一行。
+
+`KEEP=1 scripts/restore_drill.sh` 保留下来的临时容器（默认 127.0.0.1:55440）还可以拿来做别的只读对比
+实验，比如 BM25 分词器对比（`scripts/tokenizer_compare.py`）——不要在现库上做这类实验。
+
+实测踩到的坑（都已在脚本里处理）：
+- Windows Git Bash 会把 `docker exec ... /tmp/x` 里的路径改写成宿主路径，脚本里设了
+  `MSYS_NO_PATHCONV=1`，并把工作目录改成相对路径；
+- 官方镜像首次启动会先起临时服务再重启，`pg_isready` 在初始化阶段就会成功——必须等
+  "ready to accept connections" 出现第二次；
+- 不能用 `template1` 克隆：ParadeDB 已经把扩展装进了 template1，`pg_restore` 会因
+  `schema "paradedb" already exists` 失败，要 `createdb -T template0`。
+
+## 已知问题：pg_search 后台进程偶发崩溃
+
+2026-09-30 对 `core.doc_block` 做整行转文本的全表聚合（含 1024 维向量列）时，ParadeDB 出现一次
+`untracked child process ... exited with exit code 2` → 整个服务 `terminating any other active server
+processes` → 自动重启恢复（数据不丢，约几十秒不可用）。此前完整测试集中也遇到过一次"recovery mode"
+造成的一批连接错误，很可能是同一个原因。缓解：大聚合不要带向量列（演练脚本已经去掉）；无人值守的
+Dagster 作业遇到连接错误会由失败告警传感器推送，重试即可。根因待向 ParadeDB 上游确认。

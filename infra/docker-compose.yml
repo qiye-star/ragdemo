@@ -134,7 +134,7 @@ services:
       context: ..
       dockerfile: infra/dagster/Dockerfile
     image: ragdemo-dagster:local
-    container_name: ragdemo-dagster-webserver
+    container_name: ragdemo-dagster-ui
     command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/dagster_home/workspace.yaml"]
     environment: &dagster-env
       DAGSTER_PG_URL: postgresql://postgres:${POSTGRES_PASSWORD:-ragdemo}@paradedb:5432/ragdemo?options=-csearch_path%3Ddagster

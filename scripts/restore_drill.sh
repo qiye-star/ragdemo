@@ -14,6 +14,9 @@
 #   DRILL_PORT     临时容器映射到宿主机的端口（默认 55440）
 set -euo pipefail
 
+# Windows Git Bash 会把 docker 命令行里的 /tmp/... 这类路径改写成宿主路径，容器里就找不到了。
+export MSYS_NO_PATHCONV=1
+
 SRC_CONTAINER="${SRC_CONTAINER:-ragdemo-db}"
 SRC_DB="${SRC_DB:-ragdemo}"
 SRC_USER="${SRC_USER:-postgres}"
@@ -22,7 +25,9 @@ DRILL_CONTAINER="ragdemo-restore-drill"
 DRILL_PASSWORD="drill-$(date +%s)"
 IMAGE="$(docker inspect --format '{{.Config.Image}}' "${SRC_CONTAINER}")"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-WORK="$(mktemp -d)"
+# 工作目录用相对路径：MSYS_NO_PATHCONV=1 下 docker.exe 收到的必须是它自己能解析的路径。
+WORK="./.restore-drill-$$"
+mkdir -p "${WORK}"
 START="$(date +%s)"
 
 cleanup() {
@@ -36,14 +41,23 @@ trap cleanup EXIT
 # 校验和：每张表 "行数 + 全表文本的 md5"（行内容转文本后排序再聚合，与物理顺序无关）。
 CHECKSUM_SQL="
 DO \$\$
-DECLARE r record; n bigint; h text;
+DECLARE r record; n bigint; h text; e text;
 BEGIN
   CREATE TEMP TABLE IF NOT EXISTS _sums (tbl text, n bigint, md5 text);
   TRUNCATE _sums;
   FOR r IN SELECT schemaname, tablename FROM pg_tables
             WHERE schemaname IN ('core','evals','audit','quality') ORDER BY 1, 2 LOOP
-    EXECUTE format('SELECT count(*), coalesce(md5(string_agg(t::text, ''|'' ORDER BY t::text)), ''-'') FROM %I.%I t',
+    -- 向量列（1024 维）转成整行文本会很大：行校验和里去掉 embedding，向量另按行取 md5 再聚合。
+    EXECUTE format('SELECT count(*), coalesce(md5(string_agg(x, ''|'' ORDER BY x)), ''-'') '
+                   || 'FROM (SELECT (to_jsonb(t) - ''embedding'')::text AS x FROM %I.%I t) q',
                    r.schemaname, r.tablename) INTO n, h;
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = r.schemaname AND table_name = r.tablename
+                  AND column_name = 'embedding') THEN
+      EXECUTE format('SELECT md5(string_agg(md5(t.embedding::text), '''' ORDER BY md5(t.embedding::text))) '
+                     || 'FROM %I.%I t WHERE t.embedding IS NOT NULL', r.schemaname, r.tablename) INTO e;
+      h := h || ':' || coalesce(e, '-');
+    END IF;
     INSERT INTO _sums VALUES (r.schemaname || '.' || r.tablename, n, h);
   END LOOP;
 END \$\$;
@@ -63,14 +77,20 @@ echo "[3/6] 起独立临时容器 ${DRILL_CONTAINER}（镜像 ${IMAGE}，端口 
 docker rm -f "${DRILL_CONTAINER}" >/dev/null 2>&1 || true
 docker run -d --name "${DRILL_CONTAINER}" -e POSTGRES_PASSWORD="${DRILL_PASSWORD}" \
   -p "127.0.0.1:${DRILL_PORT}:5432" "${IMAGE}" >/dev/null
-for _ in $(seq 1 60); do
-  if docker exec "${DRILL_CONTAINER}" pg_isready -U postgres >/dev/null 2>&1; then break; fi
+# 官方镜像首次启动会先起一个临时服务做初始化、关掉、再正式起——"ready to accept connections"
+# 会出现两次，必须等到第二次才是真正可用（pg_isready 在初始化阶段就会返回成功）。
+for _ in $(seq 1 90); do
+  if [ "$(docker logs "${DRILL_CONTAINER}" 2>&1 | grep -c 'ready to accept connections')" -ge 2 ]; then break; fi
   sleep 2
 done
 docker exec "${DRILL_CONTAINER}" pg_isready -U postgres >/dev/null
 
-echo "[4/6] 恢复到临时容器"
-docker exec "${DRILL_CONTAINER}" createdb -U postgres "${SRC_DB}"
+# 容器刚起来时 ParadeDB 的初始化脚本可能还占着 template1（"is being accessed by other users"），重试到成功。
+for _ in $(seq 1 30); do
+  if docker exec "${DRILL_CONTAINER}" createdb -U postgres -T template0 "${SRC_DB}" 2>/dev/null; then break; fi
+  sleep 3
+done
+docker exec "${DRILL_CONTAINER}" psql -U postgres -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = '${SRC_DB}'" | grep -q 1
 docker cp "${WORK}/drill.dump" "${DRILL_CONTAINER}:/tmp/drill.dump"
 # 现库对象属于 app_owner 等角色：先在临时容器建同名角色，恢复时授权语句才不会失败。
 for role in app_owner app_read app_write app_diag; do
