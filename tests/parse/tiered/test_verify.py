@@ -108,7 +108,11 @@ def test_one_empty_side_fails() -> None:
 
 import pytest  # noqa: E402
 
-from ragdemo.parse.tiered.verify import VERIFY_VERSION, markup_violations  # noqa: E402
+from ragdemo.parse.tiered.verify import (  # noqa: E402
+    VERIFY_VERSION,
+    markup_violations,
+    table_structure_violations,
+)
 
 TABLE_PAGE = "项目 期末余额 期初余额 营业收入 91.2 60.1 净利润 19.3 12.7 单位：亿元"
 
@@ -118,7 +122,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v4"
+    assert VERIFY_VERSION == "v5"
 
 
 @pytest.mark.parametrize(
@@ -392,3 +396,74 @@ def test_dual_cosmetic_differences_still_pass() -> None:
         "# 经营情况\n\n**营业收入** 91.2，利润 19.3。", "经营情况 营业收入91.2 利润19.3"
     ).ok
     assert verify_dual("收入 1,234.5 亿元", "收入 1234.5 亿元").ok
+
+
+# ---- fix round 4 -------------------------------------------------------------------------
+
+R4_PAGE = "项目 2024 2023 营业收入 91.2 60.1"
+R4_HEAD = "| 项目 | 2024 | 2023 |@N@|---|---|---|@N@"
+R4_ROW = "<tr><td>项目</td><td>2024</td><td>2023</td></tr>"
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        R4_HEAD + "营业收入 91.2 | 60.1",  # A1 无前导竖线的行
+        "项目 | 2024 | 2023@N@--|--|--@N@营业收入 | 91.2 | 60.1",  # A1 无前导竖线的表头
+        R4_HEAD + "| 营业收入 @P@| 91.2 | 60.1 |",  # A2 转义竖线
+        "<table>"
+        + R4_ROW
+        + '<tr><td>营业收入</td><td colspan="2" colspan="1">91.2</td></tr></table>',  # A3
+        "<table>"
+        + R4_ROW
+        + '<tr><td>营业收入</td><td colspan="2">91.2</td></tr>',  # A4 缺 </table>
+        '<table/><tr><td>营业收入</td><td colspan="2">91.2</td></tr>',  # A4 自闭合
+        "<table><tr><td>项目<td>2024</td><td>2023</td></tr></table>",  # A4 td 不平衡
+        "<table>" + R4_ROW + "营业收入<tr><td>91.2</td><td>60.1</td></tr></table>",  # A5
+        "<table><tr>营业收入<td>91.2</td><td>60.1</td></tr></table>",  # A5
+    ],
+)
+def test_r4_a_tables_that_render_differently_from_the_parse_are_rejected(md: str) -> None:
+    md = md.replace("@N@", chr(10)).replace("@P@", chr(92))
+    assert not verify_against_text_layer(md, R4_PAGE).ok
+    assert markup_violations(md) or table_structure_violations(md)
+    if markup_violations(md):
+        assert not verify_dual(md, md).ok
+
+
+def test_r4_a_balanced_nested_markup_is_still_allowed() -> None:
+    md = "<table><thead><tr><th>甲</th></tr></thead><tbody><tr><td>1<br>2</td></tr></tbody></table>"
+    assert not markup_violations(md)
+    assert not markup_violations(R4_HEAD.replace("@N@", chr(10)) + "| 营业收入 | 91.2 | 60.1 |")
+
+
+@pytest.mark.parametrize("minus", ["‑", "‒", "﹣", "﹘", "⁃", "➖"])
+def test_r4_b_minus_variants_are_folded(minus: str) -> None:
+    page = f"净利润 {minus}3.5"
+    assert not verify_against_text_layer("净利润 3.5", page).ok
+    assert not verify_dual("净利润 3.5", page).ok
+    assert verify_against_text_layer("净利润 -3.5", page).ok
+    assert verify_dual("净利润 -3.5", page).ok
+
+
+@pytest.mark.parametrize(
+    ("good", "bad"),
+    [
+        ("增幅 ≥ 5", "增幅 ≤ 5"),
+        ("利润 ▲ 5", "利润 ▼ 5"),
+        ("利润 △ 5", "利润 ▽ 5"),
+        ("利润 ↑ 5", "利润 ↓ 5"),
+        ("误差 ± 5", "误差 5"),
+        ("误差 > 5", "误差 < 5"),
+    ],
+)
+def test_r4_c_comparison_and_arrow_symbols_are_critical(good: str, bad: str) -> None:
+    assert _fails(bad, good)
+    assert not verify_dual(good, bad).ok
+    assert verify_against_text_layer(good, good).ok
+
+
+def test_r4_known_limitations_are_documented() -> None:
+    import ragdemo.parse.tiered.verify as m
+
+    assert m.__doc__ and "删除线" in m.__doc__ and "罗马数字" in m.__doc__

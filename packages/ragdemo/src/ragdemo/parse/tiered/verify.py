@@ -14,6 +14,10 @@
 （防止标签/表头/主体名称换位），并拒绝含空单元格、rowspan/colspan（值 1 视为无）、
 行单元格数不一致的表格（这些会让数字在相同文字顺序下换列）。
 
+已知局限（续）：markdown 渲染与被校验文本的其他分歧——删除线 ~~…~~、图片 alt 文本、
+行内链接、脚注 * 在行间移动、组合叠加字符；覆盖率检查用 _content 而不做 NFKC，
+全角数字/罗马数字会产生误报。
+
 已知局限（有意不在此修复，T7 须度量误报率并据此决策）：
 - 两个引擎犯相同错误时，verify_dual 无法发现（没有原文可比）。
 - 渲染结果与被校验文本可能不同的 markdown 语义：有序列表自动重编号、引用式链接定义、
@@ -40,7 +44,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v4"
+VERIFY_VERSION: Final = "v5"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -50,6 +54,7 @@ CRITICAL_CHARS: frozenset[str] = frozenset(
     "不未无非否"  # 否定
     "同环末初"  # 同比/环比、期末/期初
     "美港欧日"  # 币种
+    "≥≤<>▲▼△▽↑↓±"  # 比较与涨跌符号
 )
 
 _ALLOWED_TAG = re.compile(
@@ -61,6 +66,9 @@ _ANY_ANGLE = re.compile(r"<[^>]*>")
 # 与 html.unescape 同一套实体切分（含不带分号的写法）；只放行字面转义用的几个。
 _ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
 _ENTITY_OK: Final = frozenset({"&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;"})
+_ATTR_NAME = re.compile(r"\b(rowspan|colspan)\s*=", re.IGNORECASE)
+_TABLE_TAG = re.compile(r"<\s*(/?)\s*(table|thead|tbody|tr|td|th)\b([^>]*)>", re.IGNORECASE)
+_BR = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
 _SPAN = re.compile(r"(rowspan|colspan)\s*=\s*[\"']?(\d+)", re.IGNORECASE)
 _TABLE = re.compile(r"(<table\b.*?</table>)", re.DOTALL | re.IGNORECASE)
 _TR_SPLIT = re.compile(r"<tr\b[^>]*>", re.IGNORECASE)
@@ -100,6 +108,60 @@ def critical_stream(text: str) -> list[str]:
     return out
 
 
+_PARENT: Final = {
+    "table": {""},
+    "thead": {"table"},
+    "tbody": {"table"},
+    "tr": {"table", "thead", "tbody"},
+    "td": {"tr"},
+    "th": {"tr"},
+}
+
+
+def _html_table_structure(md: str) -> list[str]:
+    """HTML 表格必须严格配对嵌套、不自闭合、不嵌套表格，且单元格之外不得有文字。"""
+    found: list[str] = []
+    stack: list[str] = []
+    pos = 0
+
+    def stray(segment: str) -> None:
+        if (
+            stack
+            and stack[-1] in {"table", "thead", "tbody", "tr"}
+            and _BR.sub("", segment).strip()
+        ):
+            found.append("表格内单元格之外有文字")
+
+    for m in _TABLE_TAG.finditer(md):
+        stray(md[pos : m.start()])
+        pos = m.end()
+        closing, name, rest = m.group(1) == "/", m.group(2).lower(), m.group(3)
+        if rest.rstrip().endswith("/"):
+            found.append(f"自闭合表格标签 <{name}/>")
+            continue
+        if closing:
+            if not stack or stack[-1] != name:
+                found.append(f"表格标签不配对 </{name}>")
+            else:
+                stack.pop()
+        else:
+            parent = stack[-1] if stack else ""
+            if parent not in _PARENT[name]:
+                found.append(f"表格标签嵌套位置不合法 <{name}>")
+            stack.append(name)
+    stray(md[pos:])
+    if stack:
+        found.append(f"表格标签未闭合 {stack}")
+    return list(dict.fromkeys(found))
+
+
+def _pipe_markup_violations(md: str) -> list[str]:
+    found: list[str] = []
+    for seg in _TABLE.split(md)[::2]:
+        found.extend(_pipe_scan(seg)[1])
+    return list(dict.fromkeys(found))
+
+
 def markup_violations(md: str) -> list[str]:
     """入库的是 md，校验的是去标记后的文本；凡能让两者不一致的标记都在此拒绝。"""
     found: list[str] = []
@@ -110,6 +172,10 @@ def markup_violations(md: str) -> list[str]:
             continue
         if not _ALLOWED_TAG.fullmatch(span):
             found.append(f"不允许的标签或属性 {span[:40]!r}")
+        elif any(c > 1 for c in Counter(n.lower() for n in _ATTR_NAME.findall(span)).values()):
+            found.append(f"标签含重复属性 {span[:40]!r}")
+    found.extend(_html_table_structure(md))
+    found.extend(_pipe_markup_violations(md))
     for m in _ENTITY.finditer(md):
         tok = m.group(0)
         if tok not in _ENTITY_OK and html.unescape(tok) != tok:
@@ -189,25 +255,42 @@ def _html_table(table: str) -> list[list[_Cell]]:
     return rows
 
 
-def _pipe_tables(segment: str) -> list[list[list[_Cell]]]:
+def _is_separator(line: str) -> bool:
+    chars = set(re.sub(r"\s+", "", line.replace("|", "")))
+    return bool(chars) and chars <= {"-", ":"}
+
+
+def _pipe_scan(segment: str) -> tuple[list[list[list[_Cell]]], list[str]]:
+    """竖线表解析。表内后续只要含 `|` 的行都是表行（GFM 允许省略前导竖线），无 `|` 的行结束表。
+
+    违规（渲染结果与解析可能不一致）：表内转义竖线；没有前导竖线的表头/分隔行。"""
     tables: list[list[list[_Cell]]] = []
+    violations: list[str] = []
     current: list[list[_Cell]] | None = None
     for line in segment.splitlines():
         s = line.strip()
-        if not s.startswith("|"):
+        if current is None and not s.startswith("|"):
+            if "|" in s and _is_separator(s):
+                violations.append("竖线表缺少前导竖线的分隔行")
+            continue
+        if current is not None and "|" not in s:
             current = None
             continue
-        chars = set(re.sub(r"\s+", "", s.replace("|", "")))
-        if chars and chars <= {"-", ":"}:
-            continue  # 分隔行
+        if _is_separator(s):
+            if current is None:
+                violations.append("竖线表分隔行前没有表头")
+            continue
+        if "\\|" in s:
+            violations.append("竖线表内含转义竖线")
         if current is None:
             current = []
             tables.append(current)
-        s = s[1:]
+        if s.startswith("|"):
+            s = s[1:]
         if s.endswith("|"):
             s = s[:-1]
         current.append([_Cell(_cell_text(c)) for c in s.split("|")])
-    return tables
+    return tables, violations
 
 
 def _parse_tables(md: str) -> list[list[list[_Cell]]]:
@@ -216,7 +299,7 @@ def _parse_tables(md: str) -> list[list[list[_Cell]]]:
         if i % 2:
             tables.append(_html_table(seg))
         else:
-            tables.extend(_pipe_tables(seg))
+            tables.extend(_pipe_scan(seg)[0])
     return tables
 
 

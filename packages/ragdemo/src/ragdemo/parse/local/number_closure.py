@@ -40,6 +40,12 @@ _ASCII_FOLD = str.maketrans(
         0x2010: "-",  # ‐ (hyphen)
         0x2013: "-",  # – (en-dash)
         0x2014: "-",  # — (em-dash)
+        0x2011: "-",  # non-breaking hyphen
+        0x2012: "-",  # figure dash
+        0xFE63: "-",  # small hyphen-minus
+        0xFE58: "-",  # small em dash
+        0x2043: "-",  # hyphen bullet
+        0x2796: "-",  # heavy minus sign
     }
 )
 
