@@ -150,8 +150,8 @@ services:
     networks: [parse-internal]   # 只在内部网络：无出网、不直接暴露端口
     # Docker Desktop 虚拟机共 15.48 GiB，由十几个容器共享；本容器单页峰值：默认全开约 12.9 GiB，关掉 5 个子模型后约 11.6 GiB（修复轮 3）。
     # 设上限，且 memswap 与之相等（禁用 swap），避免把整台虚拟机拖进换页。并发必须恰好为 1。
-    mem_limit: 13g
-    memswap_limit: 13g
+    mem_limit: ${PARSE_MEM:-13g}
+    memswap_limit: ${PARSE_MEM:-13g}
     restart: unless-stopped
 
   # 无凭据网关：唯一同时在 default 与 parse-internal 的容器，只做 TCP 8091 -> parse-paddle:8000。
