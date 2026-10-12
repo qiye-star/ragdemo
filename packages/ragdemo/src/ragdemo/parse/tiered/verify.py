@@ -14,6 +14,10 @@
 （防止标签/表头/主体名称换位），并拒绝含空单元格、rowspan/colspan（值 1 视为无）、
 行单元格数不一致的表格（这些会让数字在相同文字顺序下换列）。
 
+已知局限（续 2）：分隔行（定界行）单元格数与表头不一致时仍按表处理（更严）；`# a | b` 形式的标题行、
+缩进或围栏代码块里的竖线按表处理（更严）；U+2500/U+2027/U+1680 等非破折号字符不折叠为减号；
+`</ td>` 的浏览器注释怪癖；引用块/列表里的表只是偶然被拒（`>` 是关键字）。
+
 已知局限（续）：markdown 渲染与被校验文本的其他分歧——删除线 ~~…~~、图片 alt 文本、
 行内链接、脚注 * 在行间移动、组合叠加字符；覆盖率检查用 _content 而不做 NFKC，
 全角数字/罗马数字会产生误报。
@@ -44,7 +48,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v5"
+VERIFY_VERSION: Final = "v6"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -69,6 +73,7 @@ _ENTITY_OK: Final = frozenset({"&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;"})
 _ATTR_NAME = re.compile(r"\b(rowspan|colspan)\s*=", re.IGNORECASE)
 _TABLE_TAG = re.compile(r"<\s*(/?)\s*(table|thead|tbody|tr|td|th)\b([^>]*)>", re.IGNORECASE)
 _BR = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
+_BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
 _SPAN = re.compile(r"(rowspan|colspan)\s*=\s*[\"']?(\d+)", re.IGNORECASE)
 _TABLE = re.compile(r"(<table\b.*?</table>)", re.DOTALL | re.IGNORECASE)
 _TR_SPLIT = re.compile(r"<tr\b[^>]*>", re.IGNORECASE)
@@ -175,6 +180,8 @@ def markup_violations(md: str) -> list[str]:
         elif any(c > 1 for c in Counter(n.lower() for n in _ATTR_NAME.findall(span)).values()):
             found.append(f"标签含重复属性 {span[:40]!r}")
     found.extend(_html_table_structure(md))
+    if any(_BLANK_LINE.search(seg) for seg in _TABLE.split(md)[1::2]):
+        found.append("HTML 表格内含空行（其后的 markdown 会被另行渲染）")
     found.extend(_pipe_markup_violations(md))
     for m in _ENTITY.finditer(md):
         tok = m.group(0)
@@ -261,30 +268,35 @@ def _is_separator(line: str) -> bool:
 
 
 def _pipe_scan(segment: str) -> tuple[list[list[list[_Cell]]], list[str]]:
-    """竖线表解析。表内后续只要含 `|` 的行都是表行（GFM 允许省略前导竖线），无 `|` 的行结束表。
+    """竖线表解析（GFM 语义）：以带前导竖线的行开始；表内每个非空行都是表行
+    （前导竖线可省略，行宽不一会被结构检查抓到），只有空行才结束表。
+    紧跟表头的含 `|` 的分隔行是定界行；之后再出现的分隔样式行按普通表行处理。
 
-    违规（渲染结果与解析可能不一致）：表内转义竖线；没有前导竖线的表头/分隔行。"""
+    违规（渲染结果与解析可能不一致）：表内转义竖线；缺少表头/前导竖线的分隔行。"""
     tables: list[list[list[_Cell]]] = []
     violations: list[str] = []
     current: list[list[_Cell]] | None = None
+    delimiter_seen = False
     for line in segment.splitlines():
         s = line.strip()
-        if current is None and not s.startswith("|"):
-            if "|" in s and _is_separator(s):
-                violations.append("竖线表缺少前导竖线的分隔行")
-            continue
-        if current is not None and "|" not in s:
-            current = None
-            continue
-        if _is_separator(s):
-            if current is None:
-                violations.append("竖线表分隔行前没有表头")
-            continue
-        if "\\|" in s:
-            violations.append("竖线表内含转义竖线")
         if current is None:
+            if "|" in s and _is_separator(s):
+                violations.append("竖线表分隔行前没有表头或缺少前导竖线")
+                continue
+            if not s.startswith("|"):
+                continue
             current = []
             tables.append(current)
+            delimiter_seen = False
+        else:
+            if not s:
+                current = None
+                continue
+            if len(current) == 1 and not delimiter_seen and "|" in s and _is_separator(s):
+                delimiter_seen = True
+                continue
+        if "\\|" in s:
+            violations.append("竖线表内含转义竖线")
         if s.startswith("|"):
             s = s[1:]
         if s.endswith("|"):

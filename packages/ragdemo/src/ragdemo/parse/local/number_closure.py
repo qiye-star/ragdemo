@@ -11,43 +11,34 @@
 from __future__ import annotations
 
 import re
+import sys
+import unicodedata
 from collections import Counter
 
 # 全宽字符 + Unicode 减号转换表：仅转换指定的全宽数字、标点和减号变体
 # 不转换上标、下标、圈号等其他 Unicode 字符（避免虚警）
-_ASCII_FOLD = str.maketrans(
-    {
-        # 全宽数字 ０-９
-        0xFF10: "0",  # ０
-        0xFF11: "1",  # １
-        0xFF12: "2",  # ２
-        0xFF13: "3",  # ３
-        0xFF14: "4",  # ４
-        0xFF15: "5",  # ５
-        0xFF16: "6",  # ６
-        0xFF17: "7",  # ７
-        0xFF18: "8",  # ８
-        0xFF19: "9",  # ９
-        # 全宽标点
-        0xFF0C: ",",  # ，
-        0xFF0E: ".",  # ．
-        0xFF05: "%",  # ％
-        0xFF08: "(",  # （
-        0xFF09: ")",  # ）
-        # 减号变体
-        0x2212: "-",  # − (Unicode minus)
-        0xFF0D: "-",  # － (full-width hyphen-minus)
-        0x2010: "-",  # ‐ (hyphen)
-        0x2013: "-",  # – (en-dash)
-        0x2014: "-",  # — (em-dash)
-        0x2011: "-",  # non-breaking hyphen
-        0x2012: "-",  # figure dash
-        0xFE63: "-",  # small hyphen-minus
-        0xFE58: "-",  # small em dash
-        0x2043: "-",  # hyphen bullet
-        0x2796: "-",  # heavy minus sign
-    }
+_FOLD_MAP: dict[int, str] = {
+    # 全宽数字 ０-９
+    **{0xFF10 + i: str(i) for i in range(10)},
+    # 全宽标点
+    0xFF0C: ",",  # ，
+    0xFF0E: ".",  # ．
+    0xFF05: "%",  # ％
+    0xFF08: "(",  # （
+    0xFF09: ")",  # ）
+    0x2212: "-",  # − (Unicode minus)
+    0x02D7: "-",  # ˗ (modifier letter minus sign)
+    0x2796: "-",  # ➖ (heavy minus sign)
+    0x2043: "-",  # ⁃ (hyphen bullet，类别 Po，不在 Pd 内)
+}
+# 所有 Unicode 破折号标点（类别 Pd：连字符、en/em dash、figure dash、small/full-width 变体……）
+# 一律折叠为减号：任何一种都可能是 PDF 文字层里的负号，丢掉符号就是改了数值。
+# 由 unicodedata 计算（随 Python 的 Unicode 版本更新），不用手写清单。
+_FOLD_MAP.update(
+    {c: "-" for c in range(sys.maxunicode + 1) if unicodedata.category(chr(c)) == "Pd"}
 )
+# 不转换上标、下标、圈号等其他 Unicode 字符（避免虚警）
+_ASCII_FOLD = str.maketrans(_FOLD_MAP)
 
 # 整数部分：逗号只有在后面恰好跟 3 位数字时才是千分位（"3,5" 是两个数，不是 35）
 _INT = r"(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)"

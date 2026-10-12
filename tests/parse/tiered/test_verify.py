@@ -122,7 +122,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v5"
+    assert VERIFY_VERSION == "v6"
 
 
 @pytest.mark.parametrize(
@@ -467,3 +467,96 @@ def test_r4_known_limitations_are_documented() -> None:
     import ragdemo.parse.tiered.verify as m
 
     assert m.__doc__ and "删除线" in m.__doc__ and "罗马数字" in m.__doc__
+
+
+# ---- fix round 5 -------------------------------------------------------------------------
+
+NL = chr(10)
+R5_PAGE = "项目 2024 2023 营业收入 91.2 60.1 净利润 3.5 2.1"
+R5_HEAD = NL.join(["| 项目 | 2024 | 2023 |", "|---|---|---|", "| 营业收入 | 91.2 | 60.1 |"])
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        NL.join(["净利润", "| 3.5 | 2.1 |"]),
+        NL.join(["净利润", "3.5 | 2.1"]),
+        NL.join(["净利润 | 3.5", "| 2.1 |"]),
+        NL.join(["---", "净利润 | 3.5 | 2.1"]),
+    ],
+)
+def test_r5_i1_a_pipe_table_ends_only_at_a_blank_line(tail: str) -> None:
+    v = verify_against_text_layer(R5_HEAD + NL + tail, R5_PAGE)
+    assert not v.ok
+
+
+def test_r5_i1_faithful_pipe_tables_still_pass() -> None:
+    ok_blank = R5_HEAD + NL + "| 净利润 | 3.5 | 2.1 |" + NL + NL + "说明 完毕"
+    assert verify_against_text_layer(ok_blank, R5_PAGE + " 说明 完毕").ok
+    no_pipe = R5_HEAD + NL + "净利润 | 3.5 | 2.1"
+    assert verify_against_text_layer(no_pipe, R5_PAGE).ok
+    assert verify_against_text_layer(R5_HEAD, "项目 2024 2023 营业收入 91.2 60.1").ok
+
+
+def test_r5_i1_a_late_delimiter_like_row_is_a_row_not_skipped() -> None:
+    md = NL.join([R5_HEAD, "|---|---|", "| 净利润 | 3.5 | 2.1 |"])
+    assert not verify_against_text_layer(md, R5_PAGE).ok
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        NL.join(["| 项目 | 2024 | 2023 |", "|---|---|---|", "| 营业收入 | | 91.2 | 60.1 |"]),
+        NL.join(["| 项目 | 2024 | 2023 |", "|---|---|---|", "| 营业收入 | 91.2 | 60.1 |"]),
+        NL.join(["| 项目 | 2024 |", "|---|---|", "| 营业收入 | 91.2 |"]),
+    ],
+)
+def test_r5_i2_blank_lines_inside_html_tables_are_rejected(inner: str) -> None:
+    md = "<table><tr><td>" + NL + NL + inner + NL + NL + "</td></tr></table>"
+    assert markup_violations(md)
+    assert not verify_against_text_layer(md, R4_PAGE).ok
+    assert not verify_dual(md, md).ok
+
+
+def test_r5_i2_html_tables_without_blank_lines_pass() -> None:
+    md = NL.join(
+        [
+            "<table>",
+            "<tr><td>项目</td><td>2024</td></tr>",
+            "<tr><td>收入</td><td>91.2</td></tr>",
+            "</table>",
+        ]
+    )
+    assert not markup_violations(md)
+    assert verify_against_text_layer(md, "项目 2024 收入 91.2").ok
+
+
+def _all_pd() -> list[str]:
+    import sys
+    import unicodedata
+
+    return [chr(c) for c in range(sys.maxunicode + 1) if unicodedata.category(chr(c)) == "Pd"]
+
+
+def test_r5_i3_every_dash_punctuation_and_modifier_minus_folds_to_the_sign() -> None:
+    from ragdemo.parse.local.number_closure import numbers_in
+
+    dashes = [*_all_pd(), chr(0x2D7), chr(0x2212)]
+    assert len(dashes) > 20
+    for d in dashes:
+        assert numbers_in(f"净利润 {d}3.5") == {"-3.5": 1}, hex(ord(d))
+
+
+@pytest.mark.parametrize("x", [0x2015, 0x2E3A, 0x2E3B, 0x2D7, 0xFE31, 0xFE32])
+def test_r5_i3_probed_dashes_cannot_lose_the_sign(x: int) -> None:
+    page = f"净利润 {chr(x)}3.5"
+    assert not verify_against_text_layer("净利润 3.5", page).ok
+    assert not verify_dual("净利润 3.5", page).ok
+    assert verify_against_text_layer("净利润 -3.5", page).ok
+    assert verify_dual("净利润 -3.5", page).ok
+
+
+def test_r5_known_limitations_are_documented() -> None:
+    import ragdemo.parse.tiered.verify as m
+
+    assert m.__doc__ and "分隔行" in m.__doc__ and "U+2500" in m.__doc__
