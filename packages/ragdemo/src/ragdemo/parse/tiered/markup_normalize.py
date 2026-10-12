@@ -13,11 +13,15 @@ from __future__ import annotations
 import re
 
 _TOKEN = re.compile(
-    r"<!--.*?-->|<(/?)([A-Za-z][A-Za-z0-9]*)(?=[\s/>])((?:\"[^\"]*\"|'[^']*'|[^>\"'])*)>",
+    r"<!--.*?-->|<(/?)([A-Za-z][A-Za-z0-9]*)(?=[ \t\n\r\f/>])((?:\"[^\"]*\"|'[^']*'|[^>\"'])*)>",
     re.DOTALL,
 )
-_ATTR = re.compile(r"\s+([^\s\"'<>/=]+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s\"'<>=`/]+)")
+_ATTR = re.compile(
+    r"[ \t\n\r\f]+([^ \t\n\r\f\"'<>/=]+)[ \t\n\r\f]*=[ \t\n\r\f]*"
+    r"(\"[^\"]*\"|'[^']*'|[^ \t\n\r\f\"'<>=`/]+)"
+)
 # 被去掉的包装标签的占位；最后统一折成单个空格，或在标签/换行/首尾边界处丢弃。
+_HTML_WS = " " + chr(9) + chr(10) + chr(13) + chr(12)  # HTML 空白（不含 NBSP、U+3000）
 _GAP = chr(0)
 _GAP_RUN = re.compile(chr(0) + "+")
 _WRAPPERS = frozenset({"div", "html", "body", "head"})
@@ -34,7 +38,7 @@ def _attributes(rest: str) -> list[tuple[str, str]] | None:
             break
         pairs.append((m.group(1), m.group(2).strip("\"'")))
         pos = m.end()
-    return pairs if rest[pos:].strip() == "" else None
+    return pairs if rest[pos:].strip(_HTML_WS) == "" else None
 
 
 def _rewrite(m: re.Match[str]) -> str:
@@ -45,7 +49,7 @@ def _rewrite(m: re.Match[str]) -> str:
     if name not in _WRAPPERS and name not in _TABLE_TAGS:
         return whole
     if closing:
-        if rest.strip():
+        if rest.strip(_HTML_WS):
             return whole
         return _GAP if name in _WRAPPERS else f"</{name}>"
     attrs = _attributes(rest)
@@ -56,7 +60,7 @@ def _rewrite(m: re.Match[str]) -> str:
     kept: list[str] = []
     for key, value in attrs:
         if key.lower() in {"rowspan", "colspan"}:
-            if name not in {"td", "th"} or not value.isdigit():
+            if name not in {"td", "th"} or not (value.isascii() and value.isdigit()):
                 return whole
             kept.append(f' {key.lower()}="{value}"')
     return f"<{name}{''.join(kept)}>"

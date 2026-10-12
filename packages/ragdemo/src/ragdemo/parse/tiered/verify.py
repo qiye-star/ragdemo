@@ -52,7 +52,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v7"
+VERIFY_VERSION: Final = "v8"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -65,20 +65,23 @@ CRITICAL_CHARS: frozenset[str] = frozenset(
     "≥≤<>▲▼△▽↑↓±"  # 比较与涨跌符号
 )
 
+# HTML 空白只有 空格/制表/换行/回车/换页（Python 的 \s 还含 NBSP、U+3000 等，HTML 不当空白）；
+# `<` 或 `</` 之后不得有任何空白：那不是标签，渲染器把它当字面文字，其中的数字是可见的。
+_H = r"[ \t\n\r\f]"
 _ALLOWED_TAG = re.compile(
-    r"<\s*/?\s*(?:table|thead|tbody|tr|td|th|br)"
-    r"(?:\s+(?:rowspan|colspan)\s*=\s*(?:\"\d+\"|'\d+'|\d+))*\s*/?\s*>",
-    re.IGNORECASE,
+    r"</?(?:table|thead|tbody|tr|td|th|br)"
+    rf"(?:{_H}+(?:rowspan|colspan){_H}*={_H}*(?:\"[0-9]+\"|'[0-9]+'|[0-9]+))*{_H}*/?>",
+    re.IGNORECASE | re.ASCII,
 )
 _ANY_ANGLE = re.compile(r"<[^>]*>")
 # 与 html.unescape 同一套实体切分（含不带分号的写法）；只放行字面转义用的几个。
 _ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
 _ENTITY_OK: Final = frozenset({"&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;"})
-_ATTR_NAME = re.compile(r"\b(rowspan|colspan)\s*=", re.IGNORECASE)
-_TABLE_TAG = re.compile(r"<\s*(/?)\s*(table|thead|tbody|tr|td|th)\b([^>]*)>", re.IGNORECASE)
-_BR = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
+_ATTR_NAME = re.compile(rf"\b(rowspan|colspan){_H}*=", re.IGNORECASE | re.ASCII)
+_TABLE_TAG = re.compile(r"<(/?)(table|thead|tbody|tr|td|th)\b([^>]*)>", re.IGNORECASE | re.ASCII)
+_BR = re.compile(r"<br\b[^>]*>", re.IGNORECASE | re.ASCII)
 _BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
-_SPAN = re.compile(r"(rowspan|colspan)\s*=\s*[\"']?(\d+)", re.IGNORECASE)
+_SPAN = re.compile(rf"(rowspan|colspan){_H}*={_H}*[\"']?([0-9]+)", re.IGNORECASE | re.ASCII)
 _TABLE = re.compile(r"(<table\b.*?</table>)", re.DOTALL | re.IGNORECASE)
 _TR_SPLIT = re.compile(r"<tr\b[^>]*>", re.IGNORECASE)
 _CELL_SPLIT = re.compile(r"<t[dh]\b[^>]*>", re.IGNORECASE)

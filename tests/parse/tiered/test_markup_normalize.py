@@ -103,3 +103,10 @@ def test_span_attributes_are_matched_by_exact_name() -> None:
 def test_comments_are_left_alone() -> None:
     md = '<!-- <div style="x">9</div><td colspan=3> --> 10'
     assert normalize_markup(md) == md
+
+
+def test_w7_fullwidth_span_digits_and_non_html_whitespace_are_left_for_the_validator() -> None:
+    fw = '<table><tr><td colspan="' + chr(0xFF12) + '">1</td></tr></table>'
+    assert normalize_markup(fw) == fw
+    nb = "<table><tr><td" + chr(0xA0) + 'colspan="2" border="1">1</td></tr></table>'
+    assert normalize_markup(nb) == nb

@@ -122,7 +122,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v7"
+    assert VERIFY_VERSION == "v8"
 
 
 @pytest.mark.parametrize(
@@ -671,3 +671,42 @@ def test_w6_known_limitations_are_documented() -> None:
     import ragdemo.parse.tiered.verify as m
 
     assert m.__doc__ and "脚注" in m.__doc__ and "info string" in m.__doc__
+
+
+# ---- fix wave 7 --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        "<table><tr><td>1</td>< td colspan=5>2</td></tr></table>",
+        "<table><tr><td>1</td><td>2< /td></tr></table>",
+        "1< br>2",
+        "< table><tr><td>1</td><td>2</td></tr></table>",
+        "<table><tr><td>1</td><" + chr(0xA0) + "td>2</td></tr></table>",
+        "<table><tr><td>1</td></ td><td>2</td></tr></table>",
+        "<table><tr><td>1</td><td" + chr(0xA0) + 'colspan="5">2</td></tr></table>',
+        "<table><tr><td>1</td><td" + chr(0x3000) + 'colspan="5">2</td></tr></table>',
+    ],
+)
+def test_w7_whitespace_after_angle_bracket_is_not_a_tag_and_is_rejected(md: str) -> None:
+    assert markup_violations(md)
+    assert not verify_against_text_layer(md, "1 2").ok
+    assert not verify_dual(md, md).ok
+
+
+def test_w7_the_probe_from_the_task_5_review_fails() -> None:
+    md = "<table><tr><td>1</td>< td colspan=5>2</td></tr></table>"
+    assert not verify_against_text_layer(md, "1 2").ok
+
+
+def test_w7_fullwidth_digits_in_a_span_value_are_not_a_span_value() -> None:
+    md = '<table><tr><td colspan="' + chr(0xFF12) + '">1</td></tr></table>'
+    assert markup_violations(md)
+    assert not verify_against_text_layer(md, "1").ok
+
+
+def test_w7_ordinary_tags_with_html_whitespace_still_pass() -> None:
+    md = "<table >" + NL + '<tr><td colspan = "1" rowspan=1>1</td><td>2</td></tr></table>'
+    assert not markup_violations(md)
+    assert verify_against_text_layer(md, "1 2").ok
