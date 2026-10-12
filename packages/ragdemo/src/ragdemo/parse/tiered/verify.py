@@ -14,6 +14,10 @@
 （防止标签/表头/主体名称换位），并拒绝含空单元格、rowspan/colspan（值 1 视为无）、
 行单元格数不一致的表格（这些会让数字在相同文字顺序下换列）。
 
+已知局限（续 3）：GFM 脚注标签自动编号 `[^7]`、代码围栏 info string 里藏数字、
+删除线/图片 alt/行内链接（见上）；U+2028/U+2029/U+0085 等非 LF 的行分隔符未归一化。
+空值占位符按「独立且不贴字母数字」识别，贴着括号/汉字的 `-` 不计入（两侧一致时无影响）。
+
 已知局限（续 2）：分隔行（定界行）单元格数与表头不一致时仍按表处理（更严）；`# a | b` 形式的标题行、
 缩进或围栏代码块里的竖线按表处理（更严）；U+2500/U+2027/U+1680 等非破折号字符不折叠为减号；
 `</ td>` 的浏览器注释怪癖；引用块/列表里的表只是偶然被拒（`>` 是关键字）。
@@ -48,7 +52,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v6"
+VERIFY_VERSION: Final = "v7"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -100,17 +104,62 @@ def critical_char_violations(structured: str, source: str) -> list[str]:
     return sorted(ch for ch, c in out.items() if c > src.get(ch, 0))
 
 
+_RUN = re.compile(r"[-/*…]+|\.{2,}")
+
+
+def _nl(text: str) -> str:
+    """CRLF / 单独 CR 统一为 LF：渲染器按这些换行断行，门禁必须按同样方式看。"""
+    return re.sub(r"\r\n?", "\n", text)
+
+
+def _is_separator_row(line: str) -> bool:
+    chars = set(re.sub(r"\s+", "", line.replace("|", "")))
+    return "|" in line and bool(chars) and chars <= {"-", ":"}
+
+
 def critical_stream(text: str) -> list[str]:
-    """阅读顺序下的「数字 token 与关键字」交错序列。两份文本必须逐项相等。"""
-    folded = fold_text(text)
-    out: list[str] = []
-    pos = 0
-    for start, end, token in number_spans(text):
-        out.extend(ch for ch in folded[pos:start] if ch in CRITICAL_CHARS)
-        out.append(token)
-        pos = end
-    out.extend(ch for ch in folded[pos:] if ch in CRITICAL_CHARS)
-    return out
+    """阅读顺序下的「数字 token、关键字、空值占位符」交错序列。两份文本必须逐项相等。
+
+    占位符：独立（两侧不贴字母/数字）的 -/—/–//、*、…、.. 连续串，如财报里表示「无」的 `-`。
+    它出现的位置与个数必须与文字层一致，否则数字会在列/年份之间悄悄换位。
+    不计入：竖线表分隔行、行首列表标记、整行 3 个以上的分隔线、贴着数字的符号。"""
+    folded = "\n".join("" if _is_separator_row(ln) else ln for ln in fold_text(text).split("\n"))
+    spans = number_spans(folded)
+    events: list[tuple[int, str]] = [(a, tok) for a, _, tok in spans]
+    inside = {i for a, e, _ in spans for i in range(a, e)}
+    starts = sorted(a for a, _, _ in spans)
+    for i, ch in enumerate(folded):
+        if ch in CRITICAL_CHARS and i not in inside:
+            events.append((i, ch))
+    for m in _RUN.finditer(folded):
+        start, end = m.span()
+        if start in inside:
+            continue
+        cut = False
+        for ns in starts:  # 紧贴的负号属于数字 token
+            if start <= ns < end:
+                end, cut = ns, True
+                break
+        if end <= start:
+            continue
+        if start > 0 and folded[start - 1].isalnum():
+            continue
+        if not cut and end < len(folded) and folded[end].isalnum():
+            continue
+        line_start = folded.rfind("\n", 0, start) + 1
+        line_end = folded.find("\n", end)
+        line = folded[line_start : len(folded) if line_end < 0 else line_end].strip()
+        if (
+            not cut
+            and end - start == 1
+            and not folded[line_start:start].strip()
+            and folded[end : end + 1] in (" ", "\t")
+        ):
+            continue  # 列表标记
+        if line == m.group() and len(line) >= 3:
+            continue  # 分隔线
+        events.append((start, "∅" + folded[start:end]))
+    return [tok for _, tok in sorted(events, key=lambda e: e[0])]
 
 
 _PARENT: Final = {
@@ -169,7 +218,10 @@ def _pipe_markup_violations(md: str) -> list[str]:
 
 def markup_violations(md: str) -> list[str]:
     """入库的是 md，校验的是去标记后的文本；凡能让两者不一致的标记都在此拒绝。"""
+    md = _nl(md)
     found: list[str] = []
+    if any(unicodedata.category(c) == "Cf" for c in md):
+        found.append("含不可见格式字符（Unicode Cf：方向控制符、零宽字符、软连字符等）")
     if "<!--" in md:
         found.append("HTML 注释")
     for span in _ANY_ANGLE.findall(md):
@@ -182,6 +234,8 @@ def markup_violations(md: str) -> list[str]:
     found.extend(_html_table_structure(md))
     if any(_BLANK_LINE.search(seg) for seg in _TABLE.split(md)[1::2]):
         found.append("HTML 表格内含空行（其后的 markdown 会被另行渲染）")
+    if any("|" in seg for seg in _TABLE.split(md)[1::2]):
+        found.append("HTML 表格内含竖线（可能是被另行渲染的 markdown 表）")
     found.extend(_pipe_markup_violations(md))
     for m in _ENTITY.finditer(md):
         tok = m.group(0)
@@ -200,6 +254,7 @@ def _stream_mismatch(a: str, b: str) -> bool:
 
 
 def verify_against_text_layer(candidate_md: str, page_text: str) -> Verdict:
+    candidate_md, page_text = _nl(candidate_md), _nl(page_text)
     bad = markup_violations(candidate_md)
     if bad:
         return Verdict(False, (f"输出含不允许的标记：{'；'.join(bad)}",))
@@ -347,6 +402,7 @@ def verify_dual(primary_md: str, secondary_md: str) -> Verdict:
     表格按行、按单元格、含表头完全相等；内容字符有序序列完全相等
     （两引擎文字排序方式不同会因此误报，T7 度量）；文字一致度 >= DUAL_MIN_COVERAGE；
     两路输出都不含隐藏内容的标记。"""
+    primary_md, secondary_md = _nl(primary_md), _nl(secondary_md)
     bad = [
         f"{name}输出含不允许的标记：{'；'.join(v)}"
         for name, md in (("主引擎", primary_md), ("副引擎", secondary_md))

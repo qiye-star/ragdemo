@@ -44,10 +44,11 @@ _ASCII_FOLD = str.maketrans(_FOLD_MAP)
 _INT = r"(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)"
 
 # 括号数字 (3.5%) (1,234) (3.5)% | 负号（仅当不紧跟数字或点） | 其他数字
+_BODY = rf"(?:{_INT}(?:\.\d+)?|\.\d+)"  # 91.2  1,234  .5（前导小数点属于数字本身）
 _NUM = re.compile(
-    rf"\(\s*-?{_INT}(?:\.\d+)?\s*%?\s*\)%?"  # (3.5%)  (1,234)  (3.5)%
-    rf"|(?<![0-9.])-?{_INT}(?:\.\d+)?%?"  # -3.5%  91.2  1,234  (includes EPS-0.5)
-    rf"|{_INT}(?:\.\d+)?%?"  # digits right after a hyphen in ranges/dates
+    rf"\(\s*-?{_BODY}\s*%?\s*\)%?"  # (3.5%)  (1,234)  (.5)%
+    rf"|(?<![0-9.])-?{_BODY}%?"  # -3.5%  91.2  1,234  -.5  (includes EPS-0.5)
+    rf"|{_BODY}%?"  # digits right after a hyphen in ranges/dates
 )
 
 

@@ -122,7 +122,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v6"
+    assert VERIFY_VERSION == "v7"
 
 
 @pytest.mark.parametrize(
@@ -560,3 +560,114 @@ def test_r5_known_limitations_are_documented() -> None:
     import ragdemo.parse.tiered.verify as m
 
     assert m.__doc__ and "分隔行" in m.__doc__ and "U+2500" in m.__doc__
+
+
+# ---- fix wave 6 --------------------------------------------------------------------------
+
+CR = chr(13)
+PLACEHOLDERS = ["-", "—", "–", "/", "--", "*", "…", "..."]
+W6_HEAD = ["| 项目 | 2024 | 2023 |", "|---|---|---|"]
+
+
+def _w6_table(nil_row: str) -> str:
+    return NL.join([*W6_HEAD, nil_row, "| 净利润 | 3.5 | 2.1 |"])
+
+
+@pytest.mark.parametrize("ph", PLACEHOLDERS)
+def test_w6_a_a_nil_placeholder_cannot_move_between_columns(ph: str) -> None:
+    page = f"项目 2024 2023 营业收入 {ph} 91.2 净利润 3.5 2.1"
+    good = _w6_table(f"| 营业收入 | {ph} | 91.2 |")
+    bad = _w6_table(f"| 营业收入 | 91.2 | {ph} |")
+    assert verify_against_text_layer(good, page).ok, verify_against_text_layer(good, page).reasons
+    assert not verify_against_text_layer(bad, page).ok
+    assert not verify_dual(good, bad).ok
+    html_bad = _h([["项目", "2024", "2023"], ["营业收入", "91.2", ph], ["净利润", "3.5", "2.1"]])
+    html_good = _h([["项目", "2024", "2023"], ["营业收入", ph, "91.2"], ["净利润", "3.5", "2.1"]])
+    assert not verify_against_text_layer(html_bad, page).ok
+    assert verify_against_text_layer(html_good, page).ok
+    assert verify_dual(html_good, good).ok
+
+
+def test_w6_a_invented_filler_cell_fails() -> None:
+    page = "项目 2024 2023 营业收入 91.2"
+    md = NL.join([*W6_HEAD, "| 营业收入 | - | 91.2 |"])
+    assert not verify_against_text_layer(md, page).ok
+
+
+def test_w6_a_faithful_separator_rows_bullets_and_emphasis_pass() -> None:
+    page = "项目 2024 2023 营业收入 91.2 60.1"
+    assert verify_against_text_layer(NL.join([*W6_HEAD, "| 营业收入 | 91.2 | 60.1 |"]), page).ok
+    page2 = "2024年营业收入 91.2 亿元 净利润 19.3 亿元"
+    assert verify_against_text_layer(
+        NL.join(["- 2024年营业收入 91.2 亿元", "- 净利润 19.3 亿元"]), page2
+    ).ok
+    assert verify_against_text_layer("**营业收入** 91.2", "营业收入 91.2").ok
+    assert verify_against_text_layer(
+        NL.join(["营业收入 91.2", "---", "净利润 3"]), "营业收入 91.2 净利润 3"
+    ).ok
+    assert verify_against_text_layer("利润 -3.5 亿元", "利润 -3.5 亿元").ok
+
+
+@pytest.mark.parametrize(
+    ("page", "bad"),
+    [
+        ("增长率 .5%", "增长率 5%"),
+        ("增长率 5%", "增长率 .5%"),
+        ("每股收益 -.5 元", "每股收益 5 元"),
+        ("12 5", "12 .5"),
+        ("12 .5", "12 5"),
+    ],
+)
+def test_w6_b_a_leading_decimal_point_cannot_be_lost_or_invented(page: str, bad: str) -> None:
+    assert not verify_against_text_layer(bad, page).ok
+    assert not verify_dual(page, bad).ok
+    assert verify_against_text_layer(page, page).ok
+
+
+def test_w6_b_leading_point_tokenisation() -> None:
+    from ragdemo.parse.local.number_closure import numbers_in, ordered_numbers
+
+    assert ordered_numbers("增长 .5% 与 -.5 与 (.5) 与 12.5") == [".5%", "-.5", "(.5)", "12.5"]
+    assert numbers_in("12 .5") != numbers_in("12 5")
+
+
+def test_w6_c_cr_only_and_mixed_line_endings_cannot_hide_a_pipe_table() -> None:
+    rows = ["| 项目 | 2024 | 2023 |", "|---|---|---|", "| 营业收入 | | 91.2 | 60.1 |"]
+    for sep in (CR, NL + CR, CR + NL):
+        md = "<table><tr><td>" + sep + sep + sep.join(rows) + sep + sep + "</td></tr></table>"
+        assert markup_violations(md)
+        assert not verify_against_text_layer(md, R4_PAGE).ok
+        assert not verify_dual(md, md).ok
+
+
+def test_w6_c_inline_table_start_and_pipes_inside_html_tables() -> None:
+    inner = NL.join(["| 项目 | 2024 |", "|---|---|", "| 营业收入 | 91.2 |"])
+    md = "说明 <table><tr><td>" + NL + inner + NL + "</td></tr></table>"
+    assert markup_violations(md)
+    assert not verify_against_text_layer(md, "说明 项目 2024 营业收入 91.2").ok
+    assert not verify_dual(md, md).ok
+    assert not verify_dual(md, _h([["项目", "2024"], ["营业收入", "91.2"]])).ok
+
+
+def test_w6_c_cr_only_pipe_tables_are_still_parsed_as_tables() -> None:
+    md = CR.join([*W6_HEAD, "| 营业收入 | | 91.2 |"])
+    assert not verify_against_text_layer(md, "项目 2024 2023 营业收入 91.2").ok  # 空单元格
+
+
+@pytest.mark.parametrize(
+    "fmt", [chr(0x202E), chr(0x2067), chr(0x2069), chr(0x200D), chr(0xAD), chr(0x200B), chr(0xFEFF)]
+)
+def test_w6_d_format_characters_are_rejected(fmt: str) -> None:
+    md = f"营业收入 {fmt}5.19{fmt} 亿元"
+    assert markup_violations(md)
+    v = verify_against_text_layer(md, "营业收入 91.5 亿元")
+    assert not v.ok and any("格式字符" in r for r in v.reasons)
+    v2 = verify_dual(md, md)
+    assert not v2.ok and any("格式字符" in r for r in v2.reasons)
+    assert not verify_against_text_layer(f"营业收入 {fmt}5.19{fmt} 亿元", "营业收入 5.19 亿元").ok
+
+
+def test_w6_known_limitations_are_documented() -> None:
+    import ragdemo.parse.tiered.verify as m
+
+    assert m.__doc__ and "脚注" in m.__doc__ and "info string" in m.__doc__
