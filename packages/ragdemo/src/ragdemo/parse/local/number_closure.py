@@ -43,11 +43,14 @@ _ASCII_FOLD = str.maketrans(
     }
 )
 
+# 整数部分：逗号只有在后面恰好跟 3 位数字时才是千分位（"3,5" 是两个数，不是 35）
+_INT = r"(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)"
+
 # 括号数字 (3.5%) (1,234) (3.5)% | 负号（仅当不紧跟数字或点） | 其他数字
 _NUM = re.compile(
-    r"\(\s*-?\d[\d,]*(?:\.\d+)?\s*%?\s*\)%?"  # (3.5%)  (1,234)  (3.5)%
-    r"|(?<![0-9.])-?\d[\d,]*(?:\.\d+)?%?"  # -3.5%  91.2  1,234  (includes EPS-0.5)
-    r"|\d[\d,]*(?:\.\d+)?%?"  # digits right after a hyphen in ranges/dates
+    rf"\(\s*-?{_INT}(?:\.\d+)?\s*%?\s*\)%?"  # (3.5%)  (1,234)  (3.5)%
+    rf"|(?<![0-9.])-?{_INT}(?:\.\d+)?%?"  # -3.5%  91.2  1,234  (includes EPS-0.5)
+    rf"|{_INT}(?:\.\d+)?%?"  # digits right after a hyphen in ranges/dates
 )
 
 
@@ -63,13 +66,29 @@ def normalize_number(token: str) -> str:
     return t
 
 
+def fold_text(text: str) -> str:
+    """全宽/减号变体折叠（单字符到单字符，长度不变，位置可对应）。"""
+    return text.translate(_ASCII_FOLD)
+
+
+def number_spans(text: str) -> list[tuple[int, int, str]]:
+    """折叠后文本里每个数字的 (起, 止, 归一化 token)，按阅读顺序。位置对应 fold_text(text)。"""
+    return [
+        (m.start(), m.end(), normalize_number(m.group())) for m in _NUM.finditer(fold_text(text))
+    ]
+
+
+def ordered_numbers(text: str) -> list[str]:
+    """与 numbers_in 同一套分词与归一化，但保留阅读顺序与重复。"""
+    return [tok for _, _, tok in number_spans(text)]
+
+
 def numbers_in(text: str) -> Counter[str]:
     """文本里所有数字的多重集合（归一化后）。年份、页码也算——宁可多校验。
 
     应用显式字符转换表（全宽字符、Unicode 减号）。
     """
-    text = text.translate(_ASCII_FOLD)
-    return Counter(normalize_number(m.group()) for m in _NUM.finditer(text))
+    return Counter(ordered_numbers(text))
 
 
 def closure_violations(structured: str, source: str) -> list[str]:

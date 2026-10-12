@@ -89,3 +89,19 @@ def test_unicode_minus_handled() -> None:
     # U+2212 (Unicode 负号) 也是负号
     assert closure_violations("3.5", "−3.5") == ["3.5"]
     assert numbers_in("−3.5") == {"-3.5": 1}
+
+
+def test_comma_is_a_thousands_separator_only_before_exactly_three_digits() -> None:
+    assert numbers_in("1,234") == {"1234": 1}
+    assert numbers_in("1,234,567.8") == {"1234567.8": 1}
+    assert numbers_in("3，5") != numbers_in("35")
+    assert numbers_in("3,5") == {"3": 1, "5": 1}
+    assert numbers_in("12,3456") != numbers_in("123456")
+    assert closure_violations("35", "3，5") == ["35"]
+
+
+def test_ordered_numbers_keeps_reading_order_and_repeats() -> None:
+    from ragdemo.parse.local.number_closure import ordered_numbers
+
+    assert ordered_numbers("期末 91.2 期初 5.3 91.2 (3.5%)") == ["91.2", "5.3", "91.2", "(3.5%)"]
+    assert ordered_numbers("１，２３４") == ["1234"]
