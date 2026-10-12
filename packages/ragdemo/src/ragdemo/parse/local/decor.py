@@ -9,10 +9,14 @@
 - 只看顶 / 底带内的行；正文区的行永远不剥；
 - 落在表格区域内的行永远不剥（表头恰在顶带时不能被当页眉）；
 - 与相邻行在 x 上对齐的多段行（疑似 2 列表的表头，``min_cols=3`` 的表格检测抓不到）永远不剥；
+  含数字的多段行、以冒号结尾的标签行、带括号单位（`(RMB 100 million)`、`（万元）`）
+  或"单位"字样的行也永远不剥（拿不准就保留）；
 - 重复页眉按"行文本"比较，只把"N 等于本页页码"的页码 token（第 N 页、N/M）归一化；
   其他数字不同的行（如每页变化的价格行、审议比例 3/4、7/9……）视为数据，不剥；
-- 整行是孤立整数（3、- 3 -）只有在"数值 - 页序号"于 >= 重复阈值的页数上恒定时才算页码
-  （页脚里单独成行的 4810、4817…是数据，不是页码）；整行 `第 N 页` / `N/M` 要求 N 等于本页页码；
+- 整行是孤立整数（3、- 3 -）只有在"数值 - 页序号"于 >= 重复阈值的页数上恒定、数值不超过
+  总页数 + PAGE_NUMBER_SLACK、且上一行不是以冒号结尾的标签时才算页码
+  （页脚里的年份 2021、2022…每页加一，或标签"累计装机量（千台）："下一行的 311、312…，都是数据）；
+  整行 `第 N 页` / `N/M` 要求 N 等于本页页码；
 - 旋转文字只是被拆出来；页面是否安全由下游的方向检查（layout.unsafe_orientation_reason）判定。"""
 
 from __future__ import annotations
@@ -35,6 +39,10 @@ REPEAT_FRACTION = 0.5  # ……且至少占总页数的这一比例
 SEGMENT_GAP = 8.0  # 与 tables.find_table_regions 同一口径：词间空隙 >= 此值算分段
 ALIGN_TOL = 3.0  # 两行的分段起点相差不超过这个距离算 x 对齐
 MIN_ALIGNED_SEGMENTS = 2  # 至少这么多个分段起点对齐才算疑似表头
+PAGE_NUMBER_SLACK = 10  # 页码数值最多比总页数大这么多（封面 / 扉页不编号的偏移）
+_OPEN_BRACKETS = "（([【"
+_CLOSE_BRACKETS = "）)]】"
+_UNIT_WORD = "单位"
 
 ROTATED_MAX_SHARE = (
     0.5  # 旋转字符占页面字符超过这个比例 → 整页是横排扫描 / 横向版面，不是水印，不剥
@@ -52,7 +60,7 @@ _INLINE_PAGE_TOKEN = re.compile(
 )
 _PAGE_KEY = "<PN>"
 
-_Band = tuple[str, list[Word]]
+_Band = tuple[str, list[Word], int | None]  # (侧, 行, 可信的孤立整数页码值)
 
 
 @dataclass(frozen=True)
@@ -124,6 +132,26 @@ def _looks_like_table_header(rows: Sequence[Sequence[Word]], i: int) -> bool:
     return False
 
 
+def _has_bracketed_group(text: str) -> bool:
+    """文本里有 "(…)" / "（…）" / "[…]" / "【…】" 括号组（列标题旁的单位标注）。"""
+    for i, ch in enumerate(text):
+        if ch in _OPEN_BRACKETS and any(c in _CLOSE_BRACKETS for c in text[i + 1 :]):
+            return True
+    return False
+
+
+def _keep_row(rows: Sequence[Sequence[Word]], i: int) -> bool:
+    """拿不准就保留：疑似表头、含数字的多段行、带括号单位或"单位"字样的行。"""
+    text = _row_text(rows[i])
+    if _looks_like_table_header(rows, i):
+        return True
+    if len(_segment_starts(rows[i])) >= MIN_ALIGNED_SEGMENTS and any(c.isdigit() for c in text):
+        return True
+    if text.rstrip().endswith((":", "：")):
+        return True  # 以冒号结尾的标签引出下一行的数据，剥掉标签数据就失去含义
+    return _has_bracketed_group(text) or _UNIT_WORD in text
+
+
 def _body_text(words: Sequence[Word]) -> str:
     return "\n".join(_row_text(r) for r in cluster_rows(words))
 
@@ -157,11 +185,16 @@ def strip_decor(pages: Sequence[PageLayout]) -> list[StrippedPage]:
                 side = "bottom"
             else:
                 continue
-            if _looks_like_table_header(rows, i):
+            if _keep_row(rows, i):
                 continue  # 拿不准就保留
-            bands.append((side, row))
             text = _row_text(row)
             value = _lone_integer(text)
+            if value is not None and (
+                value > len(pages) + PAGE_NUMBER_SLACK
+                or (i > 0 and _row_text(rows[i - 1]).rstrip().endswith((":", "：")))
+            ):
+                value = None  # 年份 / 大数 / 冒号标签下的数据：不是页码，按普通行处理
+            bands.append((side, row, value))
             if value is not None:
                 offsets.setdefault((side, value - p.page), set()).add(p.page)
             else:
@@ -175,11 +208,10 @@ def strip_decor(pages: Sequence[PageLayout]) -> list[StrippedPage]:
         dropped: set[int] = set()
         if rotated:
             items.append((REASON_ROTATED, _row_text(rotated)))
-        for side, row in bands:
+        for side, row, value in bands:
             text = _row_text(row)
             reason: str | None = None
             own = _own_page_number(text)
-            value = _lone_integer(text)
             if own is not None and own == p.page:
                 reason = REASON_PAGE_NUMBER  # 第 N 页 / N/M，且 N 就是本页页码：无需重复
             elif value is not None:

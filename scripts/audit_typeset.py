@@ -5,24 +5,28 @@
 
 逐页检查（只看管线判定为 ok 的页）：
   1. 输出的内容字符（isalnum）多重集合 == 该页（剥离后）词的字符拼接；
-  2. 输出的数字**顺序** == 文字层数字顺序（ordered_numbers）；
-  3. 污染扫描：原始版面里有 /Rotate、文本矩阵从右向左、非直立词的页数；其中 ok 页的非直立词
-     必须全部是已被剥离的无数字文字（水印），否则报污染。
+  2. 数字**顺序**：输出的数字序列是**原始 pdfplumber extract_text**（未剥离、未重聚类）数字序列的
+     子序列，且余下恰为被剥离文字的数字（pipeline.order_violation；基准不能用剥离后重建的
+     layout.text——那是排版器同一套行聚类，等于自证）；
+  3. 污染扫描（直接读 pdfplumber 字符的文本矩阵，用 char_is_horizontal 判水平，不信 upright）：
+     有 /Rotate、文本矩阵从右向左、含"不水平"字符的页数；ok 页里出现任何"不水平"的数字字符都报污染。
 最后打印汇总；有任何不一致时退出码为 1。
 """
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 from collections import Counter
 from pathlib import Path
 
+import pdfplumber
+
 from ragdemo.config import load_config
 from ragdemo.parse.local.decor import strip_decor
-from ragdemo.parse.local.layout import PageLayout, extract_pages
-from ragdemo.parse.local.number_closure import ordered_numbers
-from ragdemo.parse.local.pipeline import parse_layouts_deterministic
+from ragdemo.parse.local.layout import PageLayout, char_is_horizontal, extract_pages
+from ragdemo.parse.local.pipeline import order_violation, parse_layouts_deterministic
 
 
 def _content(text: str) -> Counter[str]:
@@ -33,6 +37,25 @@ def audit(name: str, pdf: bytes, stats: Counter[str], problems: list[str]) -> No
     layouts: list[PageLayout] = extract_pages(pdf)
     stripped = strip_decor(layouts)
     results = parse_layouts_deterministic(layouts)
+    with pdfplumber.open(io.BytesIO(pdf)) as doc:
+        bad_digit_pages = {
+            i
+            for i, pg in enumerate(doc.pages, start=1)
+            if any(
+                ch["text"].isdigit() and not char_is_horizontal(ch["matrix"])
+                for ch in pg.chars
+                if ch.get("matrix") is not None
+            )
+        }
+        bad_any_pages = {
+            i
+            for i, pg in enumerate(doc.pages, start=1)
+            if any(
+                not char_is_horizontal(ch["matrix"])
+                for ch in pg.chars
+                if ch.get("matrix") is not None
+            )
+        }
     for orig, sp, res in zip(layouts, stripped, results, strict=True):
         stats["pages"] += 1
         stats[f"status:{res.status}"] += 1
@@ -40,23 +63,23 @@ def audit(name: str, pdf: bytes, stats: Counter[str], problems: list[str]) -> No
             stats["raw:rotate_attr"] += 1
         if orig.rtl_text:
             stats["raw:rtl_text"] += 1
-        rotated = [w for w in orig.words if not w.upright]
-        if rotated:
-            stats["raw:has_nonupright"] += 1
-            if any(ch.isdigit() for w in rotated for ch in w.text):
-                stats["raw:nonupright_with_digits"] += 1
+        if orig.page in bad_any_pages:
+            stats["raw:has_nonhorizontal_chars"] += 1
+        if orig.page in bad_digit_pages:
+            stats["raw:nonhorizontal_digit_chars"] += 1
         if res.status != "ok":
             continue
         stats["ok_pages_audited"] += 1
         if orig.rotation or orig.rtl_text or any(not w.upright for w in sp.layout.words):
-            problems.append(f"{name} p{orig.page}: ok 页仍含旋转 / 倒向文字")
-        if rotated and any(ch.isdigit() for w in rotated for ch in w.text):
-            problems.append(f"{name} p{orig.page}: ok 页的旋转文字含数字")
+            problems.append(f"{name} p{orig.page}: ok 页仍含不水平文字")
+        if orig.page in bad_digit_pages:
+            problems.append(f"{name} p{orig.page}: ok 页含不水平的数字字符")
         words = "".join(w.text for w in sp.layout.words)
         if _content(res.markdown) != _content(words):
             problems.append(f"{name} p{orig.page}: 内容字符多重集合不一致")
-        if ordered_numbers(res.markdown) != ordered_numbers(sp.layout.text):
-            problems.append(f"{name} p{orig.page}: 数字顺序与文字层不一致")
+        reason = order_violation(res.markdown, orig.text, sp.stripped_text)
+        if reason is not None:
+            problems.append(f"{name} p{orig.page}: {reason}")
 
 
 def main(research_dir: Path) -> int:

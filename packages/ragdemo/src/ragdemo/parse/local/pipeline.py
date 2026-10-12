@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -126,7 +127,29 @@ def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[Page
     return results
 
 
-def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list[str], str]:
+def order_violation(markdown: str, original_text: str, stripped_text: str) -> str | None:
+    """数字顺序检查，基准是**未剥离、未重聚类**的原始 pdfplumber extract_text。
+
+    剥离装饰后的 layout.text 是用 cluster_rows 重建的，与排版器同一套行聚类，拿它当基准
+    等于只复查渲染步骤。这里用原始序列：输出的数字序列必须是它的子序列，且余下的恰好
+    等于被剥离文字里的数字（多重集合）。不满足返回原因（可能是误报，宁可退回）。"""
+    orig = ordered_numbers(original_text)
+    out = ordered_numbers(markdown)
+    it = iter(orig)
+    if not all(any(tok == o for o in it) for tok in out):
+        return "数字顺序与原始文字层不一致（输出数字不是原始序列的子序列：符号错位或行序被打乱）"
+    if Counter(orig) - Counter(out) != Counter(ordered_numbers(stripped_text)):
+        return "输出数字与原始文字层相比，余下的数字不等于被剥离文字里的数字"
+    return None
+
+
+def _self_check(
+    markdown: str,
+    source: str,
+    tables: Sequence[str],
+    original_text: str,
+    stripped_text: str,
+) -> tuple[list[str], str]:
     """确定性排版的自检：输出与文字层双向做数字闭合与字符闭合，表格须原样出现。
     返回 (输出里新增的数字, 失败原因)；通过则原因为空。排版器没有生成环节，
     任何不通过都说明排版器有 bug，所以不重试，直接记 closure_failed。"""
@@ -136,10 +159,8 @@ def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list
     bad_chars = char_violations(markdown, source)
     lost_chars = char_violations(source, markdown)
     missing = [i for i, t in enumerate(tables, start=1) if re.sub(r"\s+", "", t) not in flat]
-    # 顺序检查：多重集合看不出符号错位、数字对调；输出里数字的出现顺序必须与文字层一致
-    reordered = not (bad_numbers or lost_numbers) and ordered_numbers(markdown) != ordered_numbers(
-        source
-    )
+    # 顺序检查：多重集合看不出符号错位、数字对调；基准是原始 extract_text，其他检查失败也照做
+    order_reason = order_violation(markdown, original_text, stripped_text)
     reasons: list[str] = []
     if bad_numbers:
         reasons.append(f"排版后新增了数字：{bad_numbers}")
@@ -151,8 +172,8 @@ def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list
         reasons.append(f"字符闭合失败：丢失{''.join(lost_chars[:20])}")
     if missing:
         reasons.append(f"表格未原样保留：第 {missing} 张")
-    if reordered:
-        reasons.append("数字顺序与文字层不一致（符号错位或行序被打乱）")
+    if order_reason is not None:
+        reasons.append(order_reason)
     return bad_numbers, "；".join(reasons)
 
 
@@ -217,7 +238,9 @@ def parse_layouts_deterministic(pages: Sequence[PageLayout]) -> list[PageResult]
                 )
             )
             continue
-        violations, reason = _self_check(res.markdown, layout.text, res.tables)
+        violations, reason = _self_check(
+            res.markdown, layout.text, res.tables, pages[i].text, stripped_text
+        )
         if reason:
             results.append(
                 PageResult(

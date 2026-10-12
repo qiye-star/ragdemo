@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import io
+import math
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import pdfplumber
 
@@ -16,7 +19,9 @@ class Word:
     x1: float
     top: float
     bottom: float
-    upright: bool = True  # False = 旋转 / 竖排字符（水印、竖排页眉）
+    upright: bool = (
+        True  # False = 不水平：旋转 / 竖排 / 倾斜 / 倒向（由字符矩阵判定，见 char_is_horizontal）
+    )
     size: float = 0.0  # 字号（pt）：词内字符字号的众数；0 = 未知
     bold: bool = False  # 词内过半字符的字体名含 Bold / Black / Heavy 等
 
@@ -55,6 +60,20 @@ def _word_font(chars: list[dict[str, object]]) -> tuple[float, bool]:
 
 
 _RTL_EPSILON = 1e-6  # 浮点噪声（-1e-16）不算从右向左
+MIN_HORIZONTAL_SCALE = 1e-6  # 文本矩阵 a 必须大于它：a 在 0 附近（含 ±4.4e-08 噪声）说明文字是竖的
+MAX_TILT_DEGREES = 2.0  # 允许的最大倾斜角；超过算"不水平"（pdfminer 的 upright 把 ±90° 内都算直立）
+_MAX_TILT_TAN = math.tan(math.radians(MAX_TILT_DEGREES))
+
+
+def char_is_horizontal(matrix: Sequence[float]) -> bool:
+    """字符文本矩阵 (a, b, c, d, e, f) 是否是安全的"从左到右的水平文字"。
+
+    只有 a > MIN_HORIZONTAL_SCALE、|b| <= tan(2°)·a 且 d > 0 才安全；剪切 c != 0（合成斜体）没问题。
+    不能信 pdfminer 的 upright 标志：它大致是 a·d > 0 且 b·c <= 0，于是 -90°~90° 之间任意倾斜
+    （60°、89°）与带浮点噪声的 90° 矩阵都算直立；而 pdfplumber 对这类文字的字序是乱的 / 倒的，
+    自检基准（文字层）同样如此，闭合校验看不出来。"""
+    a, b, _c, d = (float(x) for x in matrix[:4])
+    return a > MIN_HORIZONTAL_SCALE and abs(b) <= _MAX_TILT_TAN * a and d > 0
 
 
 def unsafe_orientation_reason(layout: PageLayout) -> str | None:
@@ -69,6 +88,15 @@ def unsafe_orientation_reason(layout: PageLayout) -> str | None:
     if any(not w.upright for w in layout.words):
         return "页面含旋转 / 竖排文字，文字层字序不可信"
     return None
+
+
+def _word_is_horizontal(w: dict[str, Any]) -> bool:
+    """词的 upright：pdfplumber 的标志与每个字符的矩阵判定都通过才算（字段名沿用 upright）。"""
+    if not bool(w.get("upright", True)):
+        return False
+    return all(
+        char_is_horizontal(c["matrix"]) for c in w.get("chars", []) if c.get("matrix") is not None
+    )
 
 
 def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
@@ -86,7 +114,7 @@ def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
                     float(w["x1"]),
                     float(w["top"]),
                     float(w["bottom"]),
-                    bool(w.get("upright", True)),
+                    _word_is_horizontal(w),
                     *_word_font(w.get("chars", [])),
                 )
                 for w in p.extract_words(keep_blank_chars=False, return_chars=True)

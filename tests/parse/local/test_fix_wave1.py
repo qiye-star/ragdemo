@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from io import BytesIO
 
@@ -78,10 +79,10 @@ def test_a_four_page_doc_with_rotated_numbers_is_handed_back_not_silently_stripp
 def test_a_rotated_watermark_without_digits_is_still_stripped_and_the_page_stays_ok() -> None:
     pdf = _build(4, _rot_letters)
     assert [r.status for r in parse_pages_deterministic(pdf)] == ["ok"] * 4
-    assert all(
-        "CONFIDENTIAL"[::-1] in r.stripped_text or r.stripped_text
-        for r in parse_pages_deterministic(pdf)
-    )
+    for r in parse_pages_deterministic(pdf):
+        # 水印整词进了 stripped_text（pdfplumber 可能给出倒序，字符一个不少），且不在输出里
+        assert Counter(r.stripped_text.replace(" ", "")) == Counter("CONFIDENTIAL")
+        assert "CONFIDENTIAL" not in r.markdown and "LAITNEDIFNOC" not in r.markdown
 
 
 def _landscape(angle: int) -> bytes:
