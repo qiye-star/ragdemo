@@ -66,3 +66,16 @@ def test_page_rows_only_list_non_ok_pages_sanitized_and_truncated() -> None:
 
 def test_sanitize_truncates() -> None:
     assert sanitize("a\tb") == "a b" and len(sanitize("x" * 999)) == 300
+
+
+def test_stripped_pages_tsv_adds_a_stripped_chars_column() -> None:
+    from ragdemo.parse.local.report import PAGES_HEADER_STRIPPED, page_rows_stripped
+
+    assert PAGES_HEADER_STRIPPED == PAGES_HEADER + "\tstripped_chars"
+    bad = PageResult(2, "structure_failed", "", "src", [], "r", "ACME 688041 Dec")
+    (line,) = page_rows_stripped("d", [_p(1, "ok"), bad])
+    assert _cols(line) == _cols(PAGES_HEADER_STRIPPED) == 6
+    assert line.split("\t")[-1] == "13"  # 去掉空格后的字符数
+    (plain,) = page_rows_stripped("d", [_p(3, "closure_failed", "x", ["1"])])
+    assert plain.split("\t")[-1] == "0" and _cols(plain) == 6
+    assert _cols(page_rows("d", [bad])[0]) == _cols(PAGES_HEADER)  # 旧函数的列数不变

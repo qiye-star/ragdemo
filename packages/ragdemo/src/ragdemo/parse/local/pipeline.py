@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from ragdemo.parse.confidence import MIN_CHARS_PER_PAGE
+from ragdemo.parse.local.decor import strip_decor
 from ragdemo.parse.local.layout import PageLayout, extract_pages
 from ragdemo.parse.local.structure import ClosureFailed, StructureFailed
 from ragdemo.parse.local.tables import (
@@ -34,6 +35,7 @@ class PageResult:
     source_text: str
     violations: list[str] = field(default_factory=list)
     reason: str = ""  # 非 ok 状态的原因（实验复盘用：区分虚警与真编造）
+    stripped_text: str = ""  # 送模型前剥离的装饰文字（页眉页脚/页码/水印），可审计，不进入输出
 
 
 def _table_markdowns(layout: PageLayout) -> list[str]:
@@ -60,11 +62,20 @@ _needs_handback = needs_handback  # 旧名保留：既有测试从这里导入
 
 
 def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[PageResult]:
+    pages = extract_pages(pdf_bytes)
     results: list[PageResult] = []
-    for layout in extract_pages(pdf_bytes):
+    for original, stripped in zip(pages, strip_decor(pages), strict=True):
+        layout = stripped.layout  # 剥离装饰后的正文版面
+        stripped_text = stripped.stripped_text
         handback = needs_handback(layout.text)
+        if handback is None and "(cid:" in original.text:  # 剥离前的文字层也要查乱码
+            handback = "文字层乱码（cid）"
         if handback is not None:
-            results.append(PageResult(layout.page, "no_text_layer", "", layout.text, [], handback))
+            results.append(
+                PageResult(
+                    layout.page, "no_text_layer", "", layout.text, [], handback, stripped_text
+                )
+            )
             continue
         tables = _table_markdowns(layout)
         try:
@@ -78,13 +89,16 @@ def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[Page
                     layout.text,
                     exc.violations,
                     f"数字闭合失败：{exc.violations}",
+                    stripped_text,
                 )
             )
             continue
         except StructureFailed as exc:  # 截断 / 空回复 / 畸形响应 / 丢失内容：这一页不可信
             results.append(
-                PageResult(layout.page, "structure_failed", "", layout.text, [], str(exc))
+                PageResult(
+                    layout.page, "structure_failed", "", layout.text, [], str(exc), stripped_text
+                )
             )
             continue
-        results.append(PageResult(layout.page, "ok", markdown, layout.text))
+        results.append(PageResult(layout.page, "ok", markdown, layout.text, [], "", stripped_text))
     return results

@@ -31,12 +31,12 @@ from ragdemo.parse.local.compare import (
 from ragdemo.parse.local.pipeline import parse_pages_local
 from ragdemo.parse.local.report import (
     DOCS_HEADER,
-    PAGES_HEADER,
+    PAGES_HEADER_STRIPPED,
     RESEARCH_HEADER,
     docs_err_row,
     docs_row,
     is_accepted,
-    page_rows,
+    page_rows_stripped,
     research_err_row,
     research_row,
 )
@@ -74,7 +74,7 @@ def run_docs() -> Path:
         pages_out.open("w", encoding="utf-8") as pfh,
     ):
         fh.write(DOCS_HEADER + "\n")
-        pfh.write(PAGES_HEADER + "\n")
+        pfh.write(PAGES_HEADER_STRIPPED + "\n")
         rows = conn.execute(
             "SELECT doc_id, title, raw_ref, parse_md_ref FROM core.document"
             " WHERE parse_engine LIKE 'textin:%%' AND superseded_at IS NULL"
@@ -101,7 +101,7 @@ def run_docs() -> Path:
                     table_row_recall(reference, candidate),  # 表格行用原始 HTML 解析
                 )
             fh.write(docs_row(str(doc_id), str(title), pages, metrics) + "\n")
-            for line in page_rows(str(doc_id), pages):
+            for line in page_rows_stripped(str(doc_id), pages):
                 pfh.write(line + "\n")
             fh.flush()
             pfh.flush()
@@ -116,7 +116,7 @@ def run_research(directory: Path) -> Path:
     pages_out = OUT_DIR / f"parse-compare-pages-research-{date.today()}.tsv"
     with out.open("w", encoding="utf-8") as fh, pages_out.open("w", encoding="utf-8") as pfh:
         fh.write(RESEARCH_HEADER + "\n")
-        pfh.write(PAGES_HEADER + "\n")
+        pfh.write(PAGES_HEADER_STRIPPED + "\n")
         for pdf in sorted(directory.glob("*.pdf")):
             try:
                 pages = parse_pages_local(pdf.read_bytes(), structurer)
@@ -125,7 +125,7 @@ def run_research(directory: Path) -> Path:
                 fh.flush()
                 continue
             fh.write(research_row(pdf.name, pages) + "\n")
-            for line in page_rows(pdf.name, pages):
+            for line in page_rows_stripped(pdf.name, pages):
                 pfh.write(line + "\n")
             fh.flush()
             pfh.flush()

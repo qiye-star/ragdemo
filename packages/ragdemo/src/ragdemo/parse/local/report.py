@@ -13,6 +13,7 @@ DOCS_HEADER = (
 )
 RESEARCH_HEADER = "file\tpages\tok\tclosure_failed\tstructure_failed\tno_text_layer\taccepted"
 PAGES_HEADER = "doc\tpage\tstatus\treason\tviolations"
+PAGES_HEADER_STRIPPED = PAGES_HEADER + "\tstripped_chars"  # 运行器用：多一列被剥字符数
 
 Metrics = tuple[float, float, float, float]
 
@@ -90,4 +91,13 @@ def page_rows(doc: str, pages: Sequence[PageResult]) -> list[str]:
         )
         for p in pages
         if p.status != "ok"
+    ]
+
+
+def page_rows_stripped(doc: str, pages: Sequence[PageResult]) -> list[str]:
+    """同 page_rows，末尾多一列 stripped_chars（该页被剥离的装饰字符数，去掉空白）。"""
+    failed = [p for p in pages if p.status != "ok"]
+    return [
+        f"{row}\t{sum(1 for ch in p.stripped_text if not ch.isspace())}"
+        for row, p in zip(page_rows(doc, failed), failed, strict=True)
     ]

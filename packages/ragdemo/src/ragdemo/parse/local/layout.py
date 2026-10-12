@@ -15,6 +15,7 @@ class Word:
     x1: float
     top: float
     bottom: float
+    upright: bool = True  # False = 旋转 / 竖排字符（水印、竖排页眉）
 
     @property
     def mid_y(self) -> float:
@@ -45,6 +46,7 @@ def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
                     float(w["x1"]),
                     float(w["top"]),
                     float(w["bottom"]),
+                    bool(w.get("upright", True)),
                 )
                 for w in p.extract_words(keep_blank_chars=False)
             ]
