@@ -20,7 +20,8 @@
   未闭合的 <span title= 之类；本模块只拒绝能识别的隐藏标记。
 - 财务报表页识别（classify.py）可能漏判：无标题、行标记不足 2 个、数字不足 20 个的续页。
 - 误报来源：对 border="1" 等属性的严格拒绝（若很常见，T7 将提议剥离一个无害属性白名单）；
-  文字层按列输出而引擎按行输出时顺序校验必然误报。"""
+  文字层按列输出而引擎按行输出时顺序校验必然误报。
+  双引擎之间文字排序方式不同（如分栏阅读顺序）同样会被内容顺序校验误报。"""
 
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v3"
+VERIFY_VERSION: Final = "v4"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -248,7 +249,8 @@ def verify_dual(primary_md: str, secondary_md: str) -> Verdict:
     互相对照无法发现——这里没有原文可比。该风险只能靠引擎独立性与抽样评测控制。
 
     要求：数字多重集相等；关键字多重集相等；数字+关键字阅读顺序序列相等；
-    表格按行、按单元格、含表头完全相等；文字一致度 >= DUAL_MIN_COVERAGE；
+    表格按行、按单元格、含表头完全相等；内容字符有序序列完全相等
+    （两引擎文字排序方式不同会因此误报，T7 度量）；文字一致度 >= DUAL_MIN_COVERAGE；
     两路输出都不含隐藏内容的标记。"""
     bad = [
         f"{name}输出含不允许的标记：{'；'.join(v)}"
@@ -278,6 +280,8 @@ def verify_dual(primary_md: str, secondary_md: str) -> Verdict:
         )
     if _stream_mismatch(a, b):
         reasons.append("数字/关键字顺序不一致（换位、换行、换列、单位或符号错位）")
+    if _content_sequence(a) != _content_sequence(b):
+        reasons.append("文字内容顺序不一致（标签/表头/主体名称/子句换位或字词被改）")
     agree = min(text_coverage(_content(a), _content(b)), text_coverage(_content(b), _content(a)))
     if agree < DUAL_MIN_COVERAGE:
         reasons.append(f"文字一致度 {agree:.4f} < {DUAL_MIN_COVERAGE}")

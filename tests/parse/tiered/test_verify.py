@@ -118,7 +118,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v3"
+    assert VERIFY_VERSION == "v4"
 
 
 @pytest.mark.parametrize(
@@ -368,3 +368,27 @@ def test_known_limitations_block_is_documented() -> None:
     import ragdemo.parse.tiered.verify as m
 
     assert m.__doc__ and "已知局限" in m.__doc__ and "border" in m.__doc__
+
+
+# ---- fix round 3 -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("母公司 91.2 合并 60.1", "合并 91.2 母公司 60.1"),
+        ("公司本期盈利状况良好，现金流量保持稳健", "现金流量保持稳健，公司本期盈利状况良好"),
+        (_h([["母公司", "91.2"], ["合并", "60.1"]]), _h([["合并", "91.2"], ["母公司", "60.1"]])),
+    ],
+)
+def test_dual_label_and_clause_swaps_fail(a: str, b: str) -> None:
+    v = verify_dual(a, b)
+    assert not v.ok and any("内容顺序" in r for r in v.reasons)
+
+
+def test_dual_cosmetic_differences_still_pass() -> None:
+    assert verify_dual(_pipe(BASE), _html(BASE)).ok
+    assert verify_dual(
+        "# 经营情况\n\n**营业收入** 91.2，利润 19.3。", "经营情况 营业收入91.2 利润19.3"
+    ).ok
+    assert verify_dual("收入 1,234.5 亿元", "收入 1234.5 亿元").ok
