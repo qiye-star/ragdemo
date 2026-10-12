@@ -72,7 +72,7 @@ parse-gateway:8091 -> connected   (设计内的唯一通路：socat 回到 parse
 ```
 宿主回环：`curl http://127.0.0.1:18091/v1/health` -> `{"engine": "paddle", "engine_version": "3.7.0", "device": "cpu"}`（健康端点是 `/v1/health`）。网关容器环境变量中含 key/token/secret 的条数：0。`infra_parse-internal` 成员：ragdemo-parse-paddle、ragdemo-parse-gateway。
 
-**未闭合**：按硬规则未重启 egress-proxy，只用 `docker network disconnect infra_parse-internal ragdemo-egress` 把它从内网摘下（实时生效，compose 文件已是目标状态）。它仍占着宿主 127.0.0.1:8091（旧反代端口，旧 8091 mode 仍在监听），所以网关临时用 `PARSE_GATEWAY_PORT=18091`（compose 里 `${PARSE_GATEWAY_PORT:-8091}`）。**需要协调者批准后执行** `docker compose up -d --build egress-proxy`（重建会去掉 8091 端口与 mode，并把 policy 重新烤进镜像），再 `up -d parse-gateway`（不带 PARSE_GATEWAY_PORT）把网关落到 8091；providers.yaml 的 base_url 本来就是 `http://127.0.0.1:8091`，无需改。
+**已闭合（修复轮 2 核实）**：本轮 1 的临时做法（只做 `network disconnect`、网关临时用 18091）已被取代。控制器（协调者侧，不是我）随后重建了 egress-proxy（不再发布 8091、只在 infra_default）和 parse-gateway（落在 127.0.0.1:8091）。核实时 `docker ps` 输出见第 8.4 节。
 
 ### 7.2 标记归一化（I2）
 新增 `parse/tiered/markup_normalize.py::normalize_markup`（确定性、幂等），`HttpPageEngine` 输出统一经过它：去掉 div/html/body/head 包装（保留内部内容）、table/tr/td/th 只保留 rowspan/colspan、标签小写，不改任何文字。测试用重录夹具：原样 `markup_violations` 非空，归一化后为空，去标签后数字多重集合与内容字符序列均不变。注意：数字比较必须按去标签文本做（属性 `border="1"` 里的 1 会被 numbers_in 数到）。
@@ -93,7 +93,7 @@ Content-Length 缺失/非正 -> 400，超 32 MB -> 413（读体之前校验）�
 ### 7.5 夹具重录与在线契约（M3）
 `scripts/record_engine_fixture.py paddle http://127.0.0.1:18091` 一次真实响应同时写入 health、markdown、elapsed_ms（31519 ms），`_provenance` 已更新（不再是手工拼装）。在线契约：`PARSE_PADDLE_BASE_URL=http://127.0.0.1:18091 pytest tests/contracts/test_paddle_page_engine.py -m live_engine` -> `5 passed, 5 deselected in 58.35s`。
 
-### 7.6 真实页逐页耗时（一次一页，串行；CPU 16 核，容器上限 15.48 GiB）
+### 7.6 真实页逐页耗时（一次一页，串行；CPU 16 核，宿主 Docker VM 共 15.48 GiB、被约 17 个容器共享；容器当时 HostConfig.Memory=0，即无上限）
 data/blob/raw 下 307 份 PDF 全在 `raw/cninfo/`（公告类，没有研报），固定种子抽 5 份 8-60 页的文件；每份按 pypdf 文字层选文字重页（数字占比<8% 中字符数最多）与表格重页（字符>=300 中数字占比最高）。
 
 | 文件(前缀) | 总页 | 页 | 类型 | 秒 | md 字符 | 归一化后违规 |
@@ -109,4 +109,47 @@ data/blob/raw 下 307 份 PDF 全在 `raw/cninfo/`（公告类，没有研报）
 | 01214 | 16 | 1 | 文字 | 42.4 | 800 | 0 |
 | 01214 | 16 | 15 | 表格 | 45.3 | 2757 | 0 |
 
-约 37-50 秒/页（均值约 41.6 秒），与页面类型关系不明显。内存：空闲 2.45 GiB；约每 2 秒采样 `docker stats` 的峰值 12.57 GiB（容器上限 15.48 GiB，余量约 3 GiB，同机其它容器也在用内存）。采样粗粒度，真实峰值可能更高。只能一容器一页串行；批量跑 T8/T9 时需看住内存。layout_threshold=0.2 在这 10 页上只检查了 markup 违规，没有逐页对照原文，过召回（重复块）仍未排除。
+约 37-50 秒/页（均值约 41.6 秒），与页面类型关系不明显。内存：空闲 2.45 GiB；约每 2 秒采样 `docker stats` 的峰值 12.57 GiB（15.48 GiB 是整个 Docker VM 而不是本容器的上限，容器当时没有内存上限）。采样粗粒度，真实峰值可能更高。只能一容器一页串行；批量跑 T8/T9 时需看住内存。layout_threshold=0.2 在这 10 页上只检查了 markup 违规，没有逐页对照原文，过召回（重复块）仍未排除。
+
+
+## 8. 修复轮 2（2026-10-12）
+
+### 8.1 归一化器重写（N1-N3）
+每个探针先写成失败测试（tests/parse/tiered/test_markup_normalize.py，共 5 条新增，含一个 13 条语料的性质测试），再改 `markup_normalize.py`：
+- N1：被去掉的包装标签换成占位，最后折成**单个空格**（紧邻标签/换行/首尾处丢弃）；绝不零宽。`<div>91</div><div>.2</div>` 不再变成 `91.2`；`<td><div>1</div><div>2</div></td>` 不再变成 `<td>12</td>`。
+- N2：`<` 后不允许空白；标签名后必须是空白、`/` 或 `>`；名字里带 `-`/`:` 的不是标签。`staff < head office > 3 people`、`if a < div and b > c then 5`、`<div-x>`、`<html:div>` 全部原样不动。属性里出现无值属性（如 `<div and b>`）也视为不确定，原样不动。
+- N3：属性按 name=value 严格切分（带引号/不带引号），只保留名字**恰好**是 rowspan/colspan（不区分大小写）且值为纯数字的属性（仅 td/th），其余全丢；`data-colspan`、`title="colspan=7"` 不再被误认。切分不干净、span 值非数字、span 出现在非 td/th 上 -> 整个标签原样保留（由 verify 拒绝）。
+- 注释整体原样保留；输入里含 NUL 时整体不改写。
+- 性质测试：语料上 `numbers_in` 与有序内容字符序列（isalnum，去标签语法后）改写前后完全一致（含重录夹具）。一个已知的不对称：未配对的 `</div>` 即使其开标签因不确定而保留，也会被删掉（删的只是标签语法，不涉及文字）。
+
+### 8.2 内存上限（D1）与实测
+首轮记录里"容器上限 15.48 GiB"是错的：`HostConfig.Memory=0`，15.48 GiB 是整个 Docker VM，被约 17 个容器共享。已更正（7.6），并给 parse-paddle 加 `mem_limit` 与相等的 `memswap_limit`（禁 swap），只重建 parse-paddle：
+
+| 上限 | 页 | 结果 |
+|---|---|---|
+| 11g | 01214 第 15 页（表格重） | **被 OOM 杀**：docker events 出现 `oom`、`die 137`，restart 策略把引擎拉起（重载模型），后续请求 RemoteProtocolError；采样峰值 1.15 GiB 之后失联，该次未采到完整峰值 |
+| 12g | 同上 | **仍被 OOM 杀**（`oom`、`die 137`），采样峰值 11.73 GiB 后被杀；请求 26.5 s 后 RemoteProtocolError |
+| 13g | 01214 p15 | 成功，47.3 s，采样峰值 12.30 GiB，0 违规 |
+| 13g | 2ffe8 p5 | 成功，55.9 s，峰值 12.56 GiB，0 违规 |
+| 13g | 2a20d p7 | 成功，40.3 s，峰值 12.59 GiB，3 违规（同 7.2 的结构错误表格，非本轮回归） |
+
+13g 下 `OOMKilled=false`、RestartCount=0。**现 compose 取 13g**（未去掉上限）；峰值 12.6 GiB 距上限只有约 0.4 GiB，距 VM 总量 15.48 GiB 余量约 2.9 GiB，并非宽裕，页面更重时仍可能被杀。（`docker inspect` 的 OOMKilled 字段在容器被 restart 策略拉起后会被清零，所以 11g/12g 的证据以 `docker events` 的 `oom` 事件为准。）
+运行约束：**并发必须恰好为 1**（两个实例同时跑会 OOM）；吞吐约 41.6 s/页 ≈ 86 页/小时，1000 页 ≈ 11.5 小时。若要降内存，可考虑去掉可选的重模型（如 PP-FormulaNet_plus-L，698M 权重、公式识别）——仅记录，本轮没有做。
+
+### 8.3 其它小项
+- shim：`count_pages` 用 try/finally 关闭 `PdfDocument`；新增 `count_pages` 单测（1 页/2 页）与处理器状态码接线测试（真起一个 shim 线程：缺 Content-Length -> 400、负数 -> 400、超限 -> 413、不可读 PDF -> 400），均不依赖 docker。
+- http_engine.py 文档字符串已改为与行为一致：引擎自报失败（200 + ok=false）-> EngineError；薄壳对请求的 400/413 与其它非 2xx 一样经 HttpClient 成为 AdapterError，再转成 EngineUnavailable。
+
+### 8.4 现场状态核实（D2）
+egress-proxy 与 parse-gateway 由控制器重建（不是我）。我核实时：
+
+```
+NAMES                   PORTS                                STATUS
+ragdemo-parse-paddle    8000/tcp                             Up 2 minutes
+ragdemo-parse-gateway   127.0.0.1:8091->8091/tcp             Up 12 minutes
+ragdemo-egress          127.0.0.1:8080-8086->8080-8086/tcp   Up 12 minutes
+```
+`docker inspect ragdemo-egress` 的网络：只有 `infra_default`。网关经 8091 对外的健康检查（本轮用 `curl http://127.0.0.1:8091/v1/health`）返回 `{"engine": "paddle", "engine_version": "3.7.0", "device": "cpu"}`。
+
+### 8.5 带入的已知缺口（不在本轮修）
+没有从零构建的镜像（当前镜像叠在首轮镜像上）；paddlex 是构建期断言而非安装期固定；socat 镜像只按 tag（`alpine/socat:1.8.0.3`）固定、未按 digest；各组件/模型许可证未核查；`tests/parse/test_router.py` 需要数据库（当前 down）；Docker Desktop VM 网关上的 rpcbind/statd 可从 internal 网络访问（由复核者发现，未处理）；layout_threshold=0.2 的过召回未对照原文核查。

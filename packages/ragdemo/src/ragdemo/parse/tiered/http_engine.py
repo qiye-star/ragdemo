@@ -5,7 +5,8 @@
   GET  /v1/health      -> {"engine", "engine_version", "device"}
   POST /v1/parse-page  {"pdf_base64", "page_no"}
                        -> {"ok": true, "markdown", "elapsed_ms"} | {"ok": false, "error"}
-内容层失败返回 200 + ok=false，不与传输层故障混在同一套状态码分类里。
+引擎自身的内容层失败返回 200 + ok=false（-> EngineError）；薄壳对请求本身的拒绝（400 格式/页数不对，
+413 过大）与其它非 2xx 一样经 HttpClient 变成 AdapterError，再被本适配器转成 EngineUnavailable。
 
 EngineError 只在引擎自报失败（ok=false）或响应缺 markdown 字段时抛出。引擎成功返回空 markdown
 是合法响应：本适配器照常返回，由下游 verify 因文字层数字缺失而拒绝，不在这里判空。

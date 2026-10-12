@@ -50,7 +50,11 @@ def decode_pdf(body: bytes) -> bytes:
 def count_pages(raw: bytes) -> int:
     import pypdfium2  # 随 paddleocr[doc-parser] 安装；只在容器内使用
 
-    return len(pypdfium2.PdfDocument(raw))
+    doc = pypdfium2.PdfDocument(raw)
+    try:
+        return len(doc)
+    finally:
+        doc.close()
 
 
 def require_single_page(raw: bytes, counter: Callable[[bytes], int] = count_pages) -> None:
@@ -101,7 +105,14 @@ def serve(engine: str, version: str, device: str, parse_fn: ParseFn, port: int =
                     traceback.print_exc()
                     self._send(200, {"ok": False, "error": f"引擎异常：{type(exc).__name__}"})
                     return
-            self._send(200, {"ok": True, "markdown": markdown, "elapsed_ms": int((time.perf_counter() - t0) * 1000)})
+            self._send(
+                200,
+                {
+                    "ok": True,
+                    "markdown": markdown,
+                    "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                },
+            )
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             return  # 不写访问日志：路径固定，正文不得落日志
