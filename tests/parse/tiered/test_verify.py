@@ -118,7 +118,7 @@ def _fails(md: str, page: str) -> bool:
 
 
 def test_version_is_bumped() -> None:
-    assert VERIFY_VERSION == "v2"
+    assert VERIFY_VERSION == "v3"
 
 
 @pytest.mark.parametrize(
@@ -247,3 +247,124 @@ def test_dual_swapped_units_in_prose_fail() -> None:
 
 def test_dual_docstring_states_the_identical_error_limitation() -> None:
     assert verify_dual.__doc__ and "相同" in verify_dual.__doc__
+
+
+# ---- fix round 2 -------------------------------------------------------------------------
+
+FILLER = "经营情况总体保持稳定" * 19  # ~190 字
+
+
+def _h(rows: list[list[str]]) -> str:
+    return (
+        "<table>"
+        + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+        + "</table>"
+    )
+
+
+def test_c1_swapped_labels_in_a_table_fail() -> None:
+    page = "营业收入 91.2 营业成本 60.1"
+    assert _fails(_h([["营业成本", "91.2"], ["营业收入", "60.1"]]), page)
+    assert verify_against_text_layer(_h([["营业收入", "91.2"], ["营业成本", "60.1"]]), page).ok
+
+
+def test_c1_swapped_period_headers_fail() -> None:
+    page = "项目 本期金额 上期金额 营业收入 91.2 60.1"
+    assert _fails("项目 上期金额 本期金额 营业收入 91.2 60.1", page)
+
+
+def test_c1_swapped_entity_names_fail() -> None:
+    assert _fails("合并 91.2 母公司 60.1", "母公司 91.2 合并 60.1")
+
+
+@pytest.mark.parametrize(
+    ("page", "bad"),
+    [
+        ("甲公司未发生诉讼，乙公司发生诉讼", "甲公司发生诉讼，乙公司未发生诉讼"),
+        ("收入增加，成本持平", "收入持平，成本增加"),
+        (FILLER + "利润高于预期。", FILLER + "利润低于预期。"),
+        (FILLER + "本期没有重大诉讼。", FILLER + "本期有重大诉讼。"),
+        (FILLER + "差距收窄。", FILLER + "差距扩大。"),
+    ],
+)
+def test_c1_word_level_swaps_fail(page: str, bad: str) -> None:
+    assert _fails(bad, page)
+
+
+@pytest.mark.parametrize(
+    ("page", "good"),
+    [
+        (
+            "项目 2024 2023 营业收入 91.2 60.1",
+            "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 营业收入 | 91.2 | 60.1 |",
+        ),
+        ("项目 2024 营业收入 91.2", _h([["项目", "2024"], ["营业<br/>收入", "91.2"]])),
+        ("经营情况 营业收入 91.2", "# 经营情况\n\n**营业收入** 91.2"),
+        ("收入 1,234.5 亿元", "收入 1234.5 亿元"),
+        ("利润 −3.5 亿元", "利润 -3.5 亿元"),
+        ("收入 91.2 亿元；利润 19.3 亿元", "收入91.2亿元,\n利润  19.3 亿元."),
+    ],
+)
+def test_c1_faithful_variants_still_pass(page: str, good: str) -> None:
+    v = verify_against_text_layer(good, page)
+    assert v.ok, v.reasons
+
+
+C2_PAGE = "项目 2024 2023 营业收入 91.2 60.1"
+C2_HEAD = "| 项目 | 2024 | 2023 |\n|---|---|---|\n"
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        C2_HEAD + "| 营业收入 | | 91.2 |\n| | 60.1 | |",
+        _h([["项目", "2024", "2023"], ["营业收入", "", "91.2"], ["", "60.1", ""]]),
+        "<table><tr><td>项目</td><td>2024</td><td>2023</td></tr><tr><td>营业收入</td>"
+        '<td colspan="2">91.2</td></tr><tr><td>60.1</td></tr></table>',
+        '<table><tr><td rowspan="2">项目</td><td>2024</td><td>2023</td></tr>'
+        "<tr><td>营业收入</td><td>91.2</td><td>60.1</td></tr></table>",
+        C2_HEAD + "| 营业收入 | 91.2 | 60.1 | 7 |",
+        C2_HEAD + "| 营业收入 | 91.2 |\n| 净利润 | 60.1 |",
+    ],
+)
+def test_c2_empty_cells_spans_and_ragged_rows_fail_on_text_layer(md: str) -> None:
+    page = C2_PAGE + (" 净利润" if "净利润" in md else "") + (" 7" if "| 7 |" in md else "")
+    v = verify_against_text_layer(md, page)
+    assert not v.ok
+    assert any("表格" in r for r in v.reasons), v.reasons
+
+
+def test_c2_a_span_of_one_is_not_a_span() -> None:
+    md = '<table><tr><td colspan="1">项目</td><td rowspan="1">2024</td></tr></table>'
+    assert verify_against_text_layer(md, "项目 2024").ok
+
+
+@pytest.mark.parametrize(
+    "md",
+    ["收入 &#57&#49.2 亿元", "收入 &#x39&#x31.2 亿元", "91&period;2", "&minus;3.5", "5&percnt;"],
+)
+def test_i3_entities_html_unescape_would_decode_are_rejected(md: str) -> None:
+    assert markup_violations(md)
+    assert not verify_against_text_layer(md, "收入 91.2 亿元").ok
+    assert not verify_dual(md, md).ok
+
+
+def test_i3_escaped_literals_are_allowed() -> None:
+    assert not markup_violations("a &lt;b&gt; &amp; &quot;c&quot;&nbsp;d R&D AT&T")
+
+
+def test_i4_dual_differing_spans_fail() -> None:
+    plain = _h([["项目", "2024"], ["营业收入", "91.2"]])
+    row = plain.replace("<td>营业收入</td>", '<td rowspan="2">营业收入</td>')
+    col = plain.replace("<td>2024</td>", '<td colspan="2">2024</td>')
+    assert not verify_dual(plain, row).ok
+    assert not verify_dual(plain, col).ok
+    assert verify_dual(plain, plain.replace("<td>项目", '<td colspan="1">项目')).ok
+    pipe = "| 项目 | 2024 |\n|---|---|\n| 营业收入 | 91.2 |"
+    assert verify_dual(plain, pipe).ok
+
+
+def test_known_limitations_block_is_documented() -> None:
+    import ragdemo.parse.tiered.verify as m
+
+    assert m.__doc__ and "已知局限" in m.__doc__ and "border" in m.__doc__

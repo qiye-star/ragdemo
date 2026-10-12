@@ -8,11 +8,25 @@
 - 被校验的是去标记后的纯文本，但入库的是原 markdown：因此任何隐藏内容的标记
   （注释、未知标签、多余属性、数字字符实体）一律拒绝。
 
-阈值写死在这里并进入引擎指纹。零容忍：宁可误报把页推到 L3，不可放过。"""
+阈值写死在这里并进入引擎指纹。零容忍：宁可误报把页推到 L3，不可放过。
+
+文字层路径还要求：内容字符（字母/数字/汉字，全角折叠后）的有序序列与文字层完全相等
+（防止标签/表头/主体名称换位），并拒绝含空单元格、rowspan/colspan（值 1 视为无）、
+行单元格数不一致的表格（这些会让数字在相同文字顺序下换列）。
+
+已知局限（有意不在此修复，T7 须度量误报率并据此决策）：
+- 两个引擎犯相同错误时，verify_dual 无法发现（没有原文可比）。
+- 渲染结果与被校验文本可能不同的 markdown 语义：有序列表自动重编号、引用式链接定义、
+  未闭合的 <span title= 之类；本模块只拒绝能识别的隐藏标记。
+- 财务报表页识别（classify.py）可能漏判：无标题、行标记不足 2 个、数字不足 20 个的续页。
+- 误报来源：对 border="1" 等属性的严格拒绝（若很常见，T7 将提议剥离一个无害属性白名单）；
+  文字层按列输出而引擎按行输出时顺序校验必然误报。"""
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from typing import Final
@@ -25,7 +39,7 @@ from ragdemo.parse.local.number_closure import (
     numbers_in,
 )
 
-VERIFY_VERSION: Final = "v2"
+VERIFY_VERSION: Final = "v3"
 TEXT_LAYER_MIN_COVERAGE = 0.97
 DUAL_MIN_COVERAGE = 0.90
 # 单位、百分号、方向词、中文数字、否定词、口径词、币种：OCR/引擎认错这些字，
@@ -43,7 +57,10 @@ _ALLOWED_TAG = re.compile(
     re.IGNORECASE,
 )
 _ANY_ANGLE = re.compile(r"<[^>]*>")
-_NUMERIC_ENTITY = re.compile(r"&#(?:\d+|[xX][0-9a-fA-F]+);")
+# 与 html.unescape 同一套实体切分（含不带分号的写法）；只放行字面转义用的几个。
+_ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
+_ENTITY_OK: Final = frozenset({"&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;"})
+_SPAN = re.compile(r"(rowspan|colspan)\s*=\s*[\"']?(\d+)", re.IGNORECASE)
 _TABLE = re.compile(r"(<table\b.*?</table>)", re.DOTALL | re.IGNORECASE)
 _TR_SPLIT = re.compile(r"<tr\b[^>]*>", re.IGNORECASE)
 _CELL_SPLIT = re.compile(r"<t[dh]\b[^>]*>", re.IGNORECASE)
@@ -92,9 +109,16 @@ def markup_violations(md: str) -> list[str]:
             continue
         if not _ALLOWED_TAG.fullmatch(span):
             found.append(f"不允许的标签或属性 {span[:40]!r}")
-    if _NUMERIC_ENTITY.search(md):
-        found.append("数字字符实体")
+    for m in _ENTITY.finditer(md):
+        tok = m.group(0)
+        if tok not in _ENTITY_OK and html.unescape(tok) != tok:
+            found.append(f"会被解码的字符实体 {tok!r}")
     return found
+
+
+def _content_sequence(text: str) -> str:
+    """内容字符（字母/数字/汉字）的有序序列，全角折叠后；标点与空白不计。"""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", fold_text(text)) if ch.isalnum())
 
 
 def _stream_mismatch(a: str, b: str) -> bool:
@@ -129,45 +153,92 @@ def verify_against_text_layer(candidate_md: str, page_text: str) -> Verdict:
         reasons.append(f"反向覆盖率 {back:.4f} < {TEXT_LAYER_MIN_COVERAGE}（多出了原文没有的文字）")
     if _stream_mismatch(plain, page_text):
         reasons.append("数字/关键字顺序与文字层不一致（换位、换行、换列、单位或符号错位）")
+    if _content_sequence(plain) != _content_sequence(page_text):
+        reasons.append("文字内容顺序与文字层不一致（标签/表头/主体名称换位或字词被改）")
+    reasons.extend(table_structure_violations(candidate_md))
     return Verdict(not reasons, tuple(reasons))
 
 
-def _cell(raw: str) -> str:
+@dataclass(frozen=True)
+class _Cell:
+    text: str
+    rowspan: int = 1
+    colspan: int = 1
+
+    @property
+    def key(self) -> tuple[str, int, int]:
+        return (self.text, self.rowspan, self.colspan)
+
+
+def _cell_text(raw: str) -> str:
     return re.sub(r"\s+", "", fold_text(plain_text_from_markdown(raw)))
 
 
-def _html_rows(table: str) -> list[tuple[str, ...]]:
-    rows: list[tuple[str, ...]] = []
+def _spans(tag: str) -> tuple[int, int]:
+    got = {k.lower(): int(v) for k, v in _SPAN.findall(tag)}
+    return got.get("rowspan", 1), got.get("colspan", 1)
+
+
+def _html_table(table: str) -> list[list[_Cell]]:
+    rows: list[list[_Cell]] = []
     for tr in _TR_SPLIT.split(table)[1:]:
-        cells = tuple(_cell(c) for c in _CELL_SPLIT.split(tr)[1:])
-        if any(cells):
-            rows.append(cells)
+        tags = _CELL_SPLIT.findall(tr)
+        parts = _CELL_SPLIT.split(tr)[1:]
+        rows.append([_Cell(_cell_text(p), *_spans(t)) for t, p in zip(tags, parts, strict=True)])
     return rows
 
 
-def _pipe_rows(segment: str) -> list[tuple[str, ...]]:
-    rows: list[tuple[str, ...]] = []
+def _pipe_tables(segment: str) -> list[list[list[_Cell]]]:
+    tables: list[list[list[_Cell]]] = []
+    current: list[list[_Cell]] | None = None
     for line in segment.splitlines():
         s = line.strip()
         if not s.startswith("|"):
+            current = None
             continue
-        if set(re.sub(r"\s+", "", s.replace("|", ""))) <= {"-", ":"}:
-            continue  # 分隔行（以及空行 ||）
+        chars = set(re.sub(r"\s+", "", s.replace("|", "")))
+        if chars and chars <= {"-", ":"}:
+            continue  # 分隔行
+        if current is None:
+            current = []
+            tables.append(current)
         s = s[1:]
         if s.endswith("|"):
             s = s[:-1]
-        cells = tuple(_cell(c) for c in s.split("|"))
-        if any(cells):
-            rows.append(cells)
-    return rows
+        current.append([_Cell(_cell_text(c)) for c in s.split("|")])
+    return tables
 
 
-def table_cell_rows(md: str) -> list[tuple[str, ...]]:
-    """文档顺序下所有表格行（含表头）的归一化单元格元组；HTML 与竖线表统一处理。"""
-    rows: list[tuple[str, ...]] = []
+def _parse_tables(md: str) -> list[list[list[_Cell]]]:
+    tables: list[list[list[_Cell]]] = []
     for i, seg in enumerate(_TABLE.split(md)):
-        rows.extend(_html_rows(seg) if i % 2 else _pipe_rows(seg))
-    return rows
+        if i % 2:
+            tables.append(_html_table(seg))
+        else:
+            tables.extend(_pipe_tables(seg))
+    return tables
+
+
+def table_cell_rows(md: str) -> list[tuple[tuple[str, int, int], ...]]:
+    """文档顺序下所有表格行（含表头、含空单元格）：每格 (归一化文本, rowspan, colspan)。"""
+    return [tuple(c.key for c in row) for t in _parse_tables(md) for row in t]
+
+
+def table_structure_violations(md: str) -> list[str]:
+    """文字层页上不允许的表格结构：空单元格/空行、rowspan/colspan（值 1 视为无）、行宽不一。
+
+    这些结构能让数字在「文字顺序完全不变」的情况下落到另一列。"""
+    found: list[str] = []
+    for table in _parse_tables(md):
+        if any(not row for row in table):
+            found.append("表格含空行")
+        if any(c.text == "" for row in table for c in row):
+            found.append("表格含空单元格")
+        if any(c.rowspan != 1 or c.colspan != 1 for row in table for c in row):
+            found.append("表格含 rowspan/colspan")
+        if len({len(row) for row in table}) > 1:
+            found.append("表格各行单元格数不一致")
+    return list(dict.fromkeys(found))
 
 
 def verify_dual(primary_md: str, secondary_md: str) -> Verdict:
