@@ -155,38 +155,6 @@ ragdemo-egress          127.0.0.1:8080-8086->8080-8086/tcp   Up 12 minutes
 没有从零构建的镜像（当前镜像叠在首轮镜像上）；paddlex 是构建期断言而非安装期固定；socat 镜像只按 tag（`alpine/socat:1.8.0.3`）固定、未按 digest；各组件/模型许可证未核查；`tests/parse/test_router.py` 需要数据库（当前 down）；Docker Desktop VM 网关上的 rpcbind/statd 可从 internal 网络访问（由复核者发现，未处理）；layout_threshold=0.2 的过召回未对照原文核查。
 
 
-## 9. 修复轮 3：关掉不用的子模型（2026-10-12）
-
-**结论先说：内存没有降到可用水平。峰值仍约 11.6 GiB，高于 9 GiB 的门槛；L1（自托管 PaddleOCR）在这台 15.5 GiB 的主机上不可行，除非加内存。**
-
-### 9.1 做了什么
-容器内核对了 `PPStructureV3.__init__` 的真实签名（有 `use_doc_orientation_classify / use_doc_unwarping / use_seal_recognition / use_chart_recognition / use_formula_recognition / use_table_recognition / use_region_detection / use_textline_orientation`）。`infra/parse-engines/paddle/server.py` 现在默认：方向分类、文档矫正、印章、图表、公式全关；表格识别、版面检测、文字检测/识别保持开启。每个开关可用环境变量覆盖：`PARSE_USE_DOC_ORIENTATION_CLASSIFY`、`PARSE_USE_DOC_UNWARPING`、`PARSE_USE_SEAL_RECOGNITION`、`PARSE_USE_CHART_RECOGNITION`、`PARSE_USE_FORMULA_RECOGNITION`、`PARSE_USE_TABLE_RECOGNITION`（取值 1/true/yes/on 为开，空串=默认）；另有可选的 `PARSE_USE_REGION_DETECTION`、`PARSE_USE_TEXTLINE_ORIENTATION`（不设=库默认，即开）。compose 只透传了公式/区域检测/文本行方向三个（其余可在 server.py 默认值处改）。
-构建：Dockerfile 未改，预热层仍然加载全部 13 个模型（镜像里仍烘焙着公式、方向、矫正模型，只是运行时不加载），所以代码改动只触发 COPY 之后的层。仍沿用首轮的叠加办法（`--build-arg BASE_IMAGE=<上一版本地镜像>`），日志里没有任何下载。运行时 `Creating model` 从 13 个降到 10 个（去掉 PP-FormulaNet_plus-L、PP-LCNet_x1_0_doc_ori、UVDoc）。
-
-### 9.2 实测（每页都换新容器，一次一页；cgroup 的 `memory.peak` 与 ~0.3 s 间隔的 `memory.current` 采样一致）
-
-| 页 | 之前（全开，13g 上限） | 之后（5 个子模型关） |
-|---|---|---|
-| 01214 p15（表格重） | 41.8 s，峰值 12.95 GiB | 43.0 s，峰值 11.46 GiB |
-| 2ffe8 p5（文字重） | 52.7 s，峰值 12.95 GiB（累计） | 61.9 s，峰值 11.53 GiB |
-| 2a20d p7（表格重） | 40.6 s，峰值 12.95 GiB（累计） | 41.9 s，峰值 11.59 GiB |
-
-之前三页是在同一容器里连跑，cgroup 峰值是累计值，所以三个相同；之后是每页新容器。空闲（模型载入后）约 2.15 GiB，所以单页处理本身要再多吃约 9.4 GiB。只省了约 1.4 GiB。
-额外试了两个杠杆，都没用：再关掉区域检测与文本行方向（01214：11.24 GiB，基本没变，输出与默认完全一致）；`FLAGS_eager_delete_tensor_gb=0.0`（反而 12.05 GiB）。页内峰值来自推理本身，不是子模型数量；没有继续猜别的参数。没有 OOM（13g 上限下 `OOMKilled=false`、RestartCount=0）。
-
-### 9.3 输出对比（之前 vs 之后，原始 markdown，去标签后）
-没有哪页逐字相同（空白/全半角括号有差异）。数字与内容字符：
-- 2ffe8 p5：数字多重集合与内容字符序列**完全相同**。
-- 01214 p15：数字不同。之前 `17,053,14,859.87`（漏了一个 9），之后 `17,053,149,859.87`；对照 pypdf 文字层，**之后是对的**。另外之后**丢了一个文字标签「非流动负债：」**（无数字）；还有 `实收资本（或股本）` 全角括号变成半角、`2023 年` 空格变化。
-- 2a20d p7：之前 `4,388,214,499.44` 出现两次（重复块），之后一次；文字层里只有一次，**之后是对的**。归一化后的 markup 违规数从 3 降到 0（之前的结构错误表格没了）。
-所以关子模型后没有丢数字，两处数字更准确，但在 01214 上丢了一个纯文字标签，这是内容字符的损失，记在这里，没有掩盖。三页的样本太小，不能据此说关子模型总体更准。5 条在线契约测试：`5 passed, 5 deselected in 58.09s`（最终配置）。
-
-### 9.4 内存上限与运行数字
-按"峰值 + 25% 余量"要求，需要约 14.5g（11.59 x 1.25），这在 15.48 GiB 的 VM 上等于吃掉整台机器，做不到。所以**没有**按规则下调，`mem_limit`/`memswap_limit` 保持 13g（余量只有约 12%，比要求的 25% 少）；同机还有 ParadeDB 等其它容器，这个上限实际上无法安全使用。
-运行数字：并发必须恰好为 1；约 41-62 s/页（本轮三页均值 49 s，早先 10 页均值 41.6 s）≈ 60-86 页/小时；1000 页约 12-17 小时；单页峰值 11.5-11.6 GiB，空闲 2.15 GiB。
-若仍要在本机用 L1：需要更多内存（建议 VM 至少 20 GiB，给 parse-paddle 14.5g 上限），或改用 GPU/更小的版面与表格模型，或把 L1 放到别的机器上。这些都不是本轮能做的。
-
-
 ## 9. 修复轮 3：内存缩减与 8 GiB 服务器可行性（2026-10-12）
 
 ### 9.1 做了什么
@@ -243,3 +211,8 @@ compose 透传了 FORMULA/TABLE/REGION/TEXTLINE 四个变量与 `PARSE_MEM`（me
 - compose：`mem_limit=memswap_limit=13g`（`PARSE_MEM` 可覆盖）。按"实测峰值 +25% 余量"应为约 14.5g（11.59 x 1.25），但 Docker VM 总共只有 15.48 GiB，给不起，所以没有按该规则取值：13g 的余量只有约 12%。13g 下三页稳定通过，11g、12g 在轮 2 已证明会 OOM。**这个余量是薄的，页面更重时仍可能被杀，由 restart 策略重新拉起（需要重新加载模型约 1 分钟）。**
 - 并发必须恰好为 1。吞吐 39-70 s/页（本轮 5 次默认配置：43.0/61.9/41.9 s，另有 41.5-70.1 s），约 41.6 s/页 ≈ 86 页/小时，1000 页 ≈ 11.5 小时。
 - 在线契约（默认配置，13g）：`5 passed, 5 deselected in 58.09s`。
+
+### 9.6 结论与部署形态（2026-10-12 用户裁决后）
+- **结论：** 关掉子模型后内存没有降到可用水平，页内峰值约 10.6-11.6 GiB，与子模型选择几乎无关。该引擎不能放在 8 GiB 服务器上。
+- **部署形态：** 用户裁决解析只在开发机上批处理，线上服务器只做检索，所以引擎内存只需放得进开发机的 Docker VM（15.48 GiB，与 ParadeDB 等容器共用）。13g 的上限在该 VM 里余量很薄；要稳妥使用，建议把 Docker VM 调到至少 20-24 GiB（宿主机共 31.7 GiB），给 parse-paddle 14.5g 上限，或限制输入图像大小后重测（降低检测输入边长，本轮未试），或换更小的版面/表格模型，或把 L1 放到另一台机器。
+- 本节取代同一文件此前一个编号重复的"9. 修复轮 3：关掉不用的子模型"（内容已合并进上面各节，复审指出其编号重复并与本节在环境变量个数上不一致，以 `docker inspect` 为准是四个透传变量）。
