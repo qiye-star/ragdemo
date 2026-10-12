@@ -67,3 +67,42 @@ def test_plain_text_drops_tags_attributes_and_comments() -> None:
 def test_text_coverage_of_plain_text_against_perfect_candidate() -> None:
     cand = "项目 2024 收入 91.2 60.1"
     assert text_coverage(plain_text_from_markdown(HTML_REF), cand) >= 0.99
+
+
+def test_heading_recall_precision_matches_on_normalized_text_not_level() -> None:
+    from ragdemo.parse.local.compare import heading_recall_precision
+
+    ref = "# 一、公司 概况\n\n正文\n\n## 二，经营情况\n\n### 未出现的标题\n"
+    cand = "## 一、公司概况\n\n正文\n\n# 二、经营情况\n\n# 多出来的\n"
+    recall, precision = heading_recall_precision(cand, ref)
+    assert recall == 2 / 3 and precision == 2 / 3
+
+
+def test_heading_extraction_ignores_html_tags_and_hash_in_text() -> None:
+    from ragdemo.parse.local.compare import heading_matches
+
+    ref = "# <b>第一节</b> 释义\n行内 # 不是标题\n<table><tr><td># x</td></tr></table>\n"
+    m = heading_matches("# 第一节 释义\n", ref)
+    assert m.matched == 1 and m.ref_total == 1 and m.cand_total == 1
+
+
+def test_heading_level_agreement_counts_only_matched_headings() -> None:
+    from ragdemo.parse.local.compare import heading_level_agreement
+
+    ref = "# 甲\n## 乙\n### 丙\n"
+    cand = "# 甲\n# 乙\n### 丙\n## 丁\n"
+    assert heading_level_agreement(cand, ref) == 2 / 3
+
+
+def test_heading_metrics_with_no_headings_are_vacuously_one() -> None:
+    from ragdemo.parse.local.compare import heading_level_agreement, heading_recall_precision
+
+    assert heading_recall_precision("正文", "正文") == (1.0, 1.0)
+    assert heading_level_agreement("正文", "# 甲") == 1.0
+
+
+def test_duplicate_headings_match_as_a_multiset() -> None:
+    from ragdemo.parse.local.compare import heading_matches
+
+    m = heading_matches("# 风险提示\n# 风险提示\n", "# 风险提示\n")
+    assert m.matched == 1 and m.cand_total == 2

@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 from ragdemo.parse.local.number_closure import numbers_in
 
@@ -90,3 +91,62 @@ def table_row_recall(reference_md: str, candidate_md: str) -> float:
         1 for r in ref_rows if any(all(c.get(n, 0) >= k for n, k in r.items()) for c in cand_rows)
     )
     return hit / len(ref_rows)
+
+
+_HEADING_LINE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
+
+
+@dataclass(frozen=True)
+class HeadingMatch:
+    """标题按"规范化文本"（只留字母数字，去空白与标点）的多重集合匹配；层级另算。"""
+
+    matched: int
+    cand_total: int
+    ref_total: int
+    level_agree: int  # 匹配到的标题里层级也相同的个数
+
+    @property
+    def recall(self) -> float:
+        return self.matched / self.ref_total if self.ref_total else 1.0
+
+    @property
+    def precision(self) -> float:
+        return self.matched / self.cand_total if self.cand_total else 1.0
+
+    @property
+    def level_agreement(self) -> float:
+        return self.level_agree / self.matched if self.matched else 1.0
+
+
+def _headings(md: str) -> list[tuple[str, int]]:
+    """markdown 里的 `#` 标题行 → (规范化文本, 层级)。HTML 表格先整体去掉；标签去掉。"""
+    out: list[tuple[str, int]] = []
+    for line in _TABLE.sub("\n", _COMMENT.sub("", md)).splitlines():
+        m = _HEADING_LINE.match(line.strip())
+        if not m:
+            continue
+        key = "".join(ch for ch in plain_text_from_markdown(m.group(2)) if ch.isalnum())
+        if key:
+            out.append((key, len(m.group(1))))
+    return out
+
+
+def heading_matches(candidate_md: str, reference_md: str) -> HeadingMatch:
+    cand, ref = _headings(candidate_md), _headings(reference_md)
+    cand_text, ref_text = Counter(k for k, _ in cand), Counter(k for k, _ in ref)
+    cand_pair, ref_pair = Counter(cand), Counter(ref)
+    return HeadingMatch(
+        matched=sum(min(c, ref_text.get(k, 0)) for k, c in cand_text.items()),
+        cand_total=len(cand),
+        ref_total=len(ref),
+        level_agree=sum(min(c, ref_pair.get(kl, 0)) for kl, c in cand_pair.items()),
+    )
+
+
+def heading_recall_precision(candidate_md: str, reference_md: str) -> tuple[float, float]:
+    m = heading_matches(candidate_md, reference_md)
+    return m.recall, m.precision
+
+
+def heading_level_agreement(candidate_md: str, reference_md: str) -> float:
+    return heading_matches(candidate_md, reference_md).level_agreement

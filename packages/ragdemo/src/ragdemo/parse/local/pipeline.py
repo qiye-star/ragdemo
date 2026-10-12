@@ -4,13 +4,16 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from ragdemo.parse.confidence import MIN_CHARS_PER_PAGE
+from ragdemo.parse.local.char_closure import char_violations
 from ragdemo.parse.local.decor import strip_decor
 from ragdemo.parse.local.layout import PageLayout, extract_pages
+from ragdemo.parse.local.number_closure import closure_violations
 from ragdemo.parse.local.structure import ClosureFailed, StructureFailed
 from ragdemo.parse.local.tables import (
     cluster_rows,
@@ -19,8 +22,9 @@ from ragdemo.parse.local.tables import (
     grid_to_markdown,
     rows_to_grid,
 )
+from ragdemo.parse.local.typeset import typeset_document
 
-Status = Literal["ok", "no_text_layer", "closure_failed", "structure_failed"]
+Status = Literal["ok", "no_text_layer", "closure_failed", "structure_failed", "layout_unsupported"]
 
 
 class PageStructurer(Protocol):
@@ -101,4 +105,93 @@ def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[Page
             )
             continue
         results.append(PageResult(layout.page, "ok", markdown, layout.text, [], "", stripped_text))
+    return results
+
+
+def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list[str], str]:
+    """确定性排版的自检：输出与文字层双向做数字闭合与字符闭合，表格须原样出现。
+    返回 (输出里新增的数字, 失败原因)；通过则原因为空。排版器没有生成环节，
+    任何不通过都说明排版器有 bug，所以不重试，直接记 closure_failed。"""
+    flat = re.sub(r"\s+", "", markdown)
+    bad_numbers = closure_violations(markdown, source)
+    lost_numbers = closure_violations(source, markdown)
+    bad_chars = char_violations(markdown, source)
+    lost_chars = char_violations(source, markdown)
+    missing = [i for i, t in enumerate(tables, start=1) if re.sub(r"\s+", "", t) not in flat]
+    reasons: list[str] = []
+    if bad_numbers:
+        reasons.append(f"排版后新增了数字：{bad_numbers}")
+    if lost_numbers:
+        reasons.append(f"排版后丢失了数字：{lost_numbers}")
+    if bad_chars:
+        reasons.append(f"字符闭合失败：新增{''.join(bad_chars[:20])}")
+    if lost_chars:
+        reasons.append(f"字符闭合失败：丢失{''.join(lost_chars[:20])}")
+    if missing:
+        reasons.append(f"表格未原样保留：第 {missing} 张")
+    return bad_numbers, "；".join(reasons)
+
+
+def parse_pages_deterministic(pdf_bytes: bytes) -> list[PageResult]:
+    """确定性排版版本的逐页本地解析：不调用任何模型，输出字符全部来自文字层。"""
+    return parse_layouts_deterministic(extract_pages(pdf_bytes))
+
+
+def parse_layouts_deterministic(pages: Sequence[PageLayout]) -> list[PageResult]:
+    """同 parse_pages_deterministic，输入是已提取的版面（实验运行器要复用版面做指标）。"""
+    stripped_pages = strip_decor(pages)
+    handbacks: dict[int, str] = {}
+    for i, (original, stripped) in enumerate(zip(pages, stripped_pages, strict=True)):
+        reason = needs_handback(stripped.layout.text)
+        if reason is None and "(cid:" in original.text:
+            reason = "文字层乱码（cid）"
+        if reason is not None:
+            handbacks[i] = reason
+    live = [i for i in range(len(pages)) if i not in handbacks]
+    typeset = dict(
+        zip(live, typeset_document([stripped_pages[i].layout for i in live]), strict=True)
+    )
+
+    results: list[PageResult] = []
+    for i, stripped in enumerate(stripped_pages):
+        layout = stripped.layout
+        stripped_text = stripped.stripped_text
+        if i in handbacks:
+            results.append(
+                PageResult(
+                    layout.page, "no_text_layer", "", layout.text, [], handbacks[i], stripped_text
+                )
+            )
+            continue
+        res = typeset[i]
+        if res.status == "layout_unsupported":
+            results.append(
+                PageResult(
+                    layout.page,
+                    "layout_unsupported",
+                    "",
+                    layout.text,
+                    [],
+                    res.reason,
+                    stripped_text,
+                )
+            )
+            continue
+        violations, reason = _self_check(res.markdown, layout.text, res.tables)
+        if reason:
+            results.append(
+                PageResult(
+                    layout.page,
+                    "closure_failed",
+                    "",
+                    layout.text,
+                    violations,
+                    reason,
+                    stripped_text,
+                )
+            )
+            continue
+        results.append(
+            PageResult(layout.page, "ok", res.markdown, layout.text, [], "", stripped_text)
+        )
     return results
