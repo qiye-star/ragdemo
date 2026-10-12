@@ -46,7 +46,7 @@ def _table_markdowns(layout: PageLayout) -> list[str]:
     return out
 
 
-def _needs_handback(text: str) -> str | None:
+def needs_handback(text: str) -> str | None:
     """文字层不可用则返回原因，否则 None。"""
     # 文字层不足 MIN_CHARS_PER_PAGE 字符（无论有无零星词，如页码/水印）一律退回，防扫描件静默 ok
     if len(text.strip()) < MIN_CHARS_PER_PAGE:
@@ -56,10 +56,13 @@ def _needs_handback(text: str) -> str | None:
     return None
 
 
+_needs_handback = needs_handback  # 旧名保留：既有测试从这里导入
+
+
 def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[PageResult]:
     results: list[PageResult] = []
     for layout in extract_pages(pdf_bytes):
-        handback = _needs_handback(layout.text)
+        handback = needs_handback(layout.text)
         if handback is not None:
             results.append(PageResult(layout.page, "no_text_layer", "", layout.text, [], handback))
             continue

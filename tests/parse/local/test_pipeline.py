@@ -95,3 +95,10 @@ def test_needs_handback_decision() -> None:
     assert _needs_handback("短") == "文字层不足 40 字符"
     assert _needs_handback("正常文字" * 20 + "(cid:123)") == "文字层乱码（cid）"
     assert _needs_handback("正常文字" * 20) is None
+
+
+def test_needs_handback_is_public_and_the_old_name_is_an_alias() -> None:
+    from ragdemo.parse.local.pipeline import needs_handback
+
+    assert needs_handback is _needs_handback
+    assert needs_handback("正常文字" * 20) is None
