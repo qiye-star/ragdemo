@@ -40,6 +40,8 @@ allowlist:
   - host: api.deepseek.com          # 生成模型
     inject_credential: MODEL_API_KEY
     inject_as: bearer
+  - host: parse-paddle             # 自托管 PaddleOCR（解析分级路由计划 T5）：内部网络，无凭据
+    inject_credential: null
 
   # MCP 网关（windIFinD-mcp）：聚合 Tushare / 万得 / 同花顺 / AkShare / 财经新闻。
   # 它自己持有上游凭证，所以这里注入的是**访问网关本身**的凭据，不是数据商的。

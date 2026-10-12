@@ -104,6 +104,9 @@ services:
       - "127.0.0.1:8085:8085"
       # 2026-09-29：DeepSeek（表格描述等生成任务）反向代理端口，同一个模式，Bearer 由 addon 注入。
       - "127.0.0.1:8086:8086"
+      # 2026-10-12：自托管 PaddleOCR 反向代理端口（解析分级路由计划 T5），指向 internal 网络上的 parse-paddle。
+      - "127.0.0.1:8091:8091"
+    networks: [default, parse-internal]
     # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
     # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
     # /policy/addon.py`，这里只追加三个 --mode：显式声明 regular@8080（保留
@@ -131,6 +134,20 @@ services:
       - reverse:https://api-mcp.51ifind.com:8643@8085
       - --mode
       - reverse:https://api.deepseek.com@8086
+      - --mode
+      - reverse:http://parse-paddle:8000@8091
+    restart: unless-stopped
+
+  # --- 解析分级路由 T5：自托管 PaddleOCR（internal 网络：无出网路由，文档只进不出）-------
+  parse-paddle:
+    build:
+      context: ./parse-engines
+      dockerfile: paddle/Dockerfile
+    container_name: ragdemo-parse-paddle
+    environment:
+      PARSE_DEVICE: ${PARSE_DEVICE:-cpu}
+      PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT: "0"   # 见 paddle/Dockerfile 注释
+    networks: [parse-internal]   # 只在内部网络：无出网、不直接暴露端口
     restart: unless-stopped
 
   # --- 阶段 4.1：Dagster 常驻（webserver + daemon）----------------------------------------
@@ -210,3 +227,9 @@ services:
 volumes:
   pgdata:
   chromadata:
+
+networks:
+  default: {}
+  # 解析引擎专用：internal = 容器没有出网路由。文档只进不出（CLAUDE.md §0）。
+  parse-internal:
+    internal: true

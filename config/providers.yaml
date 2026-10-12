@@ -45,3 +45,36 @@ deepseek:
     max_attempts: 3
     backoff_base_s: 2.0
   cost_per_call_cents: 0
+
+parse_paddle:
+  # 自托管 PaddleOCR（PP-StructureV3）薄壳，解析分级路由计划 T5。引擎容器在 internal 网络、
+  # 运行期无外网、无密钥；这里的 base_url 只是占位，实际地址由 PARSE_PADDLE_BASE_URL 提供。
+  base_url: http://127.0.0.1:8091
+  rate_limit_qpm: 600
+  daily_quota: 200000
+  timeout_s: 180            # CPU 上单页可能数十秒；超时按 EngineUnavailable 降级
+  retry:
+    max_attempts: 2
+    backoff_base_s: 2.0
+  cost_per_call_cents: 0
+
+parse_mineru:
+  base_url: http://127.0.0.1:8092
+  rate_limit_qpm: 600
+  daily_quota: 200000
+  timeout_s: 300
+  retry:
+    max_attempts: 2
+    backoff_base_s: 2.0
+  cost_per_call_cents: 0
+
+parse_docling:
+  # 仅基准对照（中文偏弱），不进生产路由。
+  base_url: http://127.0.0.1:8093
+  rate_limit_qpm: 600
+  daily_quota: 200000
+  timeout_s: 300
+  retry:
+    max_attempts: 2
+    backoff_base_s: 2.0
+  cost_per_call_cents: 0
