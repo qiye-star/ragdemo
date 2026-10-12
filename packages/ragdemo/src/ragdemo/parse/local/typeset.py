@@ -6,7 +6,18 @@
   3. 在表格所在位置原样插入由坐标还原的表格 markdown。
 不做任何改写：列表标记原样保留，不换成 `-`；没有生成文字，也就不可能凭空多出或丢失字符。
 
-多栏版面的阅读顺序无法靠单栏规则确定，直接返回 `layout_unsupported` 交给上层降级。"""
+多栏版面的阅读顺序无法靠单栏规则确定，直接返回 `layout_unsupported` 交给上层降级。
+
+方向安全：含旋转 / 竖排文字、带 /Rotate、或文本矩阵从右向左的页一律 `layout_unsupported`
+（pdfplumber 会把这类文字的字序倒过来，数字变成 "12.5" → "5.21"，而自检基准同样是倒的）。
+
+Known limitations（v1 只用于实验，不得用于实验以外的场景）：
+- 两栏但基线错位（右栏整体偏移几个 pt）时，行聚类会把左右栏的行交错，行间空白带检测
+  （MULTICOLUMN_ROW_SHARE）抓不到，数字可能被接到错误的标签后面（见
+  tests/parse/local/test_deterministic.py::test_two_columns_with_offset_baselines_known_limitation）。
+  数字顺序检查（pipeline._self_check 的 ordered_numbers）能拦下一部分，但不能保证；
+  第二版计划（docs/10.12-plan/2026-10-12-确定性排版第二版计划.md T3）用整页纵向空白带处理。
+- 研报首页的侧栏 + 图表页同理可能产出 ok 但顺序错乱的文字。"""
 
 from __future__ import annotations
 
@@ -19,7 +30,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ragdemo.parse.local.layout import PageLayout, Word
+from ragdemo.parse.local.layout import PageLayout, Word, unsafe_orientation_reason
+from ragdemo.parse.local.number_closure import fold_text
 from ragdemo.parse.local.tables import (
     cluster_rows,
     column_edges,
@@ -90,7 +102,7 @@ _Item = _Line | _Table
 @dataclass
 class _PageItems:
     items: list[_Item]
-    rotated: list[Word]
+    orientation_reason: str | None  # 旋转 / 倒向文字：不排版
     multicolumn: bool
 
 
@@ -98,12 +110,25 @@ class _PageItems:
 _CJK_COMPATIBLE_PUNCT = "“”‘’—…·"  # 东亚宽度为 Ambiguous，但在中文排版里和汉字连排
 
 
+_NUMBER_SYNTAX = "-.%()"
+
+
 def _wide(ch: str) -> bool:
     return unicodedata.east_asian_width(ch) in ("W", "F") or ch in _CJK_COMPATIBLE_PUNCT
 
 
 def _no_space_between(a: str, b: str) -> bool:
-    """两侧都是中文字符（含全角标点）时不加空格；其余（拉丁、数字与中文相邻）保留一个空格。"""
+    """两侧都是中文字符（含全角标点）时不加空格；其余（拉丁、数字与中文相邻）保留一个空格。
+
+    任一侧折叠（全角 → 半角）后是数字或数字语法字符 `- . % ( )`
+    （逗号：仅紧邻数字时）时一律保留空格：
+    全角的 `－`、`５`、`．` 在 _wide 里算宽字符，丢掉空格会让 `－ ５．０` 变成 `－５．０`，
+    改变数字的符号（多重集合检查看不出来）。"""
+    fa, fb = fold_text(a), fold_text(b)
+    if any(c.isdigit() or c in _NUMBER_SYNTAX for c in (fa, fb)):
+        return False
+    if (fa == "," and fb.isdigit()) or (fb == "," and fa.isdigit()):
+        return False  # 逗号只有紧邻数字才是数字语法（千分位）；中文句中的逗号照常连排
     return _wide(a) and _wide(b)
 
 
@@ -167,7 +192,6 @@ def _is_multicolumn(rows: Sequence[Sequence[Word]], width: float, body_size: flo
 
 
 def _page_items(layout: PageLayout, body_size: float) -> _PageItems:
-    rotated = [w for w in layout.words if not w.upright]
     rows = cluster_rows([w for w in layout.words if w.upright])
     regions = find_table_regions(rows)
     region_of = {id(w): k for k, reg in enumerate(regions) for r in reg for w in r}
@@ -195,7 +219,11 @@ def _page_items(layout: PageLayout, body_size: float) -> _PageItems:
                 sum(w.mid_y for w in row) / len(row),
             )
         )
-    return _PageItems(items, rotated, _is_multicolumn(plain_rows, layout.width, body_size))
+    return _PageItems(
+        items,
+        unsafe_orientation_reason(layout),
+        _is_multicolumn(plain_rows, layout.width, body_size),
+    )
 
 
 def _body_pitch(all_items: Sequence[_PageItems], body_size: float) -> float:
@@ -310,8 +338,6 @@ def _render(pi: _PageItems, body_size: float, pitch: float, levels: dict[float, 
             para = _join_lines(para, it.text)
             para_last = it
     flush()
-    if pi.rotated:
-        blocks.append(" ".join(w.text for w in pi.rotated))
     return "\n\n".join(blocks)
 
 
@@ -324,7 +350,7 @@ def typeset_document(pages: Sequence[PageLayout]) -> list[TypesetResult]:
         {
             _bucket(it.size)
             for pi in per_page
-            if not pi.multicolumn
+            if not pi.multicolumn and pi.orientation_reason is None
             for it in pi.items
             if isinstance(it, _Line) and _heading_candidate(it, body)
         },
@@ -333,6 +359,9 @@ def typeset_document(pages: Sequence[PageLayout]) -> list[TypesetResult]:
     levels = {s: min(i + 1, MAX_HEADING_LEVEL) for i, s in enumerate(sizes)}
     out: list[TypesetResult] = []
     for pi in per_page:
+        if pi.orientation_reason is not None:
+            out.append(TypesetResult("layout_unsupported", "", pi.orientation_reason))
+            continue
         if pi.multicolumn:
             out.append(TypesetResult("layout_unsupported", "", "多栏版面"))
             continue

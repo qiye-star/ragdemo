@@ -160,3 +160,26 @@ def test_a_cid_page_is_handed_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "extract_pages", lambda _b: [layout])
     (page,) = parse_pages_deterministic(b"ignored")
     assert page.status == "no_text_layer" and "cid" in page.reason
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="已知限制（Opus 复核 I1，v1 不修）：两栏基线错位 7pt 时行聚类交错左右栏，"
+    "行间空白带检测抓不到，'growth of 25.0%' 被接到右栏句子里；第二版 T3 整页空白带处理",
+)
+def test_two_columns_with_offset_baselines_known_limitation() -> None:
+    left = ["Our chip segment revenue rose", "sharply this year, reaching",
+            "growth of 25.0% versus last", "year on strong server demand."]  # fmt: skip
+    right = ["The consumer segment fell as", "inventory digestion continued,",
+             "a decline of 8.0% versus last", "year amid weak handset sales."]  # fmt: skip
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=(600, 800))
+    c.setFont("Helvetica", 10)
+    for i in range(4):
+        c.drawString(50, 800 - 100 - i * 14, left[i])
+        c.drawString(330, 800 - 100 - 7 - i * 14, right[i])
+    c.showPage()
+    c.save()
+    (page,) = parse_pages_deterministic(buf.getvalue())
+    # 期望：要么退回，要么 25.0% 与 chip segment 在同一段
+    assert page.status != "ok" or "chip segment revenue rose sharply this year" in page.markdown

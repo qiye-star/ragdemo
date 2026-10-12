@@ -11,9 +11,9 @@ from typing import Literal, Protocol
 
 from ragdemo.parse.confidence import MIN_CHARS_PER_PAGE
 from ragdemo.parse.local.char_closure import char_violations
-from ragdemo.parse.local.decor import strip_decor
-from ragdemo.parse.local.layout import PageLayout, extract_pages
-from ragdemo.parse.local.number_closure import closure_violations
+from ragdemo.parse.local.decor import REASON_ROTATED, StrippedPage, strip_decor
+from ragdemo.parse.local.layout import PageLayout, extract_pages, unsafe_orientation_reason
+from ragdemo.parse.local.number_closure import closure_violations, ordered_numbers
 from ragdemo.parse.local.structure import ClosureFailed, StructureFailed
 from ragdemo.parse.local.tables import (
     cluster_rows,
@@ -65,6 +65,21 @@ def needs_handback(text: str) -> str | None:
 _needs_handback = needs_handback  # 旧名保留：既有测试从这里导入
 
 
+def orientation_handback(stripped: StrippedPage) -> str | None:
+    """旋转 / 倒向文字的页必须退回：pdfplumber 把这类文字的字序倒过来（"12.5" → "5.21"），
+    而自检基准（文字层）同样是倒的，闭合校验看不出来。
+
+    判据（任一）：剥离后仍有非直立词；页面带 /Rotate；有字符文本矩阵从右向左；
+    被剥离的旋转文字里含数字（只含字母的水印可以安全剥离）。"""
+    reason = unsafe_orientation_reason(stripped.layout)
+    if reason is not None:
+        return reason
+    for why, text in stripped.items:
+        if why == REASON_ROTATED and any(ch.isdigit() for ch in text):
+            return "被剥离的旋转文字含数字，字序不可信"
+    return None
+
+
 def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[PageResult]:
     pages = extract_pages(pdf_bytes)
     results: list[PageResult] = []
@@ -74,6 +89,9 @@ def parse_pages_local(pdf_bytes: bytes, structurer: PageStructurer) -> list[Page
         handback = needs_handback(layout.text)
         if handback is None and "(cid:" in original.text:  # 剥离前的文字层也要查乱码
             handback = "文字层乱码（cid）"
+        if handback is None:
+            # 本路径没有"字序不可信"专用状态，沿用会退回上层的 no_text_layer，原因里写明
+            handback = orientation_handback(stripped)
         if handback is not None:
             results.append(
                 PageResult(
@@ -118,6 +136,10 @@ def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list
     bad_chars = char_violations(markdown, source)
     lost_chars = char_violations(source, markdown)
     missing = [i for i, t in enumerate(tables, start=1) if re.sub(r"\s+", "", t) not in flat]
+    # 顺序检查：多重集合看不出符号错位、数字对调；输出里数字的出现顺序必须与文字层一致
+    reordered = not (bad_numbers or lost_numbers) and ordered_numbers(markdown) != ordered_numbers(
+        source
+    )
     reasons: list[str] = []
     if bad_numbers:
         reasons.append(f"排版后新增了数字：{bad_numbers}")
@@ -129,6 +151,8 @@ def _self_check(markdown: str, source: str, tables: Sequence[str]) -> tuple[list
         reasons.append(f"字符闭合失败：丢失{''.join(lost_chars[:20])}")
     if missing:
         reasons.append(f"表格未原样保留：第 {missing} 张")
+    if reordered:
+        reasons.append("数字顺序与文字层不一致（符号错位或行序被打乱）")
     return bad_numbers, "；".join(reasons)
 
 
@@ -141,13 +165,16 @@ def parse_layouts_deterministic(pages: Sequence[PageLayout]) -> list[PageResult]
     """同 parse_pages_deterministic，输入是已提取的版面（实验运行器要复用版面做指标）。"""
     stripped_pages = strip_decor(pages)
     handbacks: dict[int, str] = {}
+    unsupported: dict[int, str] = {}
     for i, (original, stripped) in enumerate(zip(pages, stripped_pages, strict=True)):
         reason = needs_handback(stripped.layout.text)
         if reason is None and "(cid:" in original.text:
             reason = "文字层乱码（cid）"
         if reason is not None:
             handbacks[i] = reason
-    live = [i for i in range(len(pages)) if i not in handbacks]
+        elif (orient := orientation_handback(stripped)) is not None:
+            unsupported[i] = orient
+    live = [i for i in range(len(pages)) if i not in handbacks and i not in unsupported]
     typeset = dict(
         zip(live, typeset_document([stripped_pages[i].layout for i in live]), strict=True)
     )
@@ -160,6 +187,19 @@ def parse_layouts_deterministic(pages: Sequence[PageLayout]) -> list[PageResult]
             results.append(
                 PageResult(
                     layout.page, "no_text_layer", "", layout.text, [], handbacks[i], stripped_text
+                )
+            )
+            continue
+        if i in unsupported:
+            results.append(
+                PageResult(
+                    layout.page,
+                    "layout_unsupported",
+                    "",
+                    layout.text,
+                    [],
+                    unsupported[i],
+                    stripped_text,
                 )
             )
             continue

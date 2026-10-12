@@ -93,8 +93,9 @@ def test_rows_inside_a_table_region_are_never_stripped() -> None:
         assert sum(1 for w in sp.layout.words if w.text.startswith("R")) == 9
 
 
-def test_pure_page_number_rows_in_the_footer_are_stripped_without_repetition() -> None:
-    for form in ["第 3 页", "3", "3 / 12", "- 3 -", "第 3 页 共 12 页"]:
+def test_page_number_rows_that_carry_their_own_page_index_are_stripped_without_repetition() -> None:
+    # 修复轮 1：只有"第 N 页 / N/M 且 N 等于本页页码"才无需重复；孤立整数需要"数值 - 页序号"恒定
+    for form in ["第 3 页", "3 / 12", "第 3 页 共 12 页"]:
         pages = [_page(i, [(BODY, 400)]) for i in range(1, 6)]
         pages[2] = _page(3, [(BODY, 400), (form, 770)])
         res = strip_decor(pages)
@@ -102,6 +103,23 @@ def test_pure_page_number_rows_in_the_footer_are_stripped_without_repetition() -
         assert form not in res[2].layout.text.split("\n")
         assert res[2].layout.text.endswith("this period")
         assert all(r.stripped_text == "" for k, r in enumerate(res) if k != 2)
+
+
+def test_a_lone_integer_in_the_footer_is_a_page_number_only_if_it_tracks_the_page_index() -> None:
+    for fmt in ["{}", "- {} -"]:
+        tracked = [_page(i, [(BODY, 400), (fmt.format(i + 2), 770)]) for i in range(1, 7)]
+        assert [sp.stripped_text for sp in strip_decor(tracked)] == [
+            fmt.format(i + 2) for i in range(1, 7)
+        ]
+        lone = [_page(i, [(BODY, 400)]) for i in range(1, 7)]
+        lone[2] = _page(3, [(BODY, 400), (fmt.format(3), 770)])
+        assert strip_decor(lone)[2].stripped_text == ""  # 只出现一页：不是页码，保留
+
+
+def test_a_page_token_with_the_wrong_page_index_is_data() -> None:
+    pages = [_page(i, [(BODY, 400)]) for i in range(1, 6)]
+    pages[2] = _page(3, [(BODY, 400), ("5 / 12", 770)])
+    assert strip_decor(pages)[2].stripped_text == ""
 
 
 def test_a_number_row_that_is_not_a_page_number_is_kept() -> None:

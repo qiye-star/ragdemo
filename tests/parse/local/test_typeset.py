@@ -252,12 +252,13 @@ def test_a_right_aligned_gap_outside_the_middle_of_the_page_is_not_a_gutter() ->
     assert typeset_document([page(*rows, *body_lines(250, 6))])[0].status == "ok"
 
 
-def test_rotated_words_are_kept_as_their_own_trailing_paragraph() -> None:
+def test_rotated_words_hand_the_page_back_instead_of_a_trailing_paragraph() -> None:
+    # 取代旧的"旋转字作为末段原样输出"：pdfplumber 会把旋转文字的字序倒过来，数字变成 5.21
     rot = Word("TIALNEDIFNOC", 10, 20, 100, 300, False, 10.0, False)
     p = page(*body_lines(100, 2))
     p = PageLayout(1, W, H, [*p.words, rot], p.text + "\nTIALNEDIFNOC")
     (res,) = typeset_document([p])
-    assert res.markdown.split("\n\n")[-1] == "TIALNEDIFNOC"
+    assert res.status == "layout_unsupported" and res.markdown == "" and "旋转" in res.reason
 
 
 def _content(text: str) -> Counter[str]:

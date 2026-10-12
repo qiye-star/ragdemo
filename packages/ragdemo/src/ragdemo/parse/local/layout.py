@@ -32,6 +32,10 @@ class PageLayout:
     height: float
     words: list[Word]
     text: str  # 文字层，按阅读顺序
+    rotation: int = 0  # 页面 /Rotate 属性（0 / 90 / 180 / 270）
+    rtl_text: bool = (
+        False  # 有字符的文本矩阵从右向左走（matrix[0] < 0），此时 pdfplumber 的词序是倒的
+    )
 
 
 _BOLD_MARKERS = ("bold", "black", "heavy", "semibold", "demibold", "-bd", "extrabold")
@@ -48,6 +52,23 @@ def _word_font(chars: list[dict[str, object]]) -> tuple[float, bool]:
     size = sizes.most_common(1)[0][0] if sizes else 0.0
     bold_n = sum(1 for c in chars if _is_bold_font(str(c.get("fontname", ""))))
     return size, bool(chars) and bold_n * 2 > len(chars)
+
+
+_RTL_EPSILON = 1e-6  # 浮点噪声（-1e-16）不算从右向左
+
+
+def unsafe_orientation_reason(layout: PageLayout) -> str | None:
+    """页面方向不是正常的横排从左到右时返回原因，否则 None。
+
+    pdfplumber 对旋转 / 倒向文字会把字符序倒过来（"12.5" → "5.21"），而本地链路的自检基准
+    （文字层）也是同样倒过来的，数字闭合与字符闭合都发现不了——所以这种页一律退回，不输出。"""
+    if layout.rotation % 360 != 0:
+        return f"页面带 /Rotate={layout.rotation} 旋转属性，文字层字序不可信"
+    if layout.rtl_text:
+        return "有文字从右向左排布（文本矩阵翻转），文字层字序不可信"
+    if any(not w.upright for w in layout.words):
+        return "页面含旋转 / 竖排文字，文字层字序不可信"
+    return None
 
 
 def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
@@ -70,7 +91,20 @@ def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
                 )
                 for w in p.extract_words(keep_blank_chars=False, return_chars=True)
             ]
+            rtl = any(
+                float(c["matrix"][0]) < -_RTL_EPSILON
+                for c in p.chars
+                if c.get("matrix") is not None
+            )
             pages.append(
-                PageLayout(i, float(p.width), float(p.height), words, p.extract_text() or "")
+                PageLayout(
+                    i,
+                    float(p.width),
+                    float(p.height),
+                    words,
+                    p.extract_text() or "",
+                    int(p.rotation or 0),
+                    rtl,
+                )
             )
     return pages
