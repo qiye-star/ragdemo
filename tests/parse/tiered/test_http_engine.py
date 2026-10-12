@@ -64,3 +64,13 @@ def test_server_errors_become_engine_unavailable() -> None:
     e, _ = _engine(HEALTH, status=503)
     with pytest.raises(EngineUnavailable):
         e.parse_page(b"%PDF-1.4", page_no=1)
+
+
+def test_markup_is_normalised_on_the_output_path() -> None:
+    md = (
+        '<div style="x"><html><body><table border="1">'
+        "<tr><td>91.2</td></tr></table></body></html></div>"
+    )
+    e, _ = _engine(HEALTH, {"ok": True, "markdown": md, "elapsed_ms": 1})
+    out = e.parse_page(b"%PDF-1.4", page_no=1)
+    assert out.markdown == "<table><tr><td>91.2</td></tr></table>"

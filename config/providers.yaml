@@ -54,7 +54,7 @@ parse_paddle:
   daily_quota: 200000
   timeout_s: 180            # CPU 上单页可能数十秒；超时按 EngineUnavailable 降级
   retry:
-    max_attempts: 2
+    max_attempts: 1
     backoff_base_s: 2.0
   cost_per_call_cents: 0
 

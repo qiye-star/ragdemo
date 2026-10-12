@@ -104,9 +104,6 @@ services:
       - "127.0.0.1:8085:8085"
       # 2026-09-29：DeepSeek（表格描述等生成任务）反向代理端口，同一个模式，Bearer 由 addon 注入。
       - "127.0.0.1:8086:8086"
-      # 2026-10-12：自托管 PaddleOCR 反向代理端口（解析分级路由计划 T5），指向 internal 网络上的 parse-paddle。
-      - "127.0.0.1:8091:8091"
-    networks: [default, parse-internal]
     # `command:` 只覆盖 Dockerfile ENTRYPOINT 之后的 CMD 部分，不是替换整条
     # 命令——ENTRYPOINT 已经是 `mitmdump --set block_global=false -s
     # /policy/addon.py`，这里只追加三个 --mode：显式声明 regular@8080（保留
@@ -134,8 +131,6 @@ services:
       - reverse:https://api-mcp.51ifind.com:8643@8085
       - --mode
       - reverse:https://api.deepseek.com@8086
-      - --mode
-      - reverse:http://parse-paddle:8000@8091
     restart: unless-stopped
 
   # --- 解析分级路由 T5：自托管 PaddleOCR（internal 网络：无出网路由，文档只进不出）-------
@@ -148,6 +143,19 @@ services:
       PARSE_DEVICE: ${PARSE_DEVICE:-cpu}
       PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT: "0"   # 见 paddle/Dockerfile 注释
     networks: [parse-internal]   # 只在内部网络：无出网、不直接暴露端口
+    restart: unless-stopped
+
+  # 无凭据网关：唯一同时在 default 与 parse-internal 的容器，只做 TCP 8091 -> parse-paddle:8000。
+  # egress-proxy 不在 parse-internal 上（否则 parse-paddle 能解析并使用它的正向代理与带凭据的
+  # 反代端口）。网关没有 env_file、没有环境变量、没有卷，不接触任何密钥。
+  parse-gateway:
+    image: alpine/socat:1.8.0.3
+    container_name: ragdemo-parse-gateway
+    command: ["TCP-LISTEN:8091,fork,reuseaddr", "TCP:parse-paddle:8000"]
+    ports:
+      - "127.0.0.1:${PARSE_GATEWAY_PORT:-8091}:8091"   # 仅回环
+    networks: [default, parse-internal]
+    depends_on: [parse-paddle]
     restart: unless-stopped
 
   # --- 阶段 4.1：Dagster 常驻（webserver + daemon）----------------------------------------

@@ -1,5 +1,5 @@
 {
-  "_provenance": "HAND-ASSEMBLED FROM REAL OUTPUT, NOT scripts/record_engine_fixture.py: health and the default-threshold response were recorded from the live container (paddleocr 3.7.0, cpu); the markdown below is copied verbatim from a real run of the same pipeline with layout_threshold=0.2 (docker run debug script, container image infra-parse-paddle) because Docker Desktop died before the final image could be rebuilt. elapsed_ms is from the earlier default-threshold recording. Re-record with scripts/record_engine_fixture.py once the rebuilt container is up.",
+  "_provenance": "Recorded by scripts/record_engine_fixture.py from ONE live response at http://127.0.0.1:18091 (paddle 3.7.0, cpu); health, markdown and elapsed_ms are all from the same run.",
   "health": {
     "engine": "paddle",
     "engine_version": "3.7.0",
@@ -8,6 +8,6 @@
   "parse": {
     "ok": true,
     "markdown": "Revenue grew steadily during the reporting period.\n\n\n<div style=\"text-align: center;\"><html><body><table border=\"1\"><tr><td>ltem</td><td>2024 2023</td></tr><tr><td>Revenue 91.2</td><td>60.1</td></tr><tr><td>Net profit</td><td>19.3 12.7</td></tr></table></body></html></div>\n",
-    "elapsed_ms": 29869
+    "elapsed_ms": 31519
   }
 }

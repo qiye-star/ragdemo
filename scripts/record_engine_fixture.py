@@ -24,7 +24,14 @@ def main(name: str, base_url: str) -> None:
         parse = client.post("/v1/parse-page", json=body).json()
     out = Path(f"tests/fixtures/parse_engines/{name}_table_sample.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"health": health, "parse": parse}, ensure_ascii=False, indent=2)
+    provenance = (
+        f"Recorded by scripts/record_engine_fixture.py from ONE live response at {base_url} "
+        f"({name} {health.get('engine_version')}, {health.get('device')}); health, markdown and "
+        "elapsed_ms are all from the same run."
+    )
+    payload = json.dumps(
+        {"_provenance": provenance, "health": health, "parse": parse}, ensure_ascii=False, indent=2
+    )
     out.write_text(payload, encoding="utf-8")
     print(out)
 

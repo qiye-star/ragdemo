@@ -5,7 +5,11 @@
   GET  /v1/health      -> {"engine", "engine_version", "device"}
   POST /v1/parse-page  {"pdf_base64", "page_no"}
                        -> {"ok": true, "markdown", "elapsed_ms"} | {"ok": false, "error"}
-内容层失败返回 200 + ok=false，不与传输层故障混在同一套状态码分类里。"""
+内容层失败返回 200 + ok=false，不与传输层故障混在同一套状态码分类里。
+
+EngineError 只在引擎自报失败（ok=false）或响应缺 markdown 字段时抛出。引擎成功返回空 markdown
+是合法响应：本适配器照常返回，由下游 verify 因文字层数字缺失而拒绝，不在这里判空。
+输出统一经 normalize_markup 去掉引擎的包装标签与展示性属性（不改任何文字内容）。"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import httpx
 from ragdemo.adapters.errors import AdapterError
 from ragdemo.adapters.http import HttpClient, ProviderConfig, RetryPolicy, TokenBucket
 from ragdemo.parse.tiered.engines import EngineError, EngineOutput, EngineUnavailable, strip_images
+from ragdemo.parse.tiered.markup_normalize import normalize_markup
 
 EngineName = Literal["paddle", "mineru", "docling"]
 HEALTH = "/v1/health"
@@ -49,7 +54,7 @@ class HttpPageEngine:
             ms = elapsed
         else:
             ms = int((time.perf_counter() - t0) * 1000)
-        return EngineOutput(strip_images(markdown), ms)
+        return EngineOutput(normalize_markup(strip_images(markdown)), ms)
 
 
 def engine_from_url(
