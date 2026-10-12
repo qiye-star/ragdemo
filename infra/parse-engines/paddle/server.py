@@ -19,7 +19,33 @@ DEVICE = os.environ.get("PARSE_DEVICE", "cpu")
 # 任何块之外而丢失（T5 冒烟实测，见 docs/10.12-plan/验收记录/T5-PaddleOCR适配器.md）。
 # 降到 0.2 以提高召回；是否过召回由 verify.py 的数字闭合校验兜底。
 LAYOUT_THRESHOLD = float(os.environ.get("PARSE_LAYOUT_THRESHOLD", "0.2"))
-PIPELINE = PPStructureV3(device=DEVICE, markdown_ignore_labels=[])
+
+
+def _flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return default if not value else value in {"1", "true", "yes", "on"}
+
+
+# 子流水线开关（构造参数名以容器内 PPStructureV3.__init__ 的签名为准）。默认关掉我们不用的重模型以省内存：
+# 文档方向分类、文档矫正、印章、图表、公式。保留版面检测、表格结构识别、文字检测/识别。
+# 环境变量 PARSE_USE_<名字>=1 可单独打开。
+SWITCHES = {
+    "use_doc_orientation_classify": _flag("PARSE_USE_DOC_ORIENTATION_CLASSIFY", False),
+    "use_doc_unwarping": _flag("PARSE_USE_DOC_UNWARPING", False),
+    "use_seal_recognition": _flag("PARSE_USE_SEAL_RECOGNITION", False),
+    "use_chart_recognition": _flag("PARSE_USE_CHART_RECOGNITION", False),
+    "use_formula_recognition": _flag("PARSE_USE_FORMULA_RECOGNITION", False),
+    "use_table_recognition": _flag("PARSE_USE_TABLE_RECOGNITION", True),
+}
+# 可选开关：未设置环境变量时不传（沿用库默认）。设 PARSE_USE_REGION_DETECTION=0 /
+# PARSE_USE_TEXTLINE_ORIENTATION=0 可关闭对应子模型。
+for _env, _arg in (
+    ("PARSE_USE_REGION_DETECTION", "use_region_detection"),
+    ("PARSE_USE_TEXTLINE_ORIENTATION", "use_textline_orientation"),
+):
+    if os.environ.get(_env):
+        SWITCHES[_arg] = _flag(_env, True)
+PIPELINE = PPStructureV3(device=DEVICE, markdown_ignore_labels=[], **SWITCHES)
 
 
 def parse(path: Path) -> str:

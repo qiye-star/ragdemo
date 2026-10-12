@@ -142,8 +142,13 @@ services:
     environment:
       PARSE_DEVICE: ${PARSE_DEVICE:-cpu}
       PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT: "0"   # 见 paddle/Dockerfile 注释
+      # 子模型开关（server.py 里的默认值：方向分类/矫正/印章/图表/公式全关）；留空 = 用默认
+      PARSE_USE_FORMULA_RECOGNITION: ${PARSE_USE_FORMULA_RECOGNITION:-}
+      PARSE_USE_TABLE_RECOGNITION: ${PARSE_USE_TABLE_RECOGNITION:-}
+      PARSE_USE_REGION_DETECTION: ${PARSE_USE_REGION_DETECTION:-}
+      PARSE_USE_TEXTLINE_ORIENTATION: ${PARSE_USE_TEXTLINE_ORIENTATION:-}
     networks: [parse-internal]   # 只在内部网络：无出网、不直接暴露端口
-    # Docker Desktop 虚拟机共 15.48 GiB，由十几个容器共享；本容器单页峰值实测约 12.6 GiB（无上限时）。
+    # Docker Desktop 虚拟机共 15.48 GiB，由十几个容器共享；本容器单页峰值：默认全开约 12.9 GiB，关掉 5 个子模型后约 11.6 GiB（修复轮 3）。
     # 设上限，且 memswap 与之相等（禁用 swap），避免把整台虚拟机拖进换页。并发必须恰好为 1。
     mem_limit: 13g
     memswap_limit: 13g
