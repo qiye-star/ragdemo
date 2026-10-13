@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -188,21 +189,71 @@ class _TableOutcome:
             self.stage, self.reason = stage, reason
 
 
-def _label_keys(metric_id: str) -> frozenset[str]:
+# T18 专用标签集：Wind 的 revenue_total 是"营业收入"（adapters/wind.py），不是"营业总收入"
+# （金融类公司两者不同）。被排除的标签只作"兄弟行"：同表两行都在且数值不同 → ambiguous。
+_EXCLUDED_LABELS: Final[Mapping[str, tuple[str, ...]]] = {"revenue_total": ("营业总收入",)}
+# 精度下限：容差不得超过"报表至少保留两位小数"对应的半个单位（见迁移 031 的 CHECK）。
+MIN_VALUE_TO_TOLERANCE: Final = Decimal(10)  # |表值| 至少是容差的 10 倍，否则分辨力不足
+_PAREN_QUALIFIER: Final = re.compile(r"[（(][^()（）]*[)）]")
+
+
+def max_tolerance(scale: Decimal) -> Decimal:
+    """与迁移 031 `fact_table_ref_tolerance_bounded` 同一公式：max(6000, 0.005 × 倍数)。"""
+    return max(FACT_TOLERANCE, Decimal("0.005") * scale)
+
+
+def _keys_of(labels: Sequence[str]) -> frozenset[str]:
     keys: set[str] = set()
-    for label in FACT_LABELS.get(metric_id, ()):
+    for label in labels:
         keys.add(normalise_name(label))
         keys.add(_statement_key(label))
     return frozenset(keys)
 
 
-def _label_rows(grid: TableGrid, keys: frozenset[str]) -> list[int]:
-    out: list[int] = []
+def _label_keys(metric_id: str) -> frozenset[str]:
+    excluded = _keys_of(_EXCLUDED_LABELS.get(metric_id, ()))
+    return _keys_of(FACT_LABELS.get(metric_id, ())) - excluded
+
+
+def _sibling_keys(metric_id: str) -> frozenset[str]:
+    return _keys_of(_EXCLUDED_LABELS.get(metric_id, ()))
+
+
+def _row_subject(grid: TableGrid, r: int) -> tuple[str, bool]:
+    """行的科目名与"是否带限定词"。只看叶子标签（最后一段）；叶子本身只是限定词
+    （"调整前"）时科目取上一层，并标记为带限定词。父标签匹配不会让子行变成科目行。"""
+    parts = [p for p in row_label(grid, r).split(_SEP) if p]
+    if not parts:
+        return "", False
+    leaf = parts[-1]
+    if not any(q in leaf for q in _QUALIFIERS):
+        return leaf, False
+    stripped = _PAREN_QUALIFIER.sub(
+        lambda m: "" if any(q in m.group(0) for q in _QUALIFIERS) else m.group(0), leaf
+    )
+    for q in _QUALIFIERS:
+        stripped = stripped.replace(q, "")
+    stripped = stripped.strip(" 、:：-—")
+    if not stripped and len(parts) >= 2:
+        stripped = parts[-2]
+    return stripped, True
+
+
+def _classify_rows(
+    grid: TableGrid, keys: frozenset[str], sibling: frozenset[str]
+) -> tuple[list[tuple[int, bool]], list[int]]:
+    primary: list[tuple[int, bool]] = []
+    siblings: list[int] = []
     for r in range(grid.header_rows, grid.n_rows):
-        parts = [p for p in row_label(grid, r).split(_SEP) if p]
-        if any(normalise_name(p) in keys or _statement_key(p) in keys for p in parts):
-            out.append(r)
-    return out
+        subject, qualified = _row_subject(grid, r)
+        if not subject:
+            continue
+        hit_keys = {normalise_name(subject), _statement_key(subject)}
+        if hit_keys & keys:
+            primary.append((r, qualified))
+        elif hit_keys & sibling and not qualified:
+            siblings.append(r)
+    return primary, siblings
 
 
 def _is_qualified(path: Sequence[str]) -> bool:
@@ -229,19 +280,70 @@ def _period_columns(
     return cols
 
 
+def _row_hit(
+    tv: TableView,
+    ctx: TableContext,
+    r: int,
+    cols: list[tuple[int, tuple[str, ...]]],
+    out: _TableOutcome,
+    *,
+    own_doc: bool,
+) -> _Hit | None:
+    """一行 + 唯一的期别列 → 命中；任何不确定记入 `out`（ambiguous / 阶段原因）并返回 None。"""
+    if len(cols) > 1:
+        out.ambiguous.append("duplicate_period_column")
+        return None
+    col, path = cols[0]
+    if _is_qualified(path):
+        out.ambiguous.append("qualified_period_column")
+        return None
+    cell = tv.grid.cell_at(r, col)
+    if cell is None or cell.row_span != 1 or cell.col_span != 1:
+        out.note("no_period_column", "cell_missing_or_merged")
+        return None
+    if cell.check != "match" or cell.page is None or cell.bbox is None:
+        out.note("no_period_column", f"cell_not_verified:{cell.check}")
+        return None
+    num = cell_value(cell.text)
+    if num is None or num.kind != "amount":
+        out.note("no_period_column", "cell_not_a_single_amount")
+        return None
+    unit = ctx.unit_for_cell(r, col, num.inline_unit)
+    if unit is None:
+        out.note("no_unit", "no_unit")
+        return None
+    scale = _scale_of(unit)
+    if scale is None:
+        out.note("no_unit", f"unit_not_convertible:{unit}")
+        return None
+    tol = tolerance_for(cell.text, unit)
+    value = num.value * scale
+    if tol > max_tolerance(scale):
+        out.ambiguous.append("insufficient_precision")  # 报表数字保留位数太少，容差撑得过大
+        return None
+    if abs(value) < MIN_VALUE_TO_TOLERANCE * tol:
+        out.ambiguous.append("value_below_resolution")  # 数值与容差同量级，"一致"没有信息量
+        return None
+    return _Hit(
+        tv, cell.row, cell.col, cell.page, value, tol, scale, _SEP.join(path), cell.check,
+        cell.text, own_doc=own_doc,
+    )  # fmt: skip
+
+
 def _eval_table(
     fact: FactRow,
     tv: TableView,
     *,
     keys: frozenset[str],
+    sibling: frozenset[str],
     target: PeriodRef,
     report_period: str,
     config: FactCheckConfig,
 ) -> _TableOutcome:
     out = _TableOutcome()
     grid = tv.grid
-    rows = _label_rows(grid, keys)
-    if not rows:
+    primary, siblings = _classify_rows(grid, keys, sibling)
+    if not primary:
         return out
     out.stage, out.reason = "no_period_column", "no_period_column"
     if report_period.endswith("Q1") and tv.calendar_fy is not True:
@@ -258,51 +360,31 @@ def _eval_table(
     ctx = TableContext(
         tv.caption, table_unit, "in_table", tv.currency, tv.column_units, tv.row_units
     )
-    for r in rows:
-        cols = _period_columns(tv, r, target)
-        if not cols:
+    own_doc = tv.doc_period == report_period
+    cand = [(r, q, cols) for r, q in primary if (cols := _period_columns(tv, r, target))]
+    if not cand:
+        return out
+    if any(q for _, q, _ in cand):
+        out.ambiguous.append("qualified_row_label")  # 调整前/调整后等行：不知道 Wind 用的是哪个
+        return out
+    if len(cand) > 1:
+        out.ambiguous.append("multiple_label_rows")  # 同表多行同科目：不挑一行
+        return out
+    r, _, cols = cand[0]
+    hit = _row_hit(tv, ctx, r, cols, out, own_doc=own_doc)
+    if hit is None:
+        return out
+    for sr in siblings:  # 例如营业总收入：与科目行不一致 → 口径含糊
+        scols = _period_columns(tv, sr, target)
+        if len(scols) != 1:
             continue
-        if len(cols) > 1:
-            out.ambiguous.append("duplicate_period_column")
-            continue
-        col, path = cols[0]
-        if _is_qualified(path):
-            out.ambiguous.append("qualified_period_column")
-            continue
-        cell = grid.cell_at(r, col)
-        if cell is None or cell.row_span != 1 or cell.col_span != 1:
-            out.note("no_period_column", "cell_missing_or_merged")
-            continue
-        if cell.check != "match" or cell.page is None or cell.bbox is None:
-            out.note("no_period_column", f"cell_not_verified:{cell.check}")
-            continue
-        num = cell_value(cell.text)
-        if num is None or num.kind != "amount":
-            out.note("no_period_column", "cell_not_a_single_amount")
-            continue
-        unit = ctx.unit_for_cell(r, col, num.inline_unit)
-        if unit is None:
-            out.note("no_unit", "no_unit")
-            continue
-        scale = _scale_of(unit)
-        if scale is None:
-            out.note("no_unit", f"unit_not_convertible:{unit}")
-            continue
-        out.hits.append(
-            _Hit(
-                tv,
-                cell.row,
-                cell.col,
-                cell.page,
-                num.value * scale,
-                tolerance_for(cell.text, unit),
-                scale,
-                _SEP.join(path),
-                cell.check,
-                cell.text,
-                own_doc=tv.doc_period == report_period,
-            )
-        )
+        sib = _row_hit(tv, ctx, sr, scols, _TableOutcome(), own_doc=own_doc)
+        if sib is not None and abs(sib.report_value - hit.report_value) > max(
+            sib.tolerance, hit.tolerance
+        ):
+            out.ambiguous.append("sibling_label_differs")
+            return out
+    out.hits.append(hit)
     return out
 
 
@@ -349,6 +431,7 @@ def match_fact(
         return _result(fact, "not_cny", f"fact_unit:{fact.unit}")
     kind = METRIC_KIND.get(fact.metric_id)
     keys = _label_keys(fact.metric_id)
+    sibling = _sibling_keys(fact.metric_id)
     if kind is None or not keys:
         return _result(fact, "no_row", "metric_not_supported")
     report_period = fact.period.replace("Q2", "H1")
@@ -358,31 +441,53 @@ def match_fact(
     parent_has_row = False
     for tv in tables:
         if _PARENT in (tv.caption or ""):
-            parent_has_row = parent_has_row or bool(_label_rows(tv.grid, keys))
+            parent_has_row = parent_has_row or bool(_classify_rows(tv.grid, keys, sibling)[0])
             continue
         outcomes.append(
             _eval_table(
-                fact, tv, keys=keys, target=target, report_period=report_period, config=config
+                fact,
+                tv,
+                keys=keys,
+                sibling=sibling,
+                target=target,
+                report_period=report_period,
+                config=config,
             )
         )
 
     hits = [h for o in outcomes for h in o.hits]
     ambiguous = sorted({a for o in outcomes for a in o.ambiguous})
     matched = [h for h in hits if abs(h.report_value - fact.value) <= h.tolerance]
+    own_hits = [h for h in hits if h.own_doc]
+    own_matched = [h for h in matched if h.own_doc]
+
+    def _best_match(pool: list[_Hit]) -> _Hit:
+        return min(pool, key=lambda h: (h.table.table_id, h.row, h.col))
+
+    if own_matched:
+        if len(own_matched) < len(own_hits):
+            return _result(fact, "ambiguous", "own_report_hits_disagree", _best_match(own_matched))
+        return _result(fact, "match", "", _best_match(own_matched))
+    if own_hits:
+        # 本期报告里对不上：若别处（后续报告的比较列）对得上，正是"Wind 值是追溯调整后的"的形态。
+        if matched:
+            return _result(
+                fact, "ambiguous", "own_report_mismatch_comparative_match", _best_match(matched)
+            )
+        if ambiguous:
+            return _result(fact, "ambiguous", ambiguous[0])
+        best = min(own_hits, key=lambda h: (abs(h.report_value - fact.value), h.table.table_id))
+        return _result(fact, "mismatch", "own_document", best)
     if matched:
-        best = min(matched, key=lambda h: (not h.own_doc, h.table.table_id, h.row, h.col))
-        return _result(fact, "match", "" if best.own_doc else "comparative_column", best)
+        if len(matched) < len(hits):
+            return _result(fact, "ambiguous", "comparative_hits_disagree", _best_match(matched))
+        return _result(fact, "match", "comparative_column", _best_match(matched))
     if ambiguous:
         return _result(fact, "ambiguous", ambiguous[0])
     if hits:
-        best = min(
-            hits,
-            key=lambda h: (not h.own_doc, abs(h.report_value - fact.value), h.table.table_id),
-        )
-        if not best.own_doc:
-            # 只在别的期别的报告里作为比较列出现：该列可能是追溯调整后的数，不当作"不一致"落库。
-            return _result(fact, "ambiguous", "comparative_mismatch_possible_restatement", best)
-        return _result(fact, "mismatch", "own_document", best)
+        # 只在别的期别的报告里作为比较列出现：该列可能是追溯调整后的数，不当作"不一致"落库。
+        best = min(hits, key=lambda h: (abs(h.report_value - fact.value), h.table.table_id))
+        return _result(fact, "ambiguous", "comparative_mismatch_possible_restatement", best)
     if outcomes:
         worst = max(outcomes, key=lambda o: _STAGE_RANK[o.stage])
         if worst.stage != "no_row" or not parent_has_row:
@@ -445,11 +550,11 @@ _INSERT_SQL = """
 INSERT INTO core.fact_table_ref (
   fact_id, table_id, block_id, cell_row, cell_col, page, entity_id, metric_id, period,
   report_value, fact_value, tolerance, unit_scale, period_label, verdict, check_version,
-  valid_from, known_at, source, source_ref, ingest_run_id)
+  valid_from, known_at, owner_tenant, owner_user, source, source_ref, ingest_run_id)
 SELECT f.fact_id, t.table_id, t.block_id, %(row)s, %(col)s, %(page)s, f.entity_id, f.metric_id,
        f.period, %(report_value)s, f.value, %(tolerance)s, %(unit_scale)s, %(label)s, %(verdict)s,
-       %(version)s, f.valid_from, GREATEST(f.known_at, t.known_at), 'table_check', %(source_ref)s,
-       %(run_id)s
+       %(version)s, f.valid_from, GREATEST(f.known_at, t.known_at), t.owner_tenant, t.owner_user,
+       'table_check', %(source_ref)s, %(run_id)s
   FROM core.fin_fact f, core.doc_table t
  WHERE f.fact_id = %(fact_id)s AND t.table_id = %(table_id)s AND t.superseded_at IS NULL
 """
@@ -495,10 +600,26 @@ def load_table_views(conn: psycopg.Connection[Any]) -> dict[str, list[TableView]
 _RefKey = tuple[int, int, int, int, str, str, Decimal]
 
 
+def _supersede_refs_of_dead_facts(conn: psycopg.Connection[Any]) -> int:
+    """事实已被取代（Wind 更正）而引用还 live 的：引用随事实一起失效。
+
+    取代时刻优先取事实被取代的时刻（as_of 回放时旧事实与它的佐证同时消失）；事实被取代时
+    引用还不存在（superseded_at <= 引用 known_at）则用 now()，满足 superseded_at > known_at。
+    """
+    cur = conn.execute(
+        "UPDATE core.fact_table_ref r SET superseded_at ="
+        " CASE WHEN f.superseded_at > r.known_at THEN f.superseded_at ELSE now() END"
+        " FROM core.fin_fact f WHERE f.fact_id = r.fact_id AND f.superseded_at IS NOT NULL"
+        " AND r.superseded_at IS NULL"
+    )
+    return cur.rowcount
+
+
 def _write_results(
     conn: psycopg.Connection[Any], results: Sequence[FactCellMatch], *, ingest_run_id: str
 ) -> tuple[int, int]:
     """幂等写入：某事实现行引用集合 == 期望集合（含 check_version）→ 跳过；否则整体取代再插入。"""
+    superseded_dead = _supersede_refs_of_dead_facts(conn)
     live: dict[int, set[_RefKey]] = {}
     for fid, tid, bid, row, col, ver, verdict, fval in conn.execute(
         "SELECT fact_id, table_id, block_id, cell_row, cell_col, check_version, verdict,"
@@ -507,7 +628,7 @@ def _write_results(
         live.setdefault(int(fid), set()).add(
             (int(tid), int(bid), int(row), int(col), str(ver), str(verdict), Decimal(fval))
         )
-    written = superseded = 0
+    written, superseded = 0, superseded_dead
     for res in results:
         want: set[_RefKey] = set()
         if res.verdict in WRITTEN_VERDICTS:

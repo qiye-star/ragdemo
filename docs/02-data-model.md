@@ -408,7 +408,10 @@ CREATE INDEX provider_snapshot_params ON core.provider_snapshot USING gin (param
 - `report_value` 是 Python 按单元格数字 × 单位倍数换算出的元值；
   `CHECK ((verdict = 'match') = (abs(report_value - fact_value) <= tolerance))` 让"差值超容差却标
   match"在数据库层不可能写入。
-- `known_at = GREATEST(fin_fact.known_at, doc_table.known_at)`；只引用公共表，不需要 RLS。
+- `known_at = GREATEST(fin_fact.known_at, doc_table.known_at)`；只引用公共表：`owner_tenant / owner_user`
+  从 `doc_table` 复制并由 `CHECK public_only` 强制为 NULL，所以不需要 RLS。
+- `CHECK tolerance <= GREATEST(6000, 0.005 × unit_scale)`（报表至少两位小数）；`match` 行必须有 `page`；
+  事实被取代时其引用同时被取代。
 - 同 `(fact_id, block_id, cell_row, cell_col)` 任一时刻最多一行 live；`check_version`
   （`factcell:vN`）变化或结论变化时旧行 `superseded_at`、插新行。
 - 登记在 `core.bitemporal_registry`，有 `asof.fact_table_ref` 视图。写入与匹配规则见

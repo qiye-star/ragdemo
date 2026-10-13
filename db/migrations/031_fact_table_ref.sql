@@ -5,7 +5,10 @@
 -- report_value 是 Python 按单元格数字 × 单位倍数换算出的元值；verdict 由数据库约束与数值关系强制一致，
 -- 任何路径都不可能写入一条"差值超容差却标 match"的行。
 -- known_at = GREATEST(fin_fact.known_at, doc_table.known_at)：两者都可知之后，佐证才可知。
--- 只引用公共表（写入方过滤 owner_* IS NULL），因此不需要 RLS。
+-- 只引用公共表：写入方过滤 owner_* IS NULL，且 owner_tenant / owner_user 从 doc_table 复制进来并由
+-- CHECK fact_table_ref_public_only 强制为 NULL，私有表的引用在数据库层写不进来，所以不需要 RLS。
+-- 容差上界：tolerance <= GREATEST(6000, 0.005 * unit_scale)，即报表数字至少保留两位小数（半个末位 =
+-- 0.005 × 倍数）；若用 0.5 × 倍数则整数亿元格（容差 5000 万）恰好在界上，约束形同虚设。match 行必须有页码。
 -- 只有 match / mismatch 落库；ambiguous / no_row / no_period_column / no_unit / not_cny 只在校验报告里出现。
 
 CREATE TABLE core.fact_table_ref (
@@ -29,13 +32,19 @@ CREATE TABLE core.fact_table_ref (
   valid_from     date    NOT NULL,
   known_at       timestamptz NOT NULL,
   superseded_at  timestamptz,
+  owner_tenant   text,
+  owner_user     text,
   source         text    NOT NULL,
   source_ref     text,
   ingest_run_id  text    NOT NULL,
   ingested_at    timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT fact_table_ref_time_order CHECK (superseded_at IS NULL OR superseded_at > known_at),
   CONSTRAINT fact_table_ref_verdict_is_arithmetic
-    CHECK ((verdict = 'match') = (abs(report_value - fact_value) <= tolerance))
+    CHECK ((verdict = 'match') = (abs(report_value - fact_value) <= tolerance)),
+  CONSTRAINT fact_table_ref_tolerance_bounded
+    CHECK (tolerance <= GREATEST(6000, 0.005 * unit_scale)),
+  CONSTRAINT fact_table_ref_match_has_page CHECK (verdict <> 'match' OR page IS NOT NULL),
+  CONSTRAINT fact_table_ref_public_only CHECK (owner_tenant IS NULL AND owner_user IS NULL)
 );
 
 CREATE UNIQUE INDEX fact_table_ref_live_uk

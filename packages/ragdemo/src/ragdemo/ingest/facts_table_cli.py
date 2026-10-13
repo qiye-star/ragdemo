@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
+from collections import Counter
+from datetime import UTC, datetime
 
 import click
 import psycopg
@@ -25,6 +28,34 @@ def _dsn() -> str:
     if not dsn:
         raise click.ClickException("环境变量 RAGDEMO_DSN 未设置（参见 .env.example）")
     return dsn
+
+
+def _log(event: str, *, run_id: str, as_of: str, entity_id: str | None, **fields: object) -> None:
+    """结构化日志（JSON 行，stderr）：必含 run_id / as_of / entity_id（CLAUDE.md §3）。
+
+    `as_of` 是本次校验运行的时刻（这是运维作业，不是对外查询；事实用自己的 known_at 过滤）。
+    """
+    record = {"event": event, "run_id": run_id, "as_of": as_of, "entity_id": entity_id, **fields}
+    click.echo(json.dumps(record, ensure_ascii=False, default=str), err=True)
+
+
+def _log_report(report: FactCheckReport, *, run_id: str, as_of: str, write: bool) -> None:
+    per_entity: dict[str, Counter[str]] = {}
+    for r in report.results:
+        per_entity.setdefault(r.entity_id, Counter())[r.verdict] += 1
+    for entity_id, counts in sorted(per_entity.items()):
+        _log("fact_table_check.entity", run_id=run_id, as_of=as_of, entity_id=entity_id, **counts)
+    _log(
+        "fact_table_check.run",
+        run_id=run_id,
+        as_of=as_of,
+        entity_id=None,
+        facts=len(report.results),
+        write=write,
+        written=report.written,
+        superseded=report.superseded,
+        **report.counts(),
+    )
 
 
 def _echo_report(report: FactCheckReport, *, limit: int) -> None:
@@ -68,15 +99,18 @@ def _echo_report(report: FactCheckReport, *, limit: int) -> None:
 def table_check_command(strict_unit: bool, show: int, compare_legacy: bool, yes: bool) -> None:
     """逐格校验 Wind 事实与公告表格单元格（只写 core.fact_table_ref，不改任何事实）。"""
     config = FactCheckConfig(allow_preceding_unit=not strict_unit)
+    run_id = f"cli:facts-table-check:{uuid.uuid4().hex[:8]}"
+    as_of = datetime.now(UTC).isoformat()
     with psycopg.connect(_dsn()) as conn:
         if not yes:
             conn.read_only = True
         report = run_fact_table_check(
             conn,
-            ingest_run_id=f"cli:facts-table-check:{uuid.uuid4().hex[:8]}",
+            ingest_run_id=run_id,
             write=yes,
             config=config,
         )
+        _log_report(report, run_id=run_id, as_of=as_of, write=yes)
         _echo_report(report, limit=show)
         if compare_legacy:
             cmp = compare_with_legacy(conn, report.results)

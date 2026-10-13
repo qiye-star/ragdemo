@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import psycopg
@@ -103,10 +104,10 @@ def test_verdict_is_arithmetic_and_cannot_be_forged(conn: psycopg.Connection) ->
     fact_id = _add_fact(conn, value="123400000")
     table_id, block_id = _add_table(conn)
     cols = (
-        "INSERT INTO core.fact_table_ref (fact_id, table_id, block_id, cell_row, cell_col,"
+        "INSERT INTO core.fact_table_ref (fact_id, table_id, block_id, cell_row, cell_col, page,"
         " entity_id, metric_id, period, report_value, fact_value, tolerance, unit_scale,"
         " period_label, verdict, check_version, valid_from, known_at, source, ingest_run_id)"
-        " VALUES (%s, %s, %s, 1, 1, 'CN.688256', 'revenue_total', '2024Q3', %s, 123400000,"
+        " VALUES (%s, %s, %s, 1, 1, 1, 'CN.688256', 'revenue_total', '2024Q3', %s, 123400000,"
         " 6000, 10000, 'x', %s, 'v', '2024-07-01', %s, 'table_check', 'r')"
     )
     with pytest.raises(psycopg.errors.CheckViolation):
@@ -117,7 +118,7 @@ def test_verdict_is_arithmetic_and_cannot_be_forged(conn: psycopg.Connection) ->
     conn.rollback()
     conn.execute(cols, (fact_id, table_id, block_id, 123500000, "mismatch", FACT_KNOWN))
     conn.execute(
-        cols.replace("1, 1,", "2, 2,"),
+        cols.replace("1, 1, 1,", "2, 2, 1,"),
         (fact_id, table_id, block_id, 123405999, "match", FACT_KNOWN),
     )
     conn.commit()
@@ -198,8 +199,83 @@ def test_cli_dry_run_writes_nothing_and_yes_writes(
     res = CliRunner().invoke(facts_group, ["table-check"])
     assert res.exit_code == 0, res.output
     assert "[dry run]" in res.output and "match: 1" in res.output
+    logs = [json.loads(ln) for ln in res.output.splitlines() if ln.startswith("{")]
+    assert logs and all({"run_id", "as_of", "entity_id", "event"} <= set(r) for r in logs)
+    assert {r["entity_id"] for r in logs} == {"CN.688256", None}
     assert conn.execute("SELECT count(*) FROM core.fact_table_ref").fetchone() == (0,)
     res = CliRunner().invoke(facts_group, ["table-check", "--yes"])
     assert res.exit_code == 0, res.output
     assert "写入 1 行" in res.output
     assert conn.execute("SELECT count(*) FROM core.fact_table_ref").fetchone() == (1,)
+
+
+_RAW = (
+    "INSERT INTO core.fact_table_ref (fact_id, table_id, block_id, cell_row, cell_col, page,"
+    " entity_id, metric_id, period, report_value, fact_value, tolerance, unit_scale,"
+    " period_label, verdict, check_version, valid_from, known_at, owner_user, source,"
+    " ingest_run_id) VALUES (%s, %s, %s, 1, 1, %s, 'CN.688256', 'revenue_total', '2024Q3',"
+    " 100, 100, %s, %s, 'x', 'match', 'v', '2024-07-01', %s, %s, 'table_check', 'r')"
+)
+
+
+@pytest.mark.db
+def test_tolerance_is_bounded_by_two_decimal_precision(conn: psycopg.Connection) -> None:
+    fact_id = _add_fact(conn, value="123400000")
+    table_id, block_id = _add_table(conn)
+
+    def ins(tol: int, scale: int) -> None:
+        conn.execute(_RAW, (fact_id, table_id, block_id, 1, tol, scale, FACT_KNOWN, None))
+
+    # 整数亿元格：容差 5000 万 > max(6000, 0.005 × 1e8 = 50 万)
+    with pytest.raises(psycopg.errors.CheckViolation, match="tolerance_bounded"):
+        ins(50_000_000, 100_000_000)
+    conn.rollback()
+    # 6000 的下限在小倍数上仍可用；两位小数的亿元格（50 万）在界上
+    ins(6000, 1)
+    conn.execute("UPDATE core.fact_table_ref SET superseded_at = now()")
+    ins(500_000, 100_000_000)
+    with pytest.raises(psycopg.errors.CheckViolation, match="tolerance_bounded"):
+        conn.execute(
+            "UPDATE core.fact_table_ref SET tolerance = 500001 WHERE superseded_at IS NULL"
+        )
+    conn.rollback()
+
+
+@pytest.mark.db
+def test_match_row_requires_a_page(conn: psycopg.Connection) -> None:
+    fact_id = _add_fact(conn, value="123400000")
+    table_id, block_id = _add_table(conn)
+    with pytest.raises(psycopg.errors.CheckViolation, match="match_has_page"):
+        conn.execute(_RAW, (fact_id, table_id, block_id, None, 6000, 10000, FACT_KNOWN, None))
+    conn.rollback()
+
+
+@pytest.mark.db
+def test_private_owner_rows_cannot_be_written(conn: psycopg.Connection) -> None:
+    fact_id = _add_fact(conn, value="123400000")
+    table_id, block_id = _add_table(conn)
+    with pytest.raises(psycopg.errors.CheckViolation, match="public_only"):
+        conn.execute(_RAW, (fact_id, table_id, block_id, 1, 6000, 10000, FACT_KNOWN, "u1"))
+    conn.rollback()
+
+
+@pytest.mark.db
+def test_refs_of_a_superseded_fact_are_superseded_with_it(conn: psycopg.Connection) -> None:
+    f1 = _add_fact(conn, value="123400000")
+    _add_table(conn)
+    run_fact_table_check(conn, ingest_run_id="t", write=True)
+    # Wind 更正：旧事实 2024-11-30 被取代，新事实值对不上表格
+    conn.execute("UPDATE core.fin_fact SET superseded_at = '2024-11-30' WHERE fact_id = %s", (f1,))
+    conn.commit()
+    f2 = _add_fact(conn, value="999999999")
+    report = run_fact_table_check(conn, ingest_run_id="t", write=True)
+    assert report.superseded == 1 and report.written == 1
+    with as_of_session(conn, datetime(2025, 6, 1, tzinfo=UTC)) as s:
+        rows = s.execute("SELECT fact_id, verdict FROM asof.fact_table_ref").fetchall()
+    assert rows == [(f2, "mismatch")]
+    # 取代时刻 = 事实被取代的时刻：更正之前旧引用仍可见
+    with as_of_session(conn, datetime(2024, 11, 15, tzinfo=UTC)) as s:
+        rows = s.execute("SELECT fact_id, verdict FROM asof.fact_table_ref").fetchall()
+    assert (f1, "match") in rows
+    again = run_fact_table_check(conn, ingest_run_id="t", write=True)
+    assert (again.written, again.superseded) == (0, 0)
