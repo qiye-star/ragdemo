@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.filters import is_boilerplate
+from ragdemo.tables.grid import TableAttachment
 
 _SENTENCE_ENDERS = "。！？；\n"
 
@@ -30,6 +31,8 @@ class Chunk:
     # 表格块的结构化形态（双形态之二），原样从 NormalizedBlock.table_html
     # 带过来；非表格块恒为 None。见 adapters/announcements.py 的字段注释。
     table_html: str | None = None
+    # 表格块的网格附件，原样从 NormalizedBlock.table 带过来；不进切块指纹。
+    table: TableAttachment | None = None
 
 
 def _last_sentence_boundary(text: str, lo: int, hi: int) -> int | None:
@@ -205,6 +208,7 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
                     bbox=block.bbox,
                     is_leaf=True,
                     table_html=block.table_html,
+                    table=block.table,
                 )
             )
             ordinal += 1

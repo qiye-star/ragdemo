@@ -279,3 +279,14 @@ def test_merging_can_be_switched_off_and_changes_the_chunking_version() -> None:
     assert len(chunk_document(_doc(blocks), off)) == 2
     assert off.version != ChunkConfig().version  # 评测集绑在切块结果上，版本必须能区分
     assert "v2" in ChunkConfig().version
+
+
+def test_table_chunk_carries_the_same_attachment_object() -> None:
+    from ragdemo.tables.grid import GridCell, TableAttachment, TableGrid
+
+    att = TableAttachment(grid=TableGrid(cells=(GridCell(0, 0, 1, 1, "a"),), source_engine="t"))
+    block = NormalizedBlock(0, "table", "S", "| a |\n|---|", page=1, table=att)
+    (chunk,) = chunk_document(_doc([block]), CFG)
+    assert chunk.table is att
+    # table 不进切块指纹
+    assert ChunkConfig().version == CFG.version

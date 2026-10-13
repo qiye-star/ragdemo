@@ -6,7 +6,10 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import cached_property
-from typing import Any, Final, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_args
+
+if TYPE_CHECKING:  # T6 creates ragdemo.tables.context; drop the ignore then
+    from ragdemo.tables.context import TableContext  # type: ignore[import-untyped, unused-ignore]
 
 JSON_SCHEMA_VERSION: Final = 1
 GRID_VERSION: Final = f"tablegrid:v{JSON_SCHEMA_VERSION}"
@@ -242,3 +245,11 @@ def remap_grid_pages(grid: TableGrid, mapping: Mapping[int, int]) -> TableGrid:
             replace(c, page=None if c.page is None else mapping[c.page]) for c in grid.cells
         ),
     )
+
+
+@dataclass(frozen=True)
+class TableAttachment:
+    """随表格块流向 Chunk 的结构化附件（网格 + 可选上下文，上下文由 T6 填充）。"""
+
+    grid: TableGrid
+    context: TableContext | None = None

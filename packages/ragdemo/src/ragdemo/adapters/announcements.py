@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from ragdemo.adapters.base import FetchContext, RawResponse, require_aware
+from ragdemo.tables.grid import TableAttachment
 
 BLOCK_TYPES = frozenset({"paragraph", "table", "figure", "title"})
 
@@ -30,6 +31,8 @@ class NormalizedBlock:
     # 那一半）。只有 block_type == "table" 且供应商给出了 cells[] 时才非空；
     # 供路径 C 的加总校验用，不参与向量检索（docs/05-document-pipeline.md §2.3）。
     table_html: str | None = None
+    # 表格块的引擎无关网格（T5）；与 table_html 并存，不影响 content。
+    table: TableAttachment | None = None
 
     def __post_init__(self) -> None:
         if self.block_type not in BLOCK_TYPES:

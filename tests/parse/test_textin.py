@@ -453,3 +453,31 @@ def test_budget_reports_exhaustion() -> None:
     assert budget.exhausted is False
     budget.charge(6)
     assert budget.exhausted is True
+
+
+from tests.tables.test_textin_cells import ITEM as ITEM_FOR_GRID  # noqa: E402
+
+
+def test_blocks_from_detail_attaches_grid_with_engine_and_locator() -> None:
+    from ragdemo.parse.textin import blocks_from_detail, table_markdown
+
+    blocks = blocks_from_detail(
+        [ITEM_FOR_GRID],
+        page_dims={1: (1190, 1683), 2: (1190, 1683)},
+        engine="textin:3.29.7.1+fp",
+        json_ref="parse/textin/h/fp.json",
+    )
+    (table,) = [b for b in blocks if b.block_type == "table"]
+    assert table.table is not None
+    assert table.table.grid.source_engine == "textin:3.29.7.1+fp"
+    assert table.table.grid.provider_ref == "parse/textin/h/fp.json#page_id=1&paragraph_id=15"
+    assert table.content == table_markdown(ITEM_FOR_GRID["cells"])
+
+
+def test_blocks_from_detail_default_args_keep_old_behavior() -> None:
+    from ragdemo.parse.textin import blocks_from_detail
+
+    blocks = blocks_from_detail([ITEM_FOR_GRID], page_dims={})
+    (table,) = [b for b in blocks if b.block_type == "table"]
+    assert table.table is not None and table.table.grid.source_engine == "textin"
+    assert table.bbox is None

@@ -25,6 +25,8 @@ from typing import Any, Final, NoReturn, Protocol, runtime_checkable
 import httpx
 
 from ragdemo.adapters.announcements import NormalizedBlock
+from ragdemo.tables.grid import TableAttachment
+from ragdemo.tables.textin_cells import grid_from_textin_item, textin_locator
 from ragdemo_core.blob import BlobStore
 
 ENDPOINT: Final = "/ai/service/v1/pdf_to_markdown"
@@ -276,6 +278,8 @@ def blocks_from_detail(
     detail: Sequence[Mapping[str, Any]],
     *,
     page_dims: Mapping[int, tuple[int, int]],
+    engine: str = "textin",
+    json_ref: str | None = None,
 ) -> list[NormalizedBlock]:
     offset = _page_offset(detail)
     stack: list[str] = []
@@ -296,10 +300,19 @@ def blocks_from_detail(
         text = str(item.get("text", "")).strip()
 
         table_html: str | None = None
+        table: TableAttachment | None = None
         if kind == "table":
             cells = item.get("cells") or []
             block_type, content = "table", table_markdown(cells)
             table_html = table_html_from_cells(cells) or None
+            grid = grid_from_textin_item(
+                item,
+                page_offset=offset,
+                page_dims=page_dims,
+                engine=engine,
+                provider_ref=textin_locator(json_ref, item),
+            )
+            table = TableAttachment(grid=grid) if grid is not None else None
         elif kind == "image":
             block_type, content = "figure", text
         elif level >= 0:
@@ -330,6 +343,7 @@ def blocks_from_detail(
                 bbox=_bbox(item.get("position"), page_dims.get(page) if page else None),
                 level=level if level >= 0 else None,
                 table_html=table_html,
+                table=table,
             )
         )
     return blocks
@@ -517,8 +531,12 @@ class TextInParser:
         result = payload.get("result") or {}
         detail = result.get("detail") or []
         offset = _page_offset(detail)
+        engine_version = f"textin:{payload.get('version', 'unknown')}+{self.param_fp}"
         blocks = blocks_from_detail(
-            detail, page_dims=page_dims_from_metrics(payload.get("metrics"), offset)
+            detail,
+            page_dims=page_dims_from_metrics(payload.get("metrics"), offset),
+            engine=engine_version,
+            json_ref=json_key,
         )
         page_count = int(result.get("total_page_number") or 0)
 
@@ -531,7 +549,7 @@ class TextInParser:
         return ParseResult(
             blocks=blocks,
             page_count=page_count,
-            engine_version=f"textin:{payload.get('version', 'unknown')}+{self.param_fp}",
+            engine_version=engine_version,
             markdown=str(result.get("markdown", "")),
             json_ref=json_key,
             md_ref=md_key,

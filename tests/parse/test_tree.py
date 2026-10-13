@@ -226,3 +226,14 @@ def test_parent_page_is_none_when_no_leaf_has_a_page() -> None:
     tree = build_tree(members)
     parent = next(c for c in tree if not c.is_leaf)
     assert parent.page is None
+
+
+def test_table_attachment_survives_build_tree() -> None:
+    from dataclasses import replace
+
+    from ragdemo.tables.grid import GridCell, TableAttachment, TableGrid
+
+    att = TableAttachment(grid=TableGrid(cells=(GridCell(0, 0, 1, 1, "a"),), source_engine="t"))
+    leaf = replace(_leaf(0, "第一节", "| a |", block_type="table"), table=att)
+    (table,) = [c for c in build_tree([leaf]) if c.block_type == "table"]
+    assert table.table is att
