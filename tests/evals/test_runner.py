@@ -106,3 +106,22 @@ def test_author_prefix_restricts_the_run_to_human_or_auto_cases(
     assert human.n_cases == 1
     with pytest.raises(ValueError):  # 没有 auto: 用例时不能静默给出满分
         run_retrieval_eval(corpus, service, git_sha="x", config=cfg, author_prefix="auto:")
+
+
+@pytest.mark.db
+def test_eval_reports_per_group_with_table_gold(corpus: psycopg.Connection) -> None:
+    table = corpus.execute(
+        "SELECT block_id FROM core.doc_block WHERE block_type = 'table' LIMIT 1"
+    ).fetchone()
+    assert table is not None
+    corpus.execute(
+        "INSERT INTO evals.eval_retrieval (question, as_of, gold_block_ids, difficulty, author)"
+        " VALUES ('寒武纪智能计算分部收入是多少？', %s, %s, 'easy', 'auto:test:v1')",
+        (datetime(2024, 12, 31, tzinfo=UTC), [int(table[0])]),
+    )
+    corpus.commit()
+    service = RetrievalService(corpus, MockEmbedder(), MockReranker())
+    result = run_retrieval_eval(corpus, service, git_sha="abc1234", config=RetrievalConfig())
+    assert set(result.per_group) == {"table/auto"}
+    assert result.per_group["table/auto"]["n"] == 1
+    assert "per_group" in result.as_metrics()

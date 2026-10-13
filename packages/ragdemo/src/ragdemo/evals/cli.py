@@ -30,6 +30,7 @@ from ragdemo.evals.sampler import (
     sample_candidates,
     write_candidates_csv,
 )
+from ragdemo.evals.table_gate import GateIncomparable, judge
 from ragdemo.retrieval.models import build_models
 from ragdemo.retrieval.rewrite import load_synonyms
 from ragdemo.retrieval.service import RetrievalService
@@ -240,6 +241,11 @@ def run(
         click.echo(f"| p50 延迟 | {result.latency_p50_ms:.0f} ms |")
         click.echo(f"| p95 延迟 | {result.latency_p95_ms:.0f} ms |")
         click.echo(f"| 用例数 | {result.n_cases} |")
+        for group, m in result.per_group.items():
+            click.echo(
+                f"| recall@10（{group}，n={m['n']}）| {float(m['recall_at_10']):.4f} |"
+                f" MRR@10 {float(m['mrr_at_10']):.4f} |"
+            )
 
         if gate:
             ok = passes_gate(result.recall_at_10, prior_baseline, TOLERANCE)
@@ -248,6 +254,41 @@ def run(
             if not ok:
                 click.echo("回退超出容差，阻断合并", err=True)
                 sys.exit(1)
+
+
+@eval_group.command("table-gate")
+@click.option("--before", "before_id", required=True, help="上一步已接受状态的 eval_run.run_id")
+@click.option("--after", "after_id", required=True, help="本次改动的 eval_run.run_id")
+def table_gate(before_id: str, after_id: str) -> None:
+    """按计划写死的表格专项门槛比较两次运行（输出整段贴进 PR）。"""
+    with psycopg.connect(_dsn()) as conn:
+        rows = {
+            str(r[0]): r[1]
+            for r in conn.execute(
+                "SELECT run_id, metrics FROM evals.eval_run WHERE run_id = ANY(%s)",
+                ([before_id, after_id],),
+            ).fetchall()
+        }
+    missing = {before_id, after_id} - set(rows)
+    if missing:
+        raise click.ClickException(f"找不到运行：{sorted(missing)}")
+    b, a = rows[before_id], rows[after_id]
+    try:
+        res = judge(
+            b.get("per_group", {}),
+            a.get("per_group", {}),
+            overall_before=float(b["recall_at_10"]),
+            overall_after=float(a["recall_at_10"]),
+        )
+    except GateIncomparable as exc:
+        raise click.ClickException(f"不可比：{exc}") from exc
+    for line in res.report:
+        click.echo(line)
+    for line in res.reasons:
+        click.echo(f"未过：{line}", err=True)
+    click.echo("表格门槛：通过" if res.passed else "表格门槛：未过，阻断合并")
+    if not res.passed:
+        sys.exit(1)
 
 
 @eval_group.command("sample")

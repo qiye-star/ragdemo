@@ -11,13 +11,14 @@ import math
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from ragdemo.evals.grouping import CaseOutcome, case_group, summarize_groups
 from ragdemo.evals.retrieval_metrics import mrr_at_k, recall_at_k
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
@@ -33,6 +34,7 @@ class RetrievalEvalResult:
     # 每条 top-k 检索的端到端耗时（毫秒，含重排；不含 recall@50 那次宽检索）。
     latency_p50_ms: float = 0.0
     latency_p95_ms: float = 0.0
+    per_group: dict[str, dict[str, float | int | bool]] = field(default_factory=dict)
 
     def as_metrics(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class RetrievalEvalResult:
             "per_difficulty": self.per_difficulty,
             "latency_p50_ms": self.latency_p50_ms,
             "latency_p95_ms": self.latency_p95_ms,
+            "per_group": self.per_group,
         }
 
 
@@ -85,12 +88,21 @@ def run_retrieval_eval(
     started_at = datetime.now(UTC)
     cases = conn.execute(
         "SELECT q_id, question, as_of, gold_block_ids, entity_filter, doc_type_filter,"
-        " difficulty FROM evals.eval_retrieval WHERE (%s::text IS NULL OR author LIKE %s)"
+        " difficulty, author FROM evals.eval_retrieval WHERE (%s::text IS NULL OR author LIKE %s)"
         " ORDER BY q_id",
         (author_prefix, f"{author_prefix}%" if author_prefix else None),
     ).fetchall()
     if not cases:
         raise ValueError("评测集为空；空集会算出满分，让 CI 门禁形同虚设")
+
+    all_gold = sorted({int(g) for case in cases for g in case[3]})
+    gold_types = {
+        int(r[0]): str(r[1])
+        for r in conn.execute(
+            "SELECT block_id, block_type::text FROM core.doc_block WHERE block_id = ANY(%s)",
+            (all_gold,),
+        ).fetchall()
+    }
 
     wide = dataclasses.replace(config, top_k=min(config.fusion_k, 50), rerank_enabled=False)
     hits10: list[float] = []
@@ -98,8 +110,18 @@ def run_retrieval_eval(
     mrrs: list[float] = []
     by_difficulty: dict[str, list[float]] = {}
     latencies_ms: list[float] = []
+    outcomes: list[CaseOutcome] = []
 
-    for _q_id, question, as_of, gold, entity_filter, doc_type_filter, difficulty in cases:
+    for (
+        _q_id,
+        question,
+        as_of,
+        gold,
+        entity_filter,
+        doc_type_filter,
+        difficulty,
+        author,
+    ) in cases:
         gold_set = {int(g) for g in gold}
 
         t0 = time.perf_counter()
@@ -128,6 +150,14 @@ def run_retrieval_eval(
         )
         hits50.append(recall_at_k([b.block_id for b in broad.blocks], gold_set, 50))
 
+        outcomes.append(
+            CaseOutcome(
+                case_group({gold_types.get(g, "unknown") for g in gold_set}, author=str(author)),
+                hits10[-1],
+                hits50[-1],
+                mrrs[-1],
+            )
+        )
         by_difficulty.setdefault(str(difficulty or "unknown"), []).append(hits10[-1])
 
     result = RetrievalEvalResult(
@@ -138,6 +168,7 @@ def run_retrieval_eval(
         per_difficulty={k: sum(v) / len(v) for k, v in by_difficulty.items()},
         latency_p50_ms=_percentile(latencies_ms, 0.50),
         latency_p95_ms=_percentile(latencies_ms, 0.95),
+        per_group={k: v.as_dict() for k, v in summarize_groups(outcomes).items()},
     )
 
     record_eval_run(
