@@ -91,6 +91,7 @@ def test_bitemporal_registry_lists_every_point_in_time_table(
         "core.segment_revenue",
         "core.fx_rate",
         "core.industry_metric_point",
+        "core.doc_table",
     }
 
 

@@ -19,6 +19,9 @@ from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import MockTableDescriber
 from ragdemo.parse.tree import build_tree
+from ragdemo.tables.grid import GridCell, TableAttachment, TableGrid
+from ragdemo_core.blob import LocalBlobStore
+from ragdemo_core.db.invariants import check_schema_invariants
 from ragdemo_core.db.migrate import migrate
 
 MIGRATIONS = Path("db/migrations")
@@ -820,3 +823,197 @@ def test_rechunk_with_new_chunking_version_keeps_old_blocks_queryable(
         (first.block_ids,),
     ).fetchone()  # type: ignore[misc]
     assert old_block_count == len(first.block_ids)
+
+
+# --- 表格网格（表格处理改进计划 T8）-------------------------------------------
+
+PDF_FIXTURE = Path("tests/fixtures/pdf/table_sample.pdf")
+_PDF_W, _PDF_H = 595.2756, 841.8898
+
+
+def _cell_box(x0: float, x1: float, top: float, bottom: float) -> tuple[float, float, float, float]:
+    return (x0 / _PDF_W, top / _PDF_H, x1 / _PDF_W, bottom / _PDF_H)
+
+
+def _sample_grid(page: int = 1) -> TableGrid:
+    """与 tests/fixtures/pdf/table_sample.pdf 第 1 页的两个数字格对得上。"""
+    return TableGrid(
+        cells=(
+            GridCell(0, 0, 1, 1, "Revenue", page=page),
+            GridCell(0, 1, 1, 1, "91.2", page=page, bbox=_cell_box(259, 283, 150, 164)),
+            GridCell(1, 0, 1, 1, "Net profit", page=page),
+            GridCell(1, 1, 1, 1, "19.3", page=page, bbox=_cell_box(259, 283, 170, 184)),
+        ),
+        source_engine="textin:t",
+        header_rows=0,
+        header_cols=1,
+    )
+
+
+def _doc_with_grid(
+    *,
+    grid: TableGrid,
+    block_page: int = 1,
+    content_hash: str = "grid-hash-1",
+    raw: str | None = None,
+) -> NormalizedDocument:
+    base = _doc_with_table("<table><tr><td>1</td></tr></table>", content_hash=content_hash)
+    blocks = [
+        replace(b, page=block_page, table=TableAttachment(grid=grid))
+        if b.block_type == "table"
+        else b
+        for b in base.blocks
+    ]
+    return replace(base, blocks=blocks, raw_bytes_ref=raw, page_count=max(block_page, 1))
+
+
+def _table_rows(conn: psycopg.Connection, doc_id: int) -> list[tuple[object, ...]]:
+    return conn.execute(
+        "SELECT t.table_id, t.known_at, t.entity_id, t.owner_user, t.can_show_raw, t.desc_model,"
+        " t.desc_prompt_version, t.verify_verdict, t.superseded_at, t.block_id"
+        " FROM core.doc_table t WHERE t.doc_id = %s ORDER BY t.table_id",
+        (doc_id,),
+    ).fetchall()
+
+
+@pytest.mark.db
+def test_table_chunk_with_grid_writes_one_doc_table_row(writer: DocumentWriter) -> None:
+    doc = _doc_with_grid(grid=_sample_grid())
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(
+        doc, chunks, desc, owner_user="u1", desc_provenance=("deepseek-x", "table_desc:v3")
+    )
+    (row,) = _table_rows(writer.conn, result.doc_id)
+    blk = writer.conn.execute(
+        "SELECT block_id, known_at, entity_id, owner_user, can_show_raw FROM core.doc_block"
+        " WHERE doc_id = %s AND block_type = 'table'",
+        (result.doc_id,),
+    ).fetchone()
+    assert blk is not None
+    assert row[9] == blk[0]
+    assert (row[1], row[2], row[3], row[4]) == tuple(blk[1:])
+    assert (row[5], row[6]) == ("deepseek-x", "table_desc:v3")
+    assert row[7] == "not_checked"  # 没传 blob：不校验
+    assert row[8] is None
+    assert check_schema_invariants(writer.conn) == []
+
+
+@pytest.mark.db
+def test_grid_is_verified_against_the_text_layer_when_blob_is_given(
+    temp_db: str, tmp_path: Path
+) -> None:
+    blob = LocalBlobStore(tmp_path)
+    blob.put("raw/sample.pdf", PDF_FIXTURE.read_bytes())
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    w = DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements", blob=blob)
+    doc = _doc_with_grid(grid=_sample_grid(), raw="raw/sample.pdf")
+    chunks, desc = _prepare(doc)
+    result = w.write_document(doc, chunks, desc)
+    (row,) = _table_rows(conn, result.doc_id)
+    assert row[7] == "text_layer_cells_ok"
+    got = conn.execute(
+        "SELECT grid FROM core.doc_table WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()
+    assert got is not None
+    assert {c["k"] for c in got[0]["cells"] if c["t"] in ("91.2", "19.3")} == {"match"}
+
+
+@pytest.mark.db
+def test_missing_or_broken_blob_degrades_to_not_checked(
+    temp_db: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    blob = LocalBlobStore(tmp_path)
+    blob.put("raw/bad.pdf", b"not a pdf")
+    conn = psycopg.connect(temp_db)
+    migrate(conn, MIGRATIONS)
+    w = DocumentWriter(conn, ingest_run_id="r1", source="mock-announcements", blob=blob)
+    for ref, h in (("raw/bad.pdf", "h-bad"), ("raw/missing.pdf", "h-missing")):
+        doc = _doc_with_grid(grid=_sample_grid(), raw=ref, content_hash=h)
+        chunks, desc = _prepare(doc)
+        with caplog.at_level(logging.WARNING, logger="ragdemo.ingest.documents"):
+            result = w.write_document(doc, chunks, desc)
+        (row,) = _table_rows(conn, result.doc_id)
+        assert row[7] == "not_checked"
+    unavailable = [r for r in caplog.records if "table_text_layer_unavailable" in r.getMessage()]
+    assert len(unavailable) == 2
+    assert all(getattr(r, "run_id", None) == "r1" for r in unavailable)
+
+
+@pytest.mark.db
+def test_reparse_supersedes_old_grid_and_writes_new_one(writer: DocumentWriter) -> None:
+    doc = _doc_with_grid(grid=_sample_grid())
+    chunks, desc = _prepare(doc)
+    first = writer.write_document(doc, chunks, desc)
+    second = writer.reparse_document(doc, chunks, desc, supersedes_doc_id=first.doc_id)
+    (old,) = _table_rows(writer.conn, first.doc_id)
+    (new,) = _table_rows(writer.conn, second.doc_id)
+    assert old[8] is not None
+    assert new[8] is None
+    assert old[9] != new[9]
+    assert check_schema_invariants(writer.conn) == []
+
+
+@pytest.mark.db
+def test_grid_page_inconsistent_with_block_is_dropped_with_a_warning(
+    writer: DocumentWriter, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = _doc_with_grid(grid=_sample_grid(page=3), block_page=7)
+    chunks, desc = _prepare(doc)
+    with caplog.at_level(logging.WARNING, logger="ragdemo.ingest.documents"):
+        result = writer.write_document(doc, chunks, desc)
+    assert _table_rows(writer.conn, result.doc_id) == []
+    assert len(result.block_ids) == len(chunks)  # 块照常写入
+    hits = [r for r in caplog.records if "grid_page_inconsistent" in r.getMessage()]
+    assert len(hits) == 1
+    assert getattr(hits[0], "run_id", None) == "r1"
+    assert hasattr(hits[0], "as_of")
+
+
+@pytest.mark.db
+def test_unlocated_grid_uses_block_page(writer: DocumentWriter) -> None:
+    """跨页表里 page=None 的格：整张网格没有页码时用块页码。"""
+    g = TableGrid(cells=(GridCell(0, 0, 1, 1, "12"),), source_engine="x")
+    doc = _doc_with_grid(grid=g, block_page=2)
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)
+    (row,) = _table_rows(writer.conn, result.doc_id)
+    got = writer.conn.execute(
+        "SELECT pages FROM core.doc_table WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()
+    assert got is not None
+    assert got[0] == [2]
+    assert row[7] == "not_checked"
+
+
+@pytest.mark.db
+def test_grid_write_failure_does_not_lose_the_document(
+    writer: DocumentWriter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """网格是附属产物：存网格时出任何错（含数据库约束错误），块与文档仍然入库。"""
+    import ragdemo.ingest.documents as docs_mod
+
+    def boom(*a: object, **k: object) -> int:
+        raise psycopg.errors.CheckViolation("simulated")
+
+    monkeypatch.setattr(docs_mod, "insert_table", boom)
+    doc = _doc_with_grid(grid=_sample_grid())
+    chunks, desc = _prepare(doc)
+    with caplog.at_level(logging.WARNING, logger="ragdemo.ingest.documents"):
+        result = writer.write_document(doc, chunks, desc)
+    assert result.skipped is False
+    assert _table_rows(writer.conn, result.doc_id) == []
+    n_blocks = writer.conn.execute(
+        "SELECT count(*) FROM core.doc_block WHERE doc_id = %s", (result.doc_id,)
+    ).fetchone()
+    assert n_blocks is not None
+    assert n_blocks[0] == len(chunks)
+    assert any("table_grid_write_failed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.db
+def test_blocks_without_grid_write_no_doc_table_rows(writer: DocumentWriter) -> None:
+    doc = _docs()[0]
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)
+    assert _table_rows(writer.conn, result.doc_id) == []

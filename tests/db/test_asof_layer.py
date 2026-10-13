@@ -36,6 +36,8 @@ BITEMPORAL_VIEWS = {
     "fx_rate",
     # 026：行业汇总类指标（手工录入）。
     "industry_metric_point",
+    # 030：表格单元格网格（表格处理改进计划 T8）。
+    "doc_table",
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。

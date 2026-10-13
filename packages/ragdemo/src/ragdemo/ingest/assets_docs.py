@@ -477,6 +477,7 @@ def doc_blocks_loaded(
             owner_user=item.owner_user,
             artifacts=item.artifacts,
             chunking_version=cfg.version,
+            desc_provenance=(describer.model, describer.prompt_version),
         )
         if not result.skipped:
             total += len(result.block_ids)
@@ -677,7 +678,7 @@ def tier_c_reparse(
             continue
 
         run_id = context.op_execution_context.run_id
-        writer = DocumentWriter(conn, ingest_run_id=run_id, source=source)
+        writer = DocumentWriter(conn, ingest_run_id=run_id, source=source, blob=blob)
         artifacts = ParseArtifacts(
             engine=result.engine_version, json_ref=result.json_ref, md_ref=result.md_ref
         )
@@ -688,6 +689,7 @@ def tier_c_reparse(
             supersedes_doc_id=doc_id,
             artifacts=artifacts,
             chunking_version=chunk_cfg.version,
+            desc_provenance=(describer.model, describer.prompt_version),
         )
         # 这一次高精度解析本身也是一次计费的供应商调用，同样留底。
         record_parse_snapshots(

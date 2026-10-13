@@ -258,6 +258,12 @@ content_desc:
 `content_desc` 是 `doc_block` 的 BM25 索引字段之一（`02-data-model.md` §5.5），
 也参与嵌入（§5.1）。
 
+表格块若带单元格网格（`Chunk.table`），`DocumentWriter` 在插入块之后写 `core.doc_table`
+（`02-data-model.md` §5.3.1）：有原始 PDF（`blob`）时先做逐格文字层校验，没有则
+`verify_verdict = 'not_checked'`；网格页码与块页码不一致时丢弃网格并记 `grid_page_inconsistent`
+警告；写网格的任何失败都只丢网格、块与文档照常入库。重解析时旧网格与旧块在同一事务里标
+`superseded_at`。
+
 ### 3.3 不切分的内容
 
 以下内容不进入检索索引，但保留在文档中：

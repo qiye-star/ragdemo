@@ -526,6 +526,22 @@ CREATE INDEX doc_block_known_at    ON core.doc_block (known_at);
 （变化意味着新版本、新块），不存在更新不一致的窗口。写入中间件负责填充，
 CI 中有一致性校验测试。
 
+### 5.3.1 `core.doc_table`（时点表，迁移 030）
+
+表格块的单元格网格（引擎无关 JSON，`grid_version = tablegrid:v1`）。一行 = 一个表格 `doc_block`
+的一版网格；同一块任一时刻最多一行 live（`doc_table_live_uk`）。表格块本身仍是检索单元，
+这里是它的结构化形态，供逐格溯源、逐格文字层校验（`verify_version`、`verify_verdict`、
+`cells_*` 计数）与事实佐证使用。
+
+- 时点列（`known_at` / `valid_from` / `publish_at`）与归属列（`entity_id` / `doc_type` /
+  `owner_*` / `can_show_raw`）全部从所属 `doc_block` 读回复制，与 §5.3 同理；
+  `check_schema_invariants` 校验一致，并要求"块已被取代则网格不得仍 live"。
+- 绑定的上下文：`caption` / `unit` / `unit_source` / `column_units` / `row_units` / `currency`；
+  `statement_kind` 为报表类型。多页表的格可能无页码、无 bbox（`page`/`bbox` 为 null），
+  此时 `pages` 取块页码。
+- 有 `asof.doc_table` 视图与同 `doc_block` 的行级隔离策略；`grid` 里是原文，
+  `can_show_raw = false` 的来源不得展示。
+
 ### 5.4 向量索引
 
 ```sql

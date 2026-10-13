@@ -23,7 +23,19 @@ from psycopg.types.json import Jsonb
 from ragdemo.adapters.announcements import NormalizedDocument, known_at_for
 from ragdemo.parse.chunker import Chunk
 from ragdemo.parse.confidence import score_document, score_pages
+from ragdemo.parse.local.layout import extract_pages
 from ragdemo.parse.validate import validate_chunks
+from ragdemo.tables.context import bind_context
+from ragdemo.tables.statements import statement_kind
+from ragdemo.tables.store import TableRecord, insert_table, supersede_tables_of_doc
+from ragdemo.tables.verify_cells import (
+    VERIFY_CELLS_VERSION,
+    PageWords,
+    page_words_from_layouts,
+    summarize_grid,
+    verify_grid,
+)
+from ragdemo_core.blob import BlobStore
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +83,12 @@ class DocumentWriter:
         ingest_run_id: str,
         source: str,
         disclosure_lag: timedelta = timedelta(0),
+        blob: BlobStore | None = None,
     ) -> None:
         self.conn = conn
+        # 只用于读原始 PDF 做表格单元格的文字层校验；没有它网格照常入库，
+        # verify_verdict = 'not_checked'（之后由回填的 --reverify 补校验）。
+        self.blob = blob
         self.ingest_run_id = ingest_run_id
         self.source = source
         self.disclosure_lag = disclosure_lag
@@ -102,6 +118,7 @@ class DocumentWriter:
         owner_user: str | None = None,
         artifacts: ParseArtifacts | None = None,
         chunking_version: str | None = None,
+        desc_provenance: tuple[str, str] | None = None,
     ) -> DocumentWriteResult:
         """`owner_user` 为 None（缺省）时写公共行——与改动前的行为完全一致。
 
@@ -163,6 +180,7 @@ class DocumentWriter:
                     owner_user=owner_user,
                     artifacts=artifacts,
                     chunking_version=chunking_version,
+                    desc_provenance=desc_provenance,
                 )
 
         self._require_valid(doc, chunks, descriptions)
@@ -192,6 +210,7 @@ class DocumentWriter:
                     page_confidence=page_confidence,
                     doc_confidence=doc_confidence,
                     chunking_version=chunking_version,
+                    desc_provenance=desc_provenance,
                 )
         except psycopg.errors.UniqueViolation:
             # 两份从未见过的文档并发写入：两边都在各自的存在性检查里判定"不存在"，
@@ -261,6 +280,7 @@ class DocumentWriter:
         owner_user: str | None,
         artifacts: ParseArtifacts | None,
         chunking_version: str | None,
+        desc_provenance: tuple[str, str] | None = None,
     ) -> DocumentWriteResult:
         """把前序行标 superseded_at，插入沿用同一 version_group_id 的新行。
 
@@ -282,6 +302,9 @@ class DocumentWriter:
                 "UPDATE core.doc_block SET superseded_at = now() WHERE doc_id = %s",
                 (supersedes_doc_id,),
             )
+            # 网格跟着块走：同一事务、同一个 now()，不留"块已被取代而网格仍 live"的窗口
+            # （schema 不变量会查这件事）。
+            supersede_tables_of_doc(self.conn, supersedes_doc_id)
             doc_id = self._insert_document(
                 doc,
                 known_at=known_at,
@@ -301,6 +324,7 @@ class DocumentWriter:
                 page_confidence=page_confidence,
                 doc_confidence=doc_confidence,
                 chunking_version=chunking_version,
+                desc_provenance=desc_provenance,
             )
         self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
         return DocumentWriteResult(doc_id, block_ids, skipped=False)
@@ -314,6 +338,7 @@ class DocumentWriter:
         supersedes_doc_id: int,
         artifacts: ParseArtifacts | None = None,
         chunking_version: str | None = None,
+        desc_provenance: tuple[str, str] | None = None,
     ) -> DocumentWriteResult:
         """升级解析器或换供应商后重新解析。新增版本，不原地替换。
 
@@ -342,6 +367,7 @@ class DocumentWriter:
             owner_user=original_owner_user,
             artifacts=artifacts,
             chunking_version=chunking_version,
+            desc_provenance=desc_provenance,
         )
 
     # --- 内部 -------------------------------------------------------------
@@ -442,6 +468,7 @@ class DocumentWriter:
         page_confidence: Mapping[int, float] | None = None,
         doc_confidence: float | None = None,
         chunking_version: str | None = None,
+        desc_provenance: tuple[str, str] | None = None,
     ) -> list[int]:
         # owner_user / can_show_raw 从刚插入的 document 行读回，而不是让调用方
         # 另传一份——与 known_at / publish_at 同样的道理（本方法原有的反规范化
@@ -455,6 +482,7 @@ class DocumentWriter:
         page_confidence = page_confidence or {}
 
         ordinal_to_block_id: dict[int, int] = {}
+        pages_words: dict[int, PageWords] | None = None  # 第一张带网格的表出现时才读 PDF
         # 先插父块，再插叶子块，这样 parent_block_id 已经拿得到
         for chunk in sorted(chunks, key=lambda c: (c.parent_ordinal is not None, c.ordinal)):
             parent_block_id = (
@@ -506,8 +534,80 @@ class DocumentWriter:
             ).fetchone()
             assert row is not None
             ordinal_to_block_id[chunk.ordinal] = int(row[0])
+            if chunk.block_type == "table" and chunk.table is not None:
+                if pages_words is None:
+                    pages_words = self._page_words(doc, entity_id)
+                self._insert_table(entity_id, int(row[0]), chunk, pages_words, desc_provenance)
 
         return [ordinal_to_block_id[c.ordinal] for c in sorted(chunks, key=lambda c: c.ordinal)]
+
+    def _log_extra(self, entity_id: str | None, **more: object) -> dict[str, object]:
+        # 日志三字段约定：run_id / as_of / entity_id（入库不在任何 as_of 之下，记 None）。
+        return {"run_id": self.ingest_run_id, "as_of": None, "entity_id": entity_id, **more}
+
+    def _page_words(self, doc: NormalizedDocument, entity_id: str | None) -> dict[int, PageWords]:
+        """原始 PDF 的逐页文字层；没有 blob / 没有原文 / 读不出来 -> 空（网格记 not_checked）。"""
+        if self.blob is None or doc.raw_bytes_ref is None:
+            return {}
+        try:
+            return page_words_from_layouts(extract_pages(self.blob.get(doc.raw_bytes_ref)))
+        except Exception as exc:  # 校验是附属产物：任何读取/解析失败都不能阻断入库
+            logger.warning(
+                "table_text_layer_unavailable",
+                extra=self._log_extra(
+                    entity_id, raw_ref=doc.raw_bytes_ref, error=f"{type(exc).__name__}: {exc}"
+                ),
+            )
+            return {}
+
+    def _insert_table(
+        self,
+        entity_id: str | None,
+        block_id: int,
+        chunk: Chunk,
+        pages_words: Mapping[int, PageWords],
+        desc_provenance: tuple[str, str] | None,
+    ) -> None:
+        """写表格块的网格。网格是附属产物：任何问题只丢网格、记警告，块与文档照常入库。"""
+        assert chunk.table is not None
+        extra = self._log_extra(entity_id, block_id=block_id, ordinal=chunk.ordinal)
+        try:
+            grid = chunk.table.grid
+            if grid.pages:
+                if chunk.page is not None and chunk.page not in grid.pages:
+                    # 路由计划落地前的防御：网格页码与块页码对不上（典型：子 PDF 页码没映射回
+                    # 原文页码），丢网格；块级引用 [block_id | page] 仍然可用。
+                    logger.warning(
+                        "grid_page_inconsistent",
+                        extra={**extra, "block_page": chunk.page, "grid_pages": list(grid.pages)},
+                    )
+                    return
+            elif chunk.page is None:
+                logger.warning("grid_pages_unknown", extra=extra)
+                return
+            verified = verify_grid(grid, pages_words) if pages_words else grid
+            summary = summarize_grid(verified, tier=None)
+            context = chunk.table.context or bind_context(
+                verified, caption=None, preceding_texts=[]
+            )
+            record = TableRecord(
+                block_id=block_id,
+                grid=verified,
+                context=context,
+                summary=summary,
+                statement_kind=statement_kind(verified),
+                verify_version=VERIFY_CELLS_VERSION,
+                desc_model=desc_provenance[0] if desc_provenance else None,
+                desc_prompt_version=desc_provenance[1] if desc_provenance else None,
+            )
+            # 嵌套保存点：数据库层面的错误只回滚这一行，不毁掉外层整份文档的事务。
+            with self.conn.transaction():
+                insert_table(self.conn, record, ingest_run_id=self.ingest_run_id)
+        except Exception as exc:
+            logger.warning(
+                "table_grid_write_failed",
+                extra={**extra, "error": f"{type(exc).__name__}: {exc}"},
+            )
 
     def _resolve_entity_id(self, entity_ref: str | None) -> str | None:
         """entity_ref 为 None 是政策/宏观文档的正常情况（004_documents.sql:6）；

@@ -217,7 +217,7 @@ def run_parse_pending(
             # 时的处理一致（见该资产对 validate_chunks 失败的注释）。
             report.validation_failed += 1
             continue
-        writer = DocumentWriter(conn, ingest_run_id=ingest_run_id, source=row.source)
+        writer = DocumentWriter(conn, ingest_run_id=ingest_run_id, source=row.source, blob=blob)
         result = writer.reparse_document(
             item.doc,
             chunks,
@@ -225,6 +225,7 @@ def run_parse_pending(
             supersedes_doc_id=row.doc_id,
             artifacts=item.artifacts,
             chunking_version=chunk_cfg.version,
+            desc_provenance=(describer.model, describer.prompt_version),
         )
 
         index_row = conn.execute(

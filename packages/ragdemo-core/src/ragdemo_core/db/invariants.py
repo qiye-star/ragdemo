@@ -128,6 +128,29 @@ def check_schema_invariants(conn: psycopg.Connection[tuple[object, ...]]) -> lis
     if block_mismatch and block_mismatch[0]:
         violations.append(f"doc_block 的反规范化列与 document 不一致: {block_mismatch[0]} 行")
 
+    # 表格网格（030）：反规范化列继承自所属块，块一旦被取代网格不得仍然 live。
+    # 迁移 030 之前的库没有这张表，所以先探测。
+    table_exists = conn.execute("SELECT to_regclass('core.doc_table') IS NOT NULL").fetchone()
+    if table_exists and table_exists[0]:
+        table_mismatch = conn.execute(
+            "SELECT count(*) FROM ("
+            "  SELECT t.table_id FROM core.doc_table t JOIN core.doc_block b USING (block_id)"
+            "   WHERE t.doc_id       IS DISTINCT FROM b.doc_id"
+            "      OR t.entity_id    IS DISTINCT FROM b.entity_id"
+            "      OR t.doc_type     IS DISTINCT FROM b.doc_type"
+            "      OR t.known_at     IS DISTINCT FROM b.known_at"
+            "      OR t.publish_at   IS DISTINCT FROM b.publish_at"
+            "      OR t.owner_tenant IS DISTINCT FROM b.owner_tenant"
+            "      OR t.owner_user   IS DISTINCT FROM b.owner_user"
+            "      OR t.can_show_raw IS DISTINCT FROM b.can_show_raw"
+            "      OR (b.superseded_at IS NOT NULL AND t.superseded_at IS NULL)"
+            "   LIMIT 1000) x"
+        ).fetchone()
+        if table_mismatch and table_mismatch[0]:
+            violations.append(
+                f"doc_table 与所属 doc_block 的时点/归属列不一致: {table_mismatch[0]} 行"
+            )
+
     # 不变量 6（新增）：core / asof 的对象不得由超级用户持有。
     # 超级用户无条件绕过 RLS（FORCE 也拦不住），而 asof.* 是普通视图、
     # 按属主身份执行——属主一退回超级用户，行级隔离就静默失效，

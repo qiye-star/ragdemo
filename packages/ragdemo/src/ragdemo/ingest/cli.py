@@ -268,7 +268,9 @@ def docs_ingest(
             except BudgetExceeded as exc:
                 raise click.ClickException(str(exc)) from None
             click.echo(f"[预算] {budget_status.describe()}")
-        writer = DocumentWriter(conn, ingest_run_id="cli:docs-ingest", source=source_name)
+        writer = DocumentWriter(
+            conn, ingest_run_id="cli:docs-ingest", source=source_name, blob=blob
+        )
         # 每条 manifest 记录先落 provider_snapshot 再解析（CLAUDE.md §1.5）；
         # dry run 不走到这里，不写库。
         docs = [
@@ -303,6 +305,7 @@ def docs_ingest(
                     owner_user=item.owner_user,
                     artifacts=item.artifacts,
                     chunking_version=chunk_cfg.version,
+                    desc_provenance=(describer.model, describer.prompt_version),
                 )
             except MetadataInvalid as exc:
                 failures += 1
@@ -405,7 +408,9 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
                 click.echo(f"  - {violation}", err=True)
             raise click.ClickException(f"doc_id={doc_id} 重新切块未通过校验，见上方违规")
 
-        writer = DocumentWriter(conn, ingest_run_id="cli:docs-rechunk", source=str(source_label))
+        writer = DocumentWriter(
+            conn, ingest_run_id="cli:docs-rechunk", source=str(source_label), blob=blob
+        )
         artifacts = ParseArtifacts(
             engine=result.engine_version,
             json_ref=result.json_ref,
@@ -419,6 +424,7 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
             supersedes_doc_id=doc_id,
             artifacts=artifacts,
             chunking_version=chunk_cfg.version,
+            desc_provenance=(describer.model, describer.prompt_version),
         )
         # 公告目录里指向旧文档的链接换成新文档——旧文档已被取代，不再从 asof 视图可见，
         # 留着旧 doc_id 会让 list_announcements 给出一个 get_document 查不到的引用。
