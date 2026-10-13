@@ -38,6 +38,25 @@ SYSTEM_ORDER: Final[tuple[NumberingSystem, ...]] = (
 MIN_SYSTEM_HEADINGS = 2  # 一个编号体系在全文至少保留这么多个，才算"成体系"
 MAX_LEVEL = 6
 UNIT_AFTER_NUMBER: Final = "亿万千百元%％倍个家人台年月日"
+# 多字单位词：紧跟在数字后面就是数值（"1.2 美元每股"）。
+UNIT_WORDS_AFTER_NUMBER: Final[tuple[str, ...]] = (
+    "美元", "港元", "港币", "日元", "欧元", "万股", "亿股", "万吨", "万手", "bp",
+)  # fmt: skip
+# 单字单位：也是常见标题用字（股东 / 项目 / 次要 / 点评 / 手机 / 吨位 / 户型），
+# 只有后面不再接汉字时才算单位。
+AMBIGUOUS_UNIT_CHARS: Final = "股吨次项点手户"
+
+
+def _unit_follows(rest: str) -> bool:
+    if not rest:
+        return False
+    if rest[0] in UNIT_AFTER_NUMBER or rest.startswith(UNIT_WORDS_AFTER_NUMBER):
+        return True
+    if rest[0] in AMBIGUOUS_UNIT_CHARS:
+        nxt = rest[1:2]
+        return not ("一" <= nxt <= "鿿")
+    return False
+
 
 _CN = "一二三四五六七八九十零〇"
 _PATTERNS: Final[tuple[tuple[NumberingSystem, re.Pattern[str]], ...]] = (
@@ -99,11 +118,7 @@ def numbering_of(text: str) -> Numbering | None:
         if m is None:
             continue
         rest = s[m.end() :].lstrip()
-        if (
-            system in ("decimal2", "decimal3", "arabic")
-            and rest[:1]
-            and rest[0] in UNIT_AFTER_NUMBER
-        ):
+        if system in ("decimal2", "decimal3", "arabic") and _unit_follows(rest):
             return None  # "3.5亿元""1.5倍"：带单位的数值，不是编号
         groups = m.groups()
         if system in ("chapter", "section", "cn", "cn_paren"):

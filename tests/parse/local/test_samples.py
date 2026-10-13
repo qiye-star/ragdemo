@@ -172,3 +172,15 @@ def test_committed_split_manifest_is_consistent() -> None:
     assert forced == set(FORCED_TUNE)
     assert all(r.sample_set == "tune" for r in rows if r.forced)
     assert len({(r.doc.group, r.doc.key) for r in rows}) == len(rows)
+
+
+def test_tuning_commands_refuse_the_holdout_set() -> None:
+    import pytest
+
+    from ragdemo.parse.local.samples import require_tune_set
+
+    assert require_tune_set("tune") == "tune"
+    with pytest.raises(ValueError, match="留出集只由 T6 的锁定运行器运行"):
+        require_tune_set("holdout")
+    with pytest.raises(ValueError):
+        require_tune_set("other")

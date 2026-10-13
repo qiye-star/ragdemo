@@ -142,3 +142,25 @@ def test_v2_metrics_with_no_headings_are_vacuously_one() -> None:
 def test_table_data_rows_is_the_public_row_extractor() -> None:
     md = "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 收入 | 91.2 | 60.1 |"
     assert [dict(r) for r in table_data_rows(md)] == [{"91.2": 1, "60.1": 1}]
+
+
+def test_sum_heading_matches_adds_every_counter() -> None:
+    from ragdemo.parse.local.compare import HeadingMatchV2, sum_heading_matches
+
+    total = sum_heading_matches(
+        [
+            HeadingMatchV2(2, 3, 4, 1, 2),
+            HeadingMatchV2(1, 1, 5, 0, 0),
+            HeadingMatchV2(0, 0, 0, 0, 0),
+        ]
+    )
+    assert total == HeadingMatchV2(3, 4, 9, 1, 2)
+    assert sum_heading_matches([]) == HeadingMatchV2(0, 0, 0, 0, 0)
+
+
+def test_wilson_interval_matches_the_known_value_and_is_degenerate_for_empty_samples() -> None:
+    from ragdemo.parse.local.compare import wilson_interval
+
+    lo, hi = wilson_interval(67, 109)
+    assert (round(lo, 2), round(hi, 2)) == (0.52, 0.70)
+    assert wilson_interval(0, 0) == (0.0, 1.0)

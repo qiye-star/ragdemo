@@ -423,6 +423,10 @@ def test_keyword_headings_and_a_heading_row_with_a_far_value_is_split_into_two_l
         "# 二、上年同期业绩情况",
     ]
     assert "## （一）业绩预告期间\n\n2022年1月1日至2022年12月31日" in md
+    blocks = md.split("\n\n")
+    k = blocks.index("2022年1月1日至2022年12月31日")  # 行尾数值独立成块，不与后文合并
+    assert blocks[k - 1] == "## （一）业绩预告期间"
+    assert blocks[k + 1] == BODY
     assert _content(md) == _page_chars([page(*rows)])  # 拆行只插入换行，不增删字符
 
 

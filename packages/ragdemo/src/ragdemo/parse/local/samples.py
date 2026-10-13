@@ -18,6 +18,17 @@ from ragdemo.parse.local.layout import PageLayout, Word
 SPLIT_SEED: Final = 20261012
 Group = Literal["docs", "research"]
 SampleSet = Literal["tune", "holdout"]
+
+
+def require_tune_set(name: str) -> SampleSet:
+    """调参类命令只许碰调参集：留出集只在 T6 的锁定运行器里跑一次。"""
+    if name == "holdout":
+        raise ValueError("留出集只由 T6 的锁定运行器运行，调参类命令不得读取留出集")
+    if name != "tune":
+        raise ValueError(f"未知样本集：{name!r}")
+    return "tune"
+
+
 SPLIT_HEADER: Final = "group\tkey\tstratum\tset\tforced"
 
 # v1 报告 §7 展示过、或被本计划用作测试夹具的文档：已经被看过，只能进调参集。

@@ -183,3 +183,46 @@ def test_two_columns_with_offset_baselines_known_limitation() -> None:
     (page,) = parse_pages_deterministic(buf.getvalue())
     # 期望：要么退回，要么 25.0% 与 chip segment 在同一段
     assert page.status != "ok" or "chip segment revenue rose sharply this year" in page.markdown
+
+
+def _split_heading_pdf(value: str) -> bytes:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=(600, 800))
+    y = 80.0
+    body = "Revenue grew strongly during the period and management expects momentum"
+    for n in (1, 2):
+        for _ in range(3):
+            c.setFont("Helvetica", 10)
+            c.drawString(60, 800 - y, body)
+            y += 15
+        y += 10
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(60, 800 - y, f"{n}. Review period")
+        c.setFont("STSong-Light", 10)
+        c.drawString(300, 800 - y, value)
+        y += 25
+    for _ in range(3):
+        c.setFont("Helvetica", 10)
+        c.drawString(60, 800 - y, body)
+        y += 15
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("value", ["2.5 倍", "1,234.56 万元", "3.1 3.2"])
+def test_a_split_off_heading_value_is_its_own_block_and_passes_the_self_checks(
+    value: str,
+) -> None:
+    (page,) = parse_pages_deterministic(_split_heading_pdf(value))
+    assert page.status == "ok", page.reason
+    blocks = page.markdown.split("\n\n")
+    assert "# 1. Review period" in blocks and "# 2. Review period" in blocks
+    k = blocks.index("# 1. Review period")
+    assert blocks[k + 1].replace(" ", "") == value.replace(" ", "")
+    assert blocks[k + 2].startswith("Revenue grew")
+    assert numbers_in(page.markdown) == numbers_in(page.source_text)

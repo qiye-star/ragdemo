@@ -108,3 +108,47 @@ def test_levels_follow_the_fixed_precedence_of_the_systems_present() -> None:
         ]
         == 6
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1.1股",
+        "1.1 美元每股",
+        "1.2 美元每股",
+        "2.3 港元",
+        "1.5 万股",
+        "3.2 亿股",
+        "4.5 万吨",
+        "2.5 吨",
+        "1.2 次",
+        "1.5 项",
+        "2.4 点",
+        "3.5 手",
+        "1.8 bp",
+        "2.5 户",
+        "2.5 日元",
+        "2.5 欧元",
+    ],
+)
+def test_more_unit_bearing_numbers_are_not_numbering(text: str) -> None:
+    assert numbering_of(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "system"),
+    [
+        ("1.1 股东情况", "decimal2"),
+        ("1.2 项目概况", "decimal2"),
+        ("1.3 次要风险", "decimal2"),
+        ("2.1 点评与展望", "decimal2"),
+        ("4、股东情况", "arabic"),
+        ("1.1 手机业务", "decimal2"),
+        ("1.2 吨位结构", "decimal2"),
+    ],
+)
+def test_heading_words_that_start_with_a_unit_character_stay_numbering(
+    text: str, system: str
+) -> None:
+    n = numbering_of(text)
+    assert n is not None and n.system == system

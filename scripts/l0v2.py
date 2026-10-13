@@ -7,6 +7,7 @@ set -a && . ./.env && set +a   # 只需要 RAGDEMO_DSN 与 RAGDEMO_BLOB_ROOT
 uv run --no-sync python scripts/l0v2.py split            # 生成拆分清单（只运行一次）
 uv run --no-sync python scripts/l0v2.py fixtures         # 生成脱敏版面夹具
 uv run --no-sync python scripts/l0v2.py multicol-sheet   # 渲染页图 + 多栏标注表模板
+uv run --no-sync python scripts/l0v2.py headings --set tune   # 调参集标题指标（拒绝 holdout）
 """
 
 from __future__ import annotations
@@ -24,18 +25,27 @@ import pdfplumber
 import psycopg
 
 from ragdemo.config import load_config
+from ragdemo.parse.local.compare import (
+    HeadingMatchV2,
+    heading_matches_v2,
+    sum_heading_matches,
+    wilson_interval,
+)
 from ragdemo.parse.local.decor import strip_decor
 from ragdemo.parse.local.layout import extract_pages
+from ragdemo.parse.local.pipeline import parse_pages_deterministic
 from ragdemo.parse.local.samples import (
     FORCED_TUNE,
     SampleDoc,
     broker_of,
     layout_to_fixture,
     read_split,
+    require_tune_set,
     research_key,
     split_samples,
     write_split,
 )
+from ragdemo.parse.textin import blocks_from_detail
 from ragdemo_core.blob import LocalBlobStore
 
 SPLIT_PATH: Final = Path("docs/10.12-plan/l0v2/split.tsv")
@@ -119,6 +129,61 @@ def cmd_fixtures() -> None:
         print(f"{name}: {len(layout.words)} 词")
 
 
+def _reference_by_page(blob: LocalBlobStore, json_ref: str) -> dict[int, str]:
+    """TextIn 缓存 → 页码 → 该页参考 markdown（无页眉页脚；标题级数 = outline_level + 1）。"""
+    detail = json.loads(blob.get(json_ref).decode("utf-8"))["result"]["detail"]
+    pages: dict[int, list[str]] = {}
+    for b in blocks_from_detail(detail, page_dims={}):
+        if b.page is None:
+            continue
+        line = (
+            "#" * ((b.level or 0) + 1) + " " + b.content if b.block_type == "title" else b.content
+        )
+        pages.setdefault(b.page, []).append(line)
+    return {k: "\n\n".join(v) for k, v in pages.items()}
+
+
+def cmd_headings(set_name: str) -> None:
+    """调参集（announcement）标题指标：召回 / 精确率 / 相对层级一致率（G6a/b/c 口径）。
+    候选 = 现行逐页确定性排版的 ok 页；留出集一律拒绝。"""
+    sample_set = require_tune_set(set_name)
+    keys = {
+        r.doc.key
+        for r in read_split(SPLIT_PATH)
+        if r.doc.group == "docs" and r.doc.stratum == "announcement" and r.sample_set == sample_set
+    }
+    blob = LocalBlobStore(load_config().blob_root)
+    per_doc: dict[str, HeadingMatchV2] = {}
+    pages_ok: dict[str, int] = {}
+    with psycopg.connect(os.environ["RAGDEMO_DSN"]) as conn:
+        rows = conn.execute(DOCS_SQL).fetchall()
+    for doc_id, raw_ref, json_ref, _md, _type in rows:
+        if str(doc_id) not in keys:
+            continue
+        ref = _reference_by_page(blob, str(json_ref))
+        ok = [r for r in parse_pages_deterministic(blob.get(str(raw_ref))) if r.status == "ok"]
+        pages_ok[str(doc_id)] = len(ok)
+        per_doc[str(doc_id)] = sum_heading_matches(
+            heading_matches_v2(r.markdown, ref.get(r.page, "")) for r in ok
+        )
+    print("doc\tpages\tmatched\tcandidate\treference\trel_agree\trel_total")
+    for k, m in per_doc.items():
+        print(
+            f"{k}\t{pages_ok[k]}\t{m.matched}\t{m.cand_total}\t{m.ref_total}\t{m.rel_agree}\t{m.rel_total}"
+        )
+    tot = sum_heading_matches(per_doc.values())
+    lo, hi = wilson_interval(tot.matched, tot.ref_total)
+    print(
+        f"TOTAL\t{sum(pages_ok.values())}\t{tot.matched}\t{tot.cand_total}\t{tot.ref_total}"
+        f"\t{tot.rel_agree}\t{tot.rel_total}"
+    )
+    print(
+        f"G6a recall {tot.recall:.4f} (Wilson95 [{lo:.2f}, {hi:.2f}]) >= 0.60 | "
+        f"G6b precision {tot.precision:.4f} >= 0.85 | "
+        f"G6c relative level agreement {tot.relative_level_agreement:.4f} >= 0.85"
+    )
+
+
 def _sheet_pages(n_pages: int, *, group: str, extra_page2: bool, rng: random.Random) -> list[int]:
     if group == "docs":
         return list(range(1, n_pages + 1))
@@ -169,11 +234,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     sub.add_parser("fixtures")
     ms = sub.add_parser("multicol-sheet")
     ms.add_argument("--extra-page2", action="store_true", help="给留出集研报补标第 2 页")
+    hd = sub.add_parser("headings")
+    hd.add_argument("--set", dest="sample_set", required=True, help="只接受 tune")
     args = ap.parse_args(argv)
     if args.cmd == "split":
         cmd_split()
     elif args.cmd == "fixtures":
         cmd_fixtures()
+    elif args.cmd == "headings":
+        try:
+            cmd_headings(args.sample_set)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     elif args.cmd == "multicol-sheet":
         cmd_multicol_sheet(extra_page2=args.extra_page2)
 

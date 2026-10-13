@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import html
 import itertools
+import math
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ragdemo.parse.local.number_closure import numbers_in
@@ -227,3 +229,23 @@ def heading_matches_v2(candidate_md: str, reference_md: str) -> HeadingMatchV2:
         total += 1
         agree += int(_sign(cand[i2][1] - cand[i1][1]) == _sign(ref[j2][1] - ref[j1][1]))
     return HeadingMatchV2(matched, len(cand), len(ref), agree, total)
+
+
+def sum_heading_matches(items: Iterable[HeadingMatchV2]) -> HeadingMatchV2:
+    """逐文档的 v2 计数相加（micro 聚合）。"""
+    m = c = r = a = t = 0
+    for it in items:
+        m, c, r = m + it.matched, c + it.cand_total, r + it.ref_total
+        a, t = a + it.rel_agree, t + it.rel_total
+    return HeadingMatchV2(m, c, r, a, t)
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """二项比例的 Wilson 区间（默认 95%）；n = 0 时返回 (0, 1)。"""
+    if n <= 0:
+        return 0.0, 1.0
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, centre - half), min(1.0, centre + half)
