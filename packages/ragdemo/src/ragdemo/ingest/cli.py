@@ -38,6 +38,7 @@ import psycopg
 from ragdemo.adapters.announcements import NormalizedDocument
 from ragdemo.adapters.cninfo import CninfoAdapter
 from ragdemo.adapters.edgar import TRACKED_FORMS, EdgarAdapter
+from ragdemo.adapters.html_render import EdgeHeadlessRenderer, HtmlRenderer, HtmlRenderError
 from ragdemo.adapters.http import HttpClient, RetryPolicy, TokenBucket
 from ragdemo.adapters.local_manifest import (
     RESEARCH_SOURCE_ID,
@@ -62,9 +63,15 @@ from ragdemo.ingest.assets_docs import (
 from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
-from ragdemo.ingest.parse_pending import _select_pending, run_parse_pending, tier_for_document
+from ragdemo.ingest.parse_pending import (
+    _select_pending,
+    resolve_parse_input,
+    run_parse_pending,
+    tier_for_document,
+)
 from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier
 from ragdemo.ingest.pdf_pages import pdf_page_count
+from ragdemo.ingest.render_html import RenderHtmlError, render_html_document
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import TableDescriber
@@ -828,6 +835,64 @@ def docs_parse_pending(
         )
 
 
+# --- docs render-html（EDGAR 8-K 转 PDF 方案）----------------------------------
+
+
+@docs_group.command("render-html")
+@click.option("--doc-id", "doc_id", type=int, required=True, help="要渲染的现行 htm 文档")
+@click.option(
+    "--renderer",
+    "renderer_kind",
+    type=click.Choice(["edge", "mock"]),
+    default="edge",
+    help="edge = 本机 Edge 无头离线渲染；mock 用于测试（空白页）",
+)
+@click.option(
+    "--yes", is_flag=True, default=False, help="真正渲染并写 blob / 快照；不传则只 dry run"
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def docs_render_html(
+    doc_id: int, renderer_kind: str, yes: bool, blob_root_opt: Path | None
+) -> None:
+    """把 EDGAR 的 htm 原文离线渲染成派生 PDF（免费、不联网、不调用 TextIn）。
+
+    PDF 存在原文同目录（`*.rendered.pdf`），已存在就跳过、绝不覆盖；来源（htm 哈希、PDF
+    哈希、渲染器版本、成本 0）记一条 provider_snapshot。之后 `docs parse-pending` 才会用它。
+    """
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    renderer: HtmlRenderer
+    if renderer_kind == "mock":
+        from ragdemo.adapters.mock.html_render import MockHtmlRenderer
+
+        renderer = MockHtmlRenderer()
+    else:
+        renderer = EdgeHeadlessRenderer()
+    with psycopg.connect(_dsn()) as conn:
+        try:
+            out = render_html_document(
+                conn,
+                doc_id=doc_id,
+                renderer=renderer,
+                blob=blob,
+                ingest_run_id="cli:docs-render-html",
+                dry_run=not yes,
+            )
+        except (RenderHtmlError, HtmlRenderError) as exc:
+            raise click.ClickException(str(exc)) from None
+    if out.status == "dry_run":
+        click.echo(f"[dry run] 将渲染 doc_id={doc_id} -> {out.pdf_key}；--yes 才会真正渲染并写库")
+    elif out.status == "skipped":
+        click.echo(
+            f"跳过(派生 PDF 已存在，不覆盖) doc_id={doc_id} {out.pdf_key} {out.page_count} 页"
+        )
+    else:
+        click.echo(
+            f"已渲染 doc_id={doc_id} -> {out.pdf_key} {out.page_count} 页"
+            f" snapshot_id={out.snapshot_id}"
+        )
+
+
 # --- docs parse-cost（L0 + TextIn 分页接入计划 T12）-------------------------
 
 
@@ -839,7 +904,9 @@ def _load_backlog(conn: psycopg.Connection, blob: BlobStore) -> list[BacklogDoc]
     for row in _select_pending(conn, None):
         tier = tier_for_document(row.source, row.doc_type, row.title)
         try:
-            pages = pdf_page_count(blob.get(row.raw_ref))
+            pages = pdf_page_count(
+                blob.get(resolve_parse_input(conn, blob, row, strict=False).raw_ref)
+            )
         except BlobNotFound:
             pages = None
         out.append(

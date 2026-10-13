@@ -18,7 +18,7 @@ from pypdf import PdfWriter
 
 from ragdemo.ingest.parse_pending import ParsePendingReport, run_parse_pending, tier_for_document
 from ragdemo.ingest.parse_policy import ParseTier
-from ragdemo.parse.textin import MockDocumentParser, PageBudget
+from ragdemo.parse.textin import MockDocumentParser, PageBudget, ParseResult
 from ragdemo_core.blob import LocalBlobStore
 from ragdemo_core.db.migrate import migrate
 
@@ -316,3 +316,184 @@ def test_doc_ids_restrict_the_selection(conn: psycopg.Connection, tmp_path: Path
         doc_ids=frozenset({keep}),
     )
     assert report.selected == 1
+
+
+# --- EDGAR htm 派生 PDF（EDGAR 8-K 转 PDF 方案 §4.5 / §4.6-3）-----------------
+
+HTM_BODY = b"<html><body><p>nvidia 8-K</p></body></html>"
+HTM_REF = "edgar/0001045810/0001045810-26-000078/nvda-20260902.htm"
+
+
+class _CountingParser(MockDocumentParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult:
+        self.calls += 1
+        self.last_bytes = file_bytes
+        return super().parse(file_bytes, owner_user=owner_user)
+
+
+def _htm_doc(conn: psycopg.Connection, blob: LocalBlobStore) -> int:
+    from tests.ingest.test_render_html import insert_htm_doc
+
+    return insert_htm_doc(conn, blob, entity_id="US.NVDA", raw_ref=HTM_REF, body=HTM_BODY)
+
+
+def _render_derived(
+    conn: psycopg.Connection, blob: LocalBlobStore, doc_id: int, pages: int
+) -> None:
+    from ragdemo.adapters.mock.html_render import MockHtmlRenderer
+    from ragdemo.ingest.render_html import render_html_document
+
+    render_html_document(
+        conn,
+        doc_id=doc_id,
+        renderer=MockHtmlRenderer(pages=pages),
+        blob=blob,
+        ingest_run_id="t",
+        dry_run=False,
+    )
+
+
+def _dry(
+    conn: psycopg.Connection, blob: LocalBlobStore, parser: MockDocumentParser
+) -> ParsePendingReport:
+    return run_parse_pending(
+        conn,
+        parser=parser,
+        blob=blob,
+        entity_ref="1045810",
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        ingest_run_id="t",
+        dry_run=True,
+    )
+
+
+@pytest.mark.db
+def test_dry_run_uses_derived_pdf_page_count(conn: psycopg.Connection, tmp_path: Path) -> None:
+    blob = LocalBlobStore(tmp_path)
+    doc_id = _htm_doc(conn, blob)
+    _render_derived(conn, blob, doc_id, pages=6)
+    report = _dry(conn, blob, MockDocumentParser())
+    assert report.selected == 1
+    assert report.estimated_pages[ParseTier.FIRST] == 6, "真实页数 6，不是 12 的估算"
+
+
+@pytest.mark.db
+def test_htm_without_derived_pdf_fails_loudly_and_never_parses(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    from ragdemo.ingest.parse_pending import DerivedPdfMissing
+
+    blob = LocalBlobStore(tmp_path)
+    _htm_doc(conn, blob)
+    parser = _CountingParser()
+    with pytest.raises(DerivedPdfMissing, match="render-html"):
+        _dry(conn, blob, parser)
+    with pytest.raises(DerivedPdfMissing, match="render-html"):
+        run_parse_pending(
+            conn,
+            parser=parser,
+            blob=blob,
+            entity_ref="1045810",
+            tiers=frozenset({ParseTier.FIRST}),
+            budget=PageBudget(remaining=1000),
+            ingest_run_id="t",
+            dry_run=False,
+        )
+    assert parser.calls == 0
+
+
+@pytest.mark.db
+def test_reparse_from_derived_pdf_keeps_html_hash_and_marks_derivation(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    import json
+
+    blob = LocalBlobStore(tmp_path)
+    doc_id = _htm_doc(conn, blob)
+    _render_derived(conn, blob, doc_id, pages=6)
+    old = conn.execute(
+        "SELECT known_at, content_hash FROM core.document WHERE doc_id = %s", (doc_id,)
+    ).fetchone()
+    assert old is not None
+    render_snap = conn.execute(
+        "SELECT snapshot_id FROM core.provider_snapshot WHERE provider = 'local-html-render'"
+    ).fetchone()
+    assert render_snap is not None
+
+    parser = _CountingParser()
+    report = run_parse_pending(
+        conn,
+        parser=parser,
+        blob=blob,
+        entity_ref="1045810",
+        tiers=frozenset({ParseTier.FIRST}),
+        budget=PageBudget(remaining=1000),
+        ingest_run_id="t",
+        dry_run=False,
+    )
+    assert report.reparsed == 1 and parser.calls == 1
+    assert parser.last_bytes.startswith(b"%PDF"), "送去解析的必须是 PDF，不是 htm"
+
+    row = conn.execute(
+        "SELECT raw_ref, content_hash, known_at, parse_warnings, snapshot_id, entity_id,"
+        "       source_url FROM core.document"
+        " WHERE supersedes_doc_id = %s AND superseded_at IS NULL",
+        (doc_id,),
+    ).fetchone()
+    assert row is not None
+    raw_ref, content_hash, known_at, warnings, snapshot_id, entity_id, source_url = row
+    assert raw_ref == "edgar/0001045810/0001045810-26-000078/nvda-20260902.rendered.pdf"
+    assert content_hash == old[1] == hashlib.sha256(HTM_BODY).hexdigest()
+    assert known_at == old[0]
+    assert f"derived_from_html:{old[1][:12]}" in json.loads(json.dumps(warnings))
+    assert snapshot_id == render_snap[0]
+    assert entity_id == "US.NVDA"
+    assert source_url == "https://sec.invalid/x.htm"
+    # 旧 htm 原文仍在
+    assert blob.get(HTM_REF) == HTM_BODY
+
+
+@pytest.mark.db
+def test_rerun_after_reparse_does_not_select_again(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    blob = LocalBlobStore(tmp_path)
+    doc_id = _htm_doc(conn, blob)
+    _render_derived(conn, blob, doc_id, pages=2)
+    _run(conn, tmp_path, entity_ref="1045810")
+    again = _run(conn, tmp_path, entity_ref="1045810")
+    assert again.selected == 0
+    n = conn.execute(
+        "SELECT count(*) FROM core.document WHERE source = 'edgar' AND superseded_at IS NULL"
+    ).fetchone()
+    assert n == (1,)
+
+
+@pytest.mark.db
+def test_pdf_documents_keep_old_behaviour_without_marker(
+    conn: psycopg.Connection, tmp_path: Path
+) -> None:
+    blob = LocalBlobStore(tmp_path)
+    doc_id = _insert_pending_document(
+        conn,
+        blob,
+        entity_id="US.NVDA",
+        source="edgar",
+        doc_type="10-Q",
+        title="10-Q x",
+        raw_bytes=_pdf_bytes(2, marker="plain"),
+        source_ref="plain-1",
+    )
+    _run(conn, tmp_path, entity_ref="1045810")
+    row = conn.execute(
+        "SELECT parse_warnings::text, raw_ref FROM core.document WHERE supersedes_doc_id = %s",
+        (doc_id,),
+    ).fetchone()
+    assert row is not None
+    assert "derived_from_html" not in row[0]
+    assert row[1].endswith(".pdf")

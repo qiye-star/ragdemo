@@ -61,4 +61,5 @@ markers = [
     "db: 需要数据库的测试",
     "seed_full: 需要完整种子数据（W9.1 全量录入）才会通过的验收断言",
     "live_engine: 需要本机已启动的解析引擎容器（PARSE_*_BASE_URL）",
+    "local_edge: 需要本机 Edge 无头渲染（RAGDEMO_RUN_LOCAL_EDGE=1 才跑，不进 CI）",
 ]
