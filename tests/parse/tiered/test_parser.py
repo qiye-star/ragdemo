@@ -61,7 +61,9 @@ class FakeTextIn:
         from_cache: bool = False,
         zero_based_missing_first: bool = False,
         no_json: bool = False,
+        cont_pages: frozenset[int] = frozenset(),
     ) -> None:
+        self.cont_pages = cont_pages
         self.blob, self.from_cache = blob, from_cache
         self.zero_based_missing_first = zero_based_missing_first
         self.no_json = no_json
@@ -86,6 +88,21 @@ class FakeTextIn:
                     }
                 )
                 blocks.append(NormalizedBlock(len(blocks), "paragraph", "", para, page=i))
+            if orig in self.cont_pages:
+                # 跨页表的续页：只有单元格（page_id 为本页），库里没有本页的表块。
+                cont = [
+                    {"row": 0, "col": 0, "row_span": 1, "col_span": 1, "text": "合计", "page_id": i}
+                ]
+                detail.append(
+                    {
+                        "page_id": i,
+                        "paragraph_id": len(detail),
+                        "type": "table",
+                        "text": "",
+                        "content": 0,
+                        "cells": cont,
+                    }
+                )
             if number is not None:
                 cells = [
                     {
@@ -144,6 +161,7 @@ def _parser(
     from_cache: bool = False,
     zero_based_missing_first: bool = False,
     no_json: bool = False,
+    cont_pages: frozenset[int] = frozenset(),
 ) -> tuple[TieredParser, FakeTextIn, LocalBlobStore]:
     blob = LocalBlobStore(tmp_path)
     t = FakeTextIn(
@@ -151,6 +169,7 @@ def _parser(
         from_cache=from_cache,
         zero_based_missing_first=zero_based_missing_first,
         no_json=no_json,
+        cont_pages=cont_pages,
     )
     k = kinds or {}
     p = TieredParser(
@@ -197,6 +216,29 @@ def test_real_table_block_counts_reach_p5(tmp_path: Path) -> None:
     r2 = bad.parse_for(_pdf(3), doc_type="announcement", title="公告")
     assert r2.ledger is not None
     assert r2.ledger.pages[2].table_blocks == 0 and r2.ledger.doc.state == "rejected"
+
+
+def test_table_continuation_page_passes_p5(tmp_path: Path) -> None:
+    # 第 2 页是表格首页（有表块），第 3 页是续页：只有单元格，没有表块。
+    p, _, _ = _parser(tmp_path, kinds={2: "table", 3: "table"}, cont_pages=frozenset({3}))
+    r = p.parse_for(_pdf(3), doc_type="announcement", title="公告")
+    assert r.ledger is not None
+    assert r.ledger.pages[2].table_blocks == 1 and r.ledger.doc.state != "rejected"
+    assert all(b.page != 3 for b in r.blocks if b.block_type == "table")
+
+
+def test_table_page_without_any_table_cells_still_fails_p5(tmp_path: Path) -> None:
+    p, _, _ = _parser(tmp_path, kinds={2: "table", 3: "table"}, cont_pages=frozenset())
+    r = p.parse_for(_pdf(3), doc_type="announcement", title="公告")
+    assert r.ledger is not None
+    assert r.ledger.pages[2].table_blocks == 0 and r.ledger.doc.state == "rejected"
+
+
+def test_table_continuation_page_passes_p5_on_whole_document_fallback(tmp_path: Path) -> None:
+    p, _, _ = _parser(tmp_path, kinds={2: "table", 3: "table"}, cont_pages=frozenset({3}))
+    r = p.parse_for(_pdf(3), doc_type="announcement", title="海光信息2024年年度报告")
+    assert r.ledger is not None and r.ledger.pages[0].reasons == (REASON_PERIODIC,)
+    assert r.ledger.pages[2].table_blocks == 1 and r.ledger.doc.state != "rejected"
 
 
 def test_periodic_reports_go_whole(tmp_path: Path) -> None:

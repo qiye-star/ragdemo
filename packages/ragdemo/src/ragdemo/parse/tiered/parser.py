@@ -72,6 +72,15 @@ class PageOffsetMismatch(RuntimeError):
     """TextIn 页码基与 detail 推断不一致：块页码可能整体错一页，不得入库。"""
 
 
+def _table_blocks(starting_here: int, store: PageStore | None) -> int:
+    """本页的表格证据数：起始于本页的表块，或本页有表格单元格（跨页表的续页）。
+
+    跨页表只有一个块、页码是首页，续页的块数为 0；单元格自带 page_id，
+    `item_types['table']` 给每个涉及的页各记一次。没有任何表格单元格的页仍是 0。
+    """
+    return max(starting_here, store.item_types["table"] if store else 0)
+
+
 def tiered_fingerprint(*, enforced: frozenset[SkipRuleId], textin_fp: str) -> str:
     return param_fingerprint(
         {
@@ -286,7 +295,9 @@ class TieredParser:
             if call is None:
                 raise ValueError(f"第 {page} 页既未跳过也没有 TextIn 调用")
             store = stores.get(page)
-            tables = sum(1 for b in tp.blocks_by_page.get(page, ()) if b.block_type == "table")
+            tables = _table_blocks(
+                sum(1 for b in tp.blocks_by_page.get(page, ()) if b.block_type == "table"), store
+            )
             reasons: tuple[str, ...] = (REASON_L0_OFF,)
             if _no_output(call, store, text.get(page)):
                 reasons += (REASON_L3_NO_OUTPUT,)
@@ -453,7 +464,7 @@ class TieredParser:
                         reasons=reasons,
                         text_layer=text.get(p),
                         store=store,
-                        table_blocks=tables.get(p, 0),
+                        table_blocks=_table_blocks(tables.get(p, 0), store),
                     ),
                     textin_billed=call.billed_pages > 0,
                     textin_json_ref=r.json_ref,
