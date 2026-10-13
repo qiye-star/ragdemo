@@ -537,13 +537,14 @@ SELECT fact_id, entity_id, metric_id, period, value, unit, known_at, valid_from
 """
 
 _TABLES_SQL = """
-SELECT t.table_id, t.block_id, t.entity_id, d.title, t.grid, t.unit, t.unit_source,
+SELECT DISTINCT ON (t.block_id)
+       t.table_id, t.block_id, t.entity_id, d.title, t.grid, t.unit, t.unit_source,
        t.column_units, t.row_units, t.currency, t.statement_kind, t.known_at, t.caption
   FROM core.doc_table t
   JOIN core.document d ON d.doc_id = t.doc_id
  WHERE t.superseded_at IS NULL AND t.owner_user IS NULL AND t.owner_tenant IS NULL
    AND t.statement_kind <> 'other' AND t.entity_id IS NOT NULL
- ORDER BY t.table_id
+ ORDER BY t.block_id, t.table_id DESC
 """
 
 _INSERT_SQL = """
@@ -600,6 +601,20 @@ def load_table_views(conn: psycopg.Connection[Any]) -> dict[str, list[TableView]
 _RefKey = tuple[int, int, int, int, str, str, Decimal]
 
 
+def _supersede_refs_of_dead_tables(conn: psycopg.Connection[Any]) -> int:
+    """引用的网格版本已被取代（重解析 / 重新校验）：引用同时失效，取代时刻 = 网格被取代的时刻。
+
+    之后的主循环会按现行网格重新推导（可能得到新引用，也可能因不再能佐证而没有）。
+    """
+    cur = conn.execute(
+        "UPDATE core.fact_table_ref r SET superseded_at ="
+        " CASE WHEN t.superseded_at > r.known_at THEN t.superseded_at ELSE now() END"
+        " FROM core.doc_table t WHERE t.table_id = r.table_id AND t.superseded_at IS NOT NULL"
+        " AND r.superseded_at IS NULL"
+    )
+    return cur.rowcount
+
+
 def _supersede_refs_of_dead_facts(conn: psycopg.Connection[Any]) -> int:
     """事实已被取代（Wind 更正）而引用还 live 的：引用随事实一起失效。
 
@@ -619,7 +634,7 @@ def _write_results(
     conn: psycopg.Connection[Any], results: Sequence[FactCellMatch], *, ingest_run_id: str
 ) -> tuple[int, int]:
     """幂等写入：某事实现行引用集合 == 期望集合（含 check_version）→ 跳过；否则整体取代再插入。"""
-    superseded_dead = _supersede_refs_of_dead_facts(conn)
+    superseded_dead = _supersede_refs_of_dead_facts(conn) + _supersede_refs_of_dead_tables(conn)
     live: dict[int, set[_RefKey]] = {}
     for fid, tid, bid, row, col, ver, verdict, fval in conn.execute(
         "SELECT fact_id, table_id, block_id, cell_row, cell_col, check_version, verdict,"

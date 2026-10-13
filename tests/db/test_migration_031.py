@@ -279,3 +279,45 @@ def test_refs_of_a_superseded_fact_are_superseded_with_it(conn: psycopg.Connecti
     assert (f1, "match") in rows
     again = run_fact_table_check(conn, ingest_run_id="t", write=True)
     assert (again.written, again.superseded) == (0, 0)
+
+
+@pytest.mark.db
+def test_check_uses_the_live_grid_version_and_supersedes_refs_of_dead_grids(
+    conn: psycopg.Connection,
+) -> None:
+    from ragdemo.tables.store import supersede_table
+
+    _add_fact(conn, value="123400000")
+    v2, block_id = _add_table(conn, number="12,340.00")
+    first = run_fact_table_check(conn, ingest_run_id="t", write=True)
+    assert first.counts() == {"match": 1}
+    # 重解析：v2 被取代，v3 的格值会让结论变成 mismatch
+    supersede_table(conn, v2)
+    v3, _ = _add_table(conn, number="99,999.00")
+    conn.commit()
+    report = run_fact_table_check(conn, ingest_run_id="t", write=True)
+    assert report.counts() == {"mismatch": 1}
+    assert report.results[0].table_id == v3
+    live = conn.execute(
+        "SELECT table_id, verdict FROM core.fact_table_ref WHERE superseded_at IS NULL"
+    ).fetchall()
+    assert live == [(v3, "mismatch")]
+    assert conn.execute(
+        "SELECT count(*) FROM core.fact_table_ref WHERE table_id = %s AND superseded_at IS NULL",
+        (v2,),
+    ).fetchone() == (0,)
+    # 取代时刻 = 网格被取代的时刻（as_of 回放时引用与它引用的网格同时失效）
+    assert conn.execute(
+        "SELECT r.superseded_at = t.superseded_at FROM core.fact_table_ref r"
+        " JOIN core.doc_table t USING (table_id) WHERE t.table_id = %s",
+        (v2,),
+    ).fetchone() == (True,)
+    # v3 也被取代且没有新版本：引用随之失效，不再有 live 引用
+    supersede_table(conn, v3)
+    conn.commit()
+    gone = run_fact_table_check(conn, ingest_run_id="t", write=True)
+    assert gone.counts() == {"no_row": 1}
+    assert conn.execute(
+        "SELECT count(*) FROM core.fact_table_ref WHERE superseded_at IS NULL"
+    ).fetchone() == (0,)
+    assert block_id is not None
