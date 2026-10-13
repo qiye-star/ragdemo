@@ -56,6 +56,21 @@ class BlockCitation:
 
 
 @dataclass(frozen=True)
+class CellCitation:
+    """表格单元格级引用 `[block_id | page | r{row}c{col}]`；row/col 为 0 基网格坐标，
+    page 是该单元格自己的页码（未定位的格为 None，渲染成 —）。前缀与 BlockCitation 一致。"""
+
+    block_id: int
+    page: int | None
+    row: int
+    col: int
+
+    def render(self) -> str:
+        page = self.page if self.page is not None else "—"
+        return f"[{self.block_id} | {page} | r{self.row}c{self.col}]"
+
+
+@dataclass(frozen=True)
 class SourceCitation:
     """非数值记录（实体、关系、规则、口径）的来源：写入方与可知时刻。"""
 

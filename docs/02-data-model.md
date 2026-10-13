@@ -538,7 +538,7 @@ CI 中有一致性校验测试。
   `check_schema_invariants` 校验一致，并要求"块已被取代则网格不得仍 live"。
 - 绑定的上下文：`caption` / `unit` / `unit_source` / `column_units` / `row_units` / `currency`；
   `statement_kind` 为报表类型。多页表的格可能无页码、无 bbox（`page`/`bbox` 为 null），
-  此时 `pages` 取块页码。
+  `pages` 只在**没有任何格带页码**时才回退取块页码；混合网格（部分格有页码）只存已定位的页。
 - 有 `asof.doc_table` 视图与同 `doc_block` 的行级隔离策略；`grid` 里是原文，
   `can_show_raw = false` 的来源不得展示。
 
