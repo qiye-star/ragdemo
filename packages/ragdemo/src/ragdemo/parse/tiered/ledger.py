@@ -18,7 +18,13 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from ragdemo.ops.alerts import Alert, Severity, raise_alert
-from ragdemo.parse.tiered.records import LEDGER_TIERS, LedgerTier, PageRecord, ParseLedger
+from ragdemo.parse.tiered.records import (
+    LEDGER_TIERS,
+    REASON_L3_NO_OUTPUT,
+    LedgerTier,
+    PageRecord,
+    ParseLedger,
+)
 
 SHANGHAI: Final = ZoneInfo("Asia/Shanghai")
 L3_SHARE_ALERT: Final = 0.85
@@ -173,6 +179,23 @@ def format_tier_summary(rows: Sequence[TierRow]) -> str:
         f" | {sum((r.cost_cny for r in rows), Decimal(0)):.4f} | {sum(r.pages_unpriced for r in rows)} |"
     )
     return "\n".join(lines)
+
+
+def l3_no_output_alerts(ledger: ParseLedger) -> list[Alert]:
+    """L3 页没有 TextIn JSON / 输出为空：该页数字无处可溯源，必须有人看（每份文档一条告警）。"""
+    pages = [r.page for r in ledger.pages if r.tier == "L3" and REASON_L3_NO_OUTPUT in r.reasons]
+    if not pages:
+        return []
+    shown = ", ".join(str(p) for p in pages[:20]) + (" ..." if len(pages) > 20 else "")
+    return [
+        Alert(
+            "parse_ledger",
+            "warning",
+            f"parse_ledger:l3_no_output:{ledger.routes_ref}",
+            f"{len(pages)} 个 L3 页没有 TextIn 输出",
+            f"页：{shown}；查 {ledger.routes_ref} 与对应 TextIn JSON（缓存是否损坏、是否被截断）",
+        )
+    ]
 
 
 def evaluate_ledger_alerts(

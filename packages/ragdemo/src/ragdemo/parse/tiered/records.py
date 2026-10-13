@@ -25,6 +25,10 @@ DocStateValue = Literal[
 ]
 
 
+# L3 页没有 TextIn 产出（无 JSON 或输出为空）时写进该页 reasons 的固定标记（T9 写，ledger 告警读）。
+REASON_L3_NO_OUTPUT: Final = "L3 页无 TextIn 输出"
+
+
 @dataclass(frozen=True)
 class PageRecord:
     page: int

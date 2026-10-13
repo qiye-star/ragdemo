@@ -26,6 +26,8 @@ from typing import Any, Final, NoReturn, Protocol, runtime_checkable
 import httpx
 
 from ragdemo.adapters.announcements import NormalizedBlock
+from ragdemo.parse.tiered.records import ParseLedger
+from ragdemo.parse.tiered.types import TextInCall
 from ragdemo.tables.context import bind_context, textin_caption, textin_preceding_texts
 from ragdemo.tables.grid import GridError, TableAttachment
 from ragdemo.tables.textin_cells import grid_from_textin_item, textin_locator
@@ -141,11 +143,28 @@ class ParseResult:
     md_ref: str | None
     warnings: list[str] = field(default_factory=list)
     from_cache: bool = False
+    # L0 + TextIn 分页接入计划 T9。旧路径保持默认值，语义不变：
+    # billable_pages = None 时计费页数仍按"缓存 0、否则 page_count"；
+    # textin_calls 每个计费调用各留一条 provider_snapshot；ledger 是逐页台账。
+    billable_pages: int | None = None
+    textin_calls: tuple[TextInCall, ...] = ()
+    ledger: ParseLedger | None = None
 
 
 @runtime_checkable
 class DocumentParser(Protocol):
     def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult: ...
+
+
+@runtime_checkable
+class DocTypeAwareParser(Protocol):
+    """知道文档类型与标题的解析器（分页路由需要它们决定整份 L3 与减页口径）。"""
+
+    def parse(self, file_bytes: bytes, *, owner_user: str | None = None) -> ParseResult: ...
+
+    def parse_for(
+        self, file_bytes: bytes, *, doc_type: str, title: str | None, owner_user: str | None = None
+    ) -> ParseResult: ...
 
 
 def param_fingerprint(params: Mapping[str, Any]) -> str:

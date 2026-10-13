@@ -481,3 +481,11 @@ def test_blocks_from_detail_default_args_keep_old_behavior() -> None:
     (table,) = [b for b in blocks if b.block_type == "table"]
     assert table.table is not None and table.table.grid.source_engine == "textin"
     assert table.bbox is None
+
+
+def test_parse_result_new_fields_default_to_the_old_semantics() -> None:
+    from ragdemo.parse.textin import DocTypeAwareParser, MockDocumentParser, ParseResult
+
+    r = ParseResult([], 0, "textin:x", "", None, None)
+    assert (r.billable_pages, r.textin_calls, r.ledger) == (None, (), None)
+    assert not isinstance(MockDocumentParser(), DocTypeAwareParser)
