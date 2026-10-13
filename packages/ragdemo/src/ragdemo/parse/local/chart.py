@@ -46,6 +46,8 @@ FRAGMENT_SEGMENT_GAP = 8.0
 CAPTION_MAX_GAP_EM = 4.0
 DEDUP_OVERLAP = 0.8
 RESIDUAL_MIN_FRAGMENT_ROWS = 3
+# 绘图框内部 >= 这么多行是多段（对齐的文字列）→ 是表格不是图表（逻辑规则，见调参记录 §2）
+TABLE_LIKE_MIN_ROWS = 3
 REASON_FIGURE: Final = "figure"
 REASON_FIGURE_ROTATED: Final = "图表区域内的非水平文字含数字"
 REASON_CHART_UNRESOLVED: Final = "图表碎片残留（未检出图表区域）"
@@ -331,6 +333,14 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
             )
             continue
         inner_rows = cluster_rows([w for w in inner if w.upright and id(w) not in keep])
+        if (
+            sum(1 for r in inner_rows if len(split_segments(r, FRAGMENT_SEGMENT_GAP)) >= 2)
+            >= TABLE_LIKE_MIN_ROWS
+        ):
+            discarded.append(
+                f"{detection} {tuple(round(v) for v in box)}：绘图框内是对齐的文字列（表格），放弃"
+            )
+            continue
         if not all(_is_label_row(r) for r in inner_rows):
             discarded.append(
                 f"{detection} {tuple(round(v) for v in box)}：绘图框内有正文行，不是图表"

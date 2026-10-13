@@ -371,3 +371,24 @@ def test_real_v1_false_alarm_page_strips_the_bracket_fragments() -> None:
     s = strip_decor(pages)[0]
     cs = strip_charts(s.layout, body_font_size([p.layout for p in strip_decor(pages)]))
     assert cs.figures and "%" in cs.stripped_text  # 带括号的百分比碎片随图表区域剥离，不再进入正文
+
+
+def shaded_table(c: canvas.Canvas, x0: float, top: float, cols: int) -> None:
+    """无边框线、每个单元格一块填充底色的表格：几何上是一堆填充矩形，与柱状图同形。"""
+    widths, row_h = (90.0, 70.0, 70.0)[:cols], 16.0
+    for i, row in enumerate(TABLE):
+        x = x0
+        for wd, cell in zip(widths, row[:cols], strict=True):
+            c.setFillColorRGB(0.85, 0.9, 0.95 if i % 2 else 1.0)
+            c.rect(x, PH - (top + (i + 1) * row_h), wd - 2, row_h - 2, stroke=0, fill=1)
+            c.setFillColorRGB(0, 0, 0)
+            text(c, cell, x + 4, top + i * row_h + 11)
+            x += wd
+
+
+@pytest.mark.parametrize("cols", [3, 2])
+def test_a_table_drawn_with_shaded_cells_is_never_a_chart(cols: int) -> None:
+    # 真实调参集页面暴露的洞：整张表在候选绘图框内部，"框外的表格词才受保护"导致整张表被当图表剥掉
+    lay, cs = strip_first(pdf_page(lambda c: (body(c, 80, 3), shaded_table(c, 60, 140, cols))))
+    assert cs.figures == () and cs.items == ()
+    assert len(cs.layout.words) == len(lay.words)

@@ -8,7 +8,8 @@ uv run --no-sync python scripts/l0v2.py split            # 生成拆分清单（
 uv run --no-sync python scripts/l0v2.py fixtures         # 生成脱敏版面夹具
 uv run --no-sync python scripts/l0v2.py multicol-sheet   # 渲染页图 + 多栏标注表模板
 uv run --no-sync python scripts/l0v2.py headings --set tune   # 调参集标题指标（拒绝 holdout）
-uv run --no-sync python scripts/l0v2.py multicol-eval --set tune   # 调参集多栏混淆表（拒绝留出集）
+uv run --no-sync python scripts/l0v2.py multicol-eval --set tune [--charts on|off]   # 多栏混淆表
+uv run --no-sync python scripts/l0v2.py diag-v1          # v1 数字召回缺失归因（只看调参集文档）
 """
 
 from __future__ import annotations
@@ -26,21 +27,21 @@ import pdfplumber
 import psycopg
 
 from ragdemo.config import load_config
-from ragdemo.parse.local.columns import REASON_GUTTER, REASON_VERTICAL, page_columns
+from ragdemo.parse.local.chart import strip_charts
+from ragdemo.parse.local.columns import page_columns
 from ragdemo.parse.local.compare import (
     HeadingMatchV2,
     heading_matches_v2,
+    number_recall_precision,
+    plain_text_from_markdown,
     sum_heading_matches,
     wilson_interval,
 )
 from ragdemo.parse.local.decor import strip_decor
 from ragdemo.parse.local.l0_eval import EvalRow, aggregate_multicol, format_report, parse_labels
-from ragdemo.parse.local.layout import PageLayout, extract_pages
-from ragdemo.parse.local.pipeline import (
-    PageResult,
-    parse_layouts_deterministic,
-    parse_pages_deterministic,
-)
+from ragdemo.parse.local.layout import extract_pages
+from ragdemo.parse.local.pipeline import parse_pages_deterministic
+from ragdemo.parse.local.recall_diag import MissingNumbers, classify_missing_numbers
 from ragdemo.parse.local.samples import (
     FORCED_TUNE,
     SampleDoc,
@@ -192,17 +193,26 @@ def cmd_headings(set_name: str) -> None:
     )
 
 
-def _is_column_flag(res: PageResult) -> bool:
-    """流水线把这一页判为多栏退回（与 pipeline 一致：看 layout_unsupported + 多栏原因）。"""
-    return res.status == "layout_unsupported" and res.reason in (REASON_GUTTER, REASON_VERTICAL)
+def _column_flags(pdf: bytes, *, charts: bool) -> dict[int, bool]:
+    """剥装饰 → （charts 时）剥图表区域 → 整页多栏判定。与 parse_layouts_l0 同一次序。"""
+    stripped = strip_decor(extract_pages(pdf))
+    body = body_font_size([s.layout for s in stripped])
+    out: dict[int, bool] = {}
+    for s in stripped:
+        lay = strip_charts(s.layout, body).layout if charts else s.layout
+        out[s.layout.page] = page_columns(lay, body).multicolumn or any(
+            not w.upright for w in lay.words
+        )
+    return out
 
 
-def cmd_multicol_eval(set_name: str) -> None:
-    """【仅检测器诊断】调参集多栏检测评估：对标注页跑与流水线相同的整页列判定（含竖排单字检查）。
+def cmd_multicol_eval(set_name: str, *, charts: bool = True) -> None:
+    """【仅检测器诊断】调参集多栏检测评估：对标注页跑整页列判定（含竖排单字检查），
+    charts=True 时先剥图表区域再判（与 T5 parse_layouts_l0 同一次序），False 复现 T3 的口径。
     口径与计划的 G4/G5/G11 不同（计划 G4 = L0 接受的 multi 页；G5/G11 按 financial_statement →
     multicolumn → table 的页型顺序，no_text_layer 不计），数字只作诊断，T5 须用 classify_page /
     parse_layouts_l0 重测。
-    unsure 不进比率；留出集一律拒绝。另报调参集公告页 layout_unsupported 占比（G11 类比）。"""
+    unsure 不进比率；留出集一律拒绝。另报调参集公告判多栏页占比（G11 类比）。"""
     sample_set = require_tune_set(set_name)
     split = read_split(SPLIT_PATH)
     tune_keys = {(r.doc.group, r.doc.key) for r in split if r.sample_set == sample_set}
@@ -214,49 +224,104 @@ def cmd_multicol_eval(set_name: str) -> None:
     blob = LocalBlobStore(load_config().blob_root)
     docs = _db_docs()
     files = _research_files()
-    results: dict[tuple[str, str], dict[int, PageResult]] = {}
-    layouts: dict[tuple[str, str], dict[int, PageLayout]] = {}
+    flags: dict[tuple[str, str], dict[int, bool]] = {}
 
-    def run(group: str, key: str) -> dict[int, PageResult]:
-        if (group, key) not in results:
-            pdf = _pdf_bytes(group, key, docs, blob, files)
-            pages = extract_pages(pdf)
-            results[(group, key)] = {r.page: r for r in parse_layouts_deterministic(pages)}
-            stripped = [s.layout for s in strip_decor(pages)]
-            layouts[(group, key)] = {lay.page: lay for lay in stripped}
-        return results[(group, key)]
-
-    def detected(group: str, key: str, page: int) -> bool:
-        res = run(group, key)[page]
-        if _is_column_flag(res):
-            return True
-        if res.status in ("layout_unsupported", "no_text_layer"):
-            # 流水线在进入排版（列检测）之前就因方向 / 无文字层退回了这一页：列检测器没被问到，
-            # 这里直接问它（用该文档全部页的正文字号），评估的是检测器而不是上游的预先退回
-            lays = list(layouts[(group, key)].values())
-            return page_columns(layouts[(group, key)][page], body_font_size(lays)).multicolumn
-        return False
+    def run(group: str, key: str) -> dict[int, bool]:
+        if (group, key) not in flags:
+            flags[(group, key)] = _column_flags(
+                _pdf_bytes(group, key, docs, blob, files), charts=charts
+            )
+        return flags[(group, key)]
 
     rows = [
-        EvalRow(lb.group, lb.key, lb.page, lb.label, detected(lb.group, lb.key, lb.page))
+        EvalRow(lb.group, lb.key, lb.page, lb.label, run(lb.group, lb.key)[lb.page])
         for lb in labels
     ]
+    print(f"[detector-only diagnostic] charts={'on' if charts else 'off'}")
     print(format_report(aggregate_multicol(rows)))
     ann = [
         r.doc.key
         for r in split
         if r.doc.group == "docs" and r.doc.stratum == "announcement" and r.sample_set == sample_set
     ]
-    pages = [res for k in ann for res in run("docs", k).values()]
-    unsupported = [res for res in pages if res.status == "layout_unsupported"]
-    by_reason: dict[str, int] = {}
-    for res in unsupported:
-        by_reason[res.reason] = by_reason.get(res.reason, 0) + 1
+    pages = [flag for k in ann for flag in run("docs", k).values()]
     print(
-        "[detector-only diagnostic] G11-analogue: "
-        f"announcement pages {len(pages)}, layout_unsupported {len(unsupported)}"
-        f" ({len(unsupported) / len(pages):.4f}; target <= 0.10); column-flagged "
-        f"{sum(_is_column_flag(r) for r in pages)}; by reason {by_reason}"
+        "[detector-only diagnostic] column-flagged announcement pages (G11 analogue): "
+        f"{sum(pages)} / {len(pages)} = {sum(pages) / len(pages):.4f} (target <= 0.10)"
+    )
+
+
+V1_DOCS_TSV: Final = Path("data/experiments/parse-compare-det-docs-2026-10-12.tsv")
+V1_MD_DIR: Final = Path("data/experiments/det-md")
+
+
+def cmd_diag_v1() -> None:
+    """解释 v1 的数字召回缺失：候选用 v1 运行留在本机的逐页 markdown，口径与 v1 相同
+    （整份文档、只算 accepted 文档、参考 = 整份 TextIn markdown 去标签）。v1 没有图表剥离，
+    figure_text 为空。**只处理调参集文档**：留出集文档一份都不读（防过拟合硬规则），
+    所以不复现 v1 的全体均值 0.9855，只逐份核对 v1 记录的召回。"""
+    tune_docs = {
+        r.doc.key
+        for r in read_split(SPLIT_PATH)
+        if r.doc.group == "docs" and r.sample_set == "tune"
+    }
+    blob = LocalBlobStore(load_config().blob_root)
+    docs = _db_docs()
+    rows = [ln.split("\t") for ln in V1_DOCS_TSV.read_text(encoding="utf-8").splitlines()]
+    col = {name: i for i, name in enumerate(rows[0])}
+    out = OUT_ROOT / "diag-v1-recall.tsv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    total = MissingNumbers()
+    recalls: list[float] = []
+    lines = [
+        "doc_id\tdoc_type\tv1_recall\trecomputed\tref\thit\tdecor\ttokenization"
+        "\tnot_in_text_layer\tunexplained\texamples"
+    ]
+    for r in rows[1:]:
+        doc_id = r[col["doc_id"]]
+        if r[col["accepted"]] != "1" or doc_id not in tune_docs:
+            continue
+        raw_ref, _json_ref, md_ref, doc_type = docs[doc_id]
+        pages = sorted((V1_MD_DIR / doc_id).glob("p*.md"))
+        candidate = "\n\n".join(p.read_text(encoding="utf-8") for p in pages)
+        reference = plain_text_from_markdown(blob.get(md_ref).decode("utf-8"))
+        stripped = strip_decor(extract_pages(blob.get(raw_ref)))
+        m = classify_missing_numbers(
+            reference,
+            candidate,
+            layer_text="\n".join(s.layout.text for s in stripped),
+            stripped_text="\n".join(s.stripped_text for s in stripped),
+        )
+        recomputed = number_recall_precision(reference, candidate)[0]
+        if abs(recomputed - float(r[col["num_recall"]])) > 1e-4:
+            raise SystemExit(
+                f"{doc_id}：复算召回 {recomputed:.4f} != v1 记录 {r[col['num_recall']]}，"
+                "v1 产物已变，停止"
+            )
+        total = total.plus(m)
+        recalls.append(recomputed)
+        lines.append(
+            "\t".join(
+                [
+                    doc_id,
+                    doc_type,
+                    r[col["num_recall"]],
+                    f"{recomputed:.4f}",
+                    str(m.reference_total),
+                    str(m.hit),
+                    str(m.decor_stripped),
+                    str(m.tokenization),
+                    str(m.not_in_text_layer),
+                    str(m.unexplained),
+                    " ".join(m.examples)[:300],
+                ]
+            )
+        )
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{out}\n调参集 accepted {len(recalls)} 份，召回均值 {sum(recalls) / len(recalls):.4f}")
+    print(
+        f"缺失合计：decor {total.decor_stripped}、tokenization {total.tokenization}、"
+        f"not_in_text_layer {total.not_in_text_layer}、unexplained {total.unexplained}"
     )
 
 
@@ -314,6 +379,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     hd.add_argument("--set", dest="sample_set", required=True, help="只接受 tune")
     me = sub.add_parser("multicol-eval")
     me.add_argument("--set", dest="sample_set", required=True, help="只接受 tune")
+    me.add_argument("--charts", choices=("on", "off"), default="on", help="先剥图表再判多栏")
+    sub.add_parser("diag-v1")
     args = ap.parse_args(argv)
     if args.cmd == "split":
         cmd_split()
@@ -326,9 +393,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise SystemExit(str(exc)) from exc
     elif args.cmd == "multicol-eval":
         try:
-            cmd_multicol_eval(args.sample_set)
+            cmd_multicol_eval(args.sample_set, charts=args.charts == "on")
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+    elif args.cmd == "diag-v1":
+        cmd_diag_v1()
     elif args.cmd == "multicol-sheet":
         cmd_multicol_sheet(extra_page2=args.extra_page2)
 
