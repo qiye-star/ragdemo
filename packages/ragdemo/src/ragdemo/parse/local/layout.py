@@ -5,9 +5,9 @@ from __future__ import annotations
 import io
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pdfplumber
 
@@ -30,6 +30,42 @@ class Word:
         return (self.top + self.bottom) / 2
 
 
+GraphicKind = Literal["image", "rect", "line", "curve"]
+
+
+@dataclass(frozen=True)
+class Graphic:
+    """页面上的一个非文字对象的外接框（pdfplumber 坐标：原点页面左上角，y 向下，单位 pt）。"""
+
+    kind: GraphicKind
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+    filled: bool = False  # rect / curve 是否填充（pdfplumber 对象的 fill）
+    points: int = 0  # curve 的点数（pdfplumber 的 pts）；其他为 0
+
+    @property
+    def width(self) -> float:
+        return self.x1 - self.x0
+
+    @property
+    def height(self) -> float:
+        return self.bottom - self.top
+
+
+def _graphic(kind: GraphicKind, o: Mapping[str, Any]) -> Graphic:
+    return Graphic(
+        kind,
+        float(o["x0"]),
+        float(o["x1"]),
+        float(o["top"]),
+        float(o["bottom"]),
+        bool(o.get("fill", False)),
+        len(o.get("pts") or []) if kind == "curve" else 0,
+    )
+
+
 @dataclass(frozen=True)
 class PageLayout:
     page: int  # 从 1 起
@@ -41,6 +77,7 @@ class PageLayout:
     rtl_text: bool = (
         False  # 有字符的文本矩阵从右向左走（matrix[0] < 0），此时 pdfplumber 的词序是倒的
     )
+    graphics: tuple[Graphic, ...] = ()  # 图片 / 矩形 / 线 / 曲线的外接框（图表检测用）
 
 
 _BOLD_MARKERS = ("bold", "black", "heavy", "semibold", "demibold", "-bd", "extrabold")
@@ -133,6 +170,12 @@ def extract_pages(pdf_bytes: bytes) -> list[PageLayout]:
                     p.extract_text() or "",
                     int(p.rotation or 0),
                     rtl,
+                    tuple(
+                        [_graphic("image", o) for o in p.images]
+                        + [_graphic("rect", o) for o in p.rects]
+                        + [_graphic("line", o) for o in p.lines]
+                        + [_graphic("curve", o) for o in p.curves]
+                    ),
                 )
             )
     return pages

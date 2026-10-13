@@ -156,6 +156,9 @@ def _body_text(words: Sequence[Word]) -> str:
     return "\n".join(_row_text(r) for r in cluster_rows(words))
 
 
+body_text = _body_text  # chart.py 用同一口径重建剥离后的文字层
+
+
 def strip_decor(pages: Sequence[PageLayout]) -> list[StrippedPage]:
     """对整份文档剥离装饰文字，返回与输入等长的列表。"""
     if len(pages) < MIN_DOC_PAGES:

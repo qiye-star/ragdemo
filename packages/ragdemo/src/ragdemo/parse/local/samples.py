@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from ragdemo.parse.local.layout import PageLayout, Word
+from ragdemo.parse.local.layout import Graphic, PageLayout, Word
 
 SPLIT_SEED: Final = 20261012
 Group = Literal["docs", "research"]
@@ -165,6 +165,19 @@ def layout_to_fixture(layout: PageLayout) -> dict[str, Any]:
             ]
             for w in layout.words
         ],
+        # 只有几何，没有任何文字或像素（ADR-0014 的脱敏口径）
+        "graphics": [
+            [
+                g.kind,
+                round(g.x0, 2),
+                round(g.x1, 2),
+                round(g.top, 2),
+                round(g.bottom, 2),
+                g.filled,
+                g.points,
+            ]
+            for g in layout.graphics
+        ],
     }
 
 
@@ -182,4 +195,15 @@ def layout_from_fixture(d: Mapping[str, Any]) -> PageLayout:
         )
         for t, x0, x1, top, bottom, up, size, bold in d["words"]
     ]
-    return PageLayout(int(d["page"]), float(d["width"]), float(d["height"]), words, str(d["text"]))
+    graphics = tuple(
+        Graphic(str(k), float(x0), float(x1), float(top), float(bottom), bool(filled), int(points))  # type: ignore[arg-type]
+        for k, x0, x1, top, bottom, filled, points in d.get("graphics", [])
+    )
+    return PageLayout(
+        int(d["page"]),
+        float(d["width"]),
+        float(d["height"]),
+        words,
+        str(d["text"]),
+        graphics=graphics,
+    )

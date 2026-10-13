@@ -25,6 +25,9 @@ dependencies = [
     # 本地版面解析（解析降本计划 Task 2）：词坐标 + 文字层。MIT 许可；
     # 不用 PyMuPDF——AGPL-3.0，与闭源分发不兼容。
     "pdfplumber>=0.11",
+    # 图表区域裁图（L0 第二版 T4）：已因 pdfplumber 在锁文件里，业务代码现在直接 import，写成直接依赖。
+    "pypdfium2>=5.13",
+    "pillow>=12.3",
 ]
 
 [project.scripts]

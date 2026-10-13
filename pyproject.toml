@@ -50,6 +50,10 @@ files = ["packages", "tests"]
 mypy_path = "packages/ragdemo-core/src:packages/ragdemo/src"
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true  # 无类型标注
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers"]

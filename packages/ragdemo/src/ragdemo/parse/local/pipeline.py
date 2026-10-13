@@ -177,6 +177,9 @@ def _self_check(
     return bad_numbers, "；".join(reasons)
 
 
+self_check = _self_check  # L0 第二版与测试使用的公开名
+
+
 def parse_pages_deterministic(pdf_bytes: bytes) -> list[PageResult]:
     """确定性排版版本的逐页本地解析：不调用任何模型，输出字符全部来自文字层。"""
     return parse_layouts_deterministic(extract_pages(pdf_bytes))
