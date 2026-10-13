@@ -318,8 +318,11 @@ def is_fragment_row(row: Sequence[Word]) -> bool:
 def residual_fragment_rows(rows: Sequence[Sequence[Word]]) -> int:
     """剥离后仍留在正文里的碎片行数。
 
-    >= RESIDUAL_MIN_FRAGMENT_ROWS 说明有图表没检出（T5 判 chart_unresolved）。"""
-    return sum(1 for r in rows if is_fragment_row(r))
+    >= RESIDUAL_MIN_FRAGMENT_ROWS 说明有图表没检出（T5 判 chart_unresolved）。落在坐标表格区域里的
+    行不算：表格里的短数字单元格（"12%" "13%" "14%"）形状上是碎片行，但它们是表格，由表格路径处理
+    （T4 评审 I5：调参记录里"约 30% 页会被降级"就是没排除它们）。"""
+    in_table = {id(w) for reg in find_table_regions(rows) for r in reg for w in r}
+    return sum(1 for r in rows if is_fragment_row(r) and not any(id(w) in in_table for w in r))
 
 
 def _is_label_row(row: Sequence[Word]) -> bool:

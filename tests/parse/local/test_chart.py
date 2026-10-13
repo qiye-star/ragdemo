@@ -538,3 +538,16 @@ def test_i2_two_charts_side_by_side_each_get_their_own_caption() -> None:
     _, cs = strip_first(pdf_page(draw))
     figs = sorted(cs.figures, key=lambda f: f.bbox[0])
     assert [f.caption for f in figs] == ["图5：甲公司", "图6：乙公司"]
+
+
+def test_i5_fragment_rows_inside_table_regions_are_not_residual_chart_fragments() -> None:
+    table = [
+        line("12%", 200 + i * LEAD, x=60)
+        + line("13%", 200 + i * LEAD, x=160)
+        + line("14%", 200 + i * LEAD, x=260)
+        for i in range(4)
+    ]
+    assert all(is_fragment_row(r) for r in table)
+    assert residual_fragment_rows([*body_lines(100, 5), *table]) == 0
+    loose = [line("40%", 300 + i * LEAD) for i in range(3)]
+    assert residual_fragment_rows([*body_lines(100, 5), *table, *loose]) == 3

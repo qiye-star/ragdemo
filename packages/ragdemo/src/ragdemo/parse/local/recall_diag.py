@@ -2,24 +2,48 @@
 
 - figure_stripped：随图表区域一起剥离的文字里（图表数据不提取，用户 2026-10-13 裁决）；
 - decor_stripped：在被剥离的装饰文字（页眉页脚 / 页码 / 旋转字）里；
-- unexplained：文字层里还有富余（没被输出用掉）的同一个数字，输出却少了——构造上不可能，出现即 bug；
+- unexplained：文字层（正文）里还有富余（没被输出用掉）的同一个数字，输出却少了。**不是**"构造上
+  不可能"：只有输出的某页被丢弃 / 数字被排版吞掉时才为 0，分析对象全是 ok 页时恒为 0 只说明没有这类
+  文档，不说明没有这类 bug；先于 decor 判定，免得正文丢了的数字被同一个数字的页眉页脚掩盖；
+- decor_stripped：在被剥离的装饰文字（页眉页脚 / 页码 / 旋转字）里；
 - not_in_text_layer：数字串在文字层里根本不存在（TextIn 从图片里 OCR 的）；
-- tokenization：数字串在文字层里，但分词不同（跨词、与相邻字符连写等），
-  逐个列入 examples 供人工复核。"""
+- tokenization：数字串在**同一页**文字层的**同一个数字串**里（小数点 / 千分位逗号两侧空白已愈合），
+  但分词不同（与相邻字符连写、拆成多个词等），逐个列入 examples 供人工复核。
+  数字串由多个独立的数字段拼出来的（"7" "7" → "77"）、或跨页拼出来的，不算 tokenization。
+
+参考侧先愈合 TextIn 的 "5 . 83" / "5 , 223 , 600"（T4 评审 I4 裁决）：否则一个数字被记成缺 2 个、
+参考总数多 1，召回系统性偏低。"""
 
 from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+from ragdemo.parse.local.compare import number_recall_precision
 from ragdemo.parse.local.number_closure import fold_text, numbers_in
+from ragdemo.parse.textin_audit import heal_spacing
 
 _NON_DIGIT = re.compile(r"\D")
+_DIGIT_RUN = re.compile(r"\d[\d.,]*\d|\d")
 
 
-def _digits(text: str) -> str:
-    return _NON_DIGIT.sub("", fold_text(text))
+def normalize_reference_numbers(text: str) -> str:
+    """参考侧（TextIn）归一化：'5 . 83' → '5.83'，'5 , 223 , 600' → '5,223,600'。
+    只作用于参考文本，永不作用于候选 / 文字层（候选里的空格分隔数字就是两个数字）。"""
+    return heal_spacing(text)
+
+
+def number_recall_precision_normalised(reference: str, candidate: str) -> tuple[float, float]:
+    """G3 / G13 口径：参考侧先归一化的数字召回与精确率。"""
+    return number_recall_precision(normalize_reference_numbers(reference), candidate)
+
+
+def _digit_runs(text: str) -> list[str]:
+    """一页文字里的数字串：小数点 / 千分位逗号相连的数字归为一串（愈合两侧空白），
+    裸空白隔开的数字是不同的串。只留数字。"""
+    return [_NON_DIGIT.sub("", m) for m in _DIGIT_RUN.findall(heal_spacing(fold_text(text)))]
 
 
 @dataclass(frozen=True)
@@ -51,13 +75,22 @@ class MissingNumbers:
 
 
 def classify_missing_numbers(
-    reference: str, candidate: str, *, layer_text: str, stripped_text: str, figure_text: str = ""
+    reference: str,
+    candidate: str,
+    layer_text: str,
+    stripped_text: str,
+    figure_text: str = "",
+    layer_pages: Sequence[str] | None = None,
 ) -> MissingNumbers:
-    ref, cand = numbers_in(reference), numbers_in(candidate)
+    """layer_pages：逐页文字层（给了就按页匹配 tokenization；不给则整份 layer_text 当一页）。"""
+    ref, cand = numbers_in(normalize_reference_numbers(reference)), numbers_in(candidate)
     figure = numbers_in(figure_text)
     stripped = numbers_in(stripped_text)
     spare = numbers_in(layer_text) - cand  # 文字层里没被输出用掉的数字
-    layer_digits = _digits(layer_text + "\n" + stripped_text + "\n" + figure_text)
+    pages = list(layer_pages) if layer_pages is not None else [layer_text]
+    run_blob = "\n".join(
+        sorted({run for page in (*pages, stripped_text, figure_text) for run in _digit_runs(page)})
+    )
     counts: Counter[str] = Counter()
     examples: list[str] = []
     for n, c in sorted((ref - cand).items()):
@@ -65,14 +98,14 @@ def classify_missing_numbers(
             if figure[n] > 0:
                 figure[n] -= 1
                 counts["figure"] += 1
-            elif stripped[n] > 0:
-                stripped[n] -= 1
-                counts["decor"] += 1
             elif spare[n] > 0:
                 spare[n] -= 1
                 counts["unexplained"] += 1
                 examples.append(n)
-            elif _digits(n) not in layer_digits:
+            elif stripped[n] > 0:
+                stripped[n] -= 1
+                counts["decor"] += 1
+            elif _NON_DIGIT.sub("", fold_text(n)) not in run_blob:
                 counts["absent"] += 1
             else:
                 counts["token"] += 1
