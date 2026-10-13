@@ -2,17 +2,31 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Final, Literal, cast
+from functools import cached_property
+from typing import Any, Final, Literal, cast, get_args
 
-GRID_VERSION: Final = "tablegrid:v1"
+JSON_SCHEMA_VERSION: Final = 1
+GRID_VERSION: Final = f"tablegrid:v{JSON_SCHEMA_VERSION}"
 BBox = tuple[float, float, float, float]
 CellCheck = Literal["not_checked", "match", "mismatch", "no_numbers", "no_text_layer"]
 
 
+_CHECKS: Final = frozenset(get_args(CellCheck))
+
+
 class GridError(ValueError):
     """网格结构不合法。"""
+
+
+def _is_int(x: object) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _is_num(x: object) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 @dataclass(frozen=True)
@@ -28,10 +42,26 @@ class GridCell:
     check: CellCheck = "not_checked"
 
     def __post_init__(self) -> None:
+        if not all(_is_int(v) for v in (self.row, self.col, self.row_span, self.col_span)):
+            raise GridError("行、列、跨度必须是 int")
+        if not isinstance(self.text, str):
+            raise GridError("text 必须是 str")
         if self.row < 0 or self.col < 0:
             raise GridError(f"行列必须 ≥ 0：({self.row}, {self.col})")
         if self.row_span < 1 or self.col_span < 1:
             raise GridError(f"跨度必须 ≥ 1：({self.row_span}, {self.col_span})")
+        if self.page is not None and (not _is_int(self.page) or self.page < 1):
+            raise GridError(f"页码必须 ≥ 1：{self.page!r}")
+        if self.bbox is not None:
+            if len(self.bbox) != 4 or not all(_is_num(v) for v in self.bbox):
+                raise GridError(f"bbox 必须是 4 个有限数：{self.bbox!r}")
+            x0, y0, x1, y1 = self.bbox
+            if not (0 <= x0 <= x1 <= 1 and 0 <= y0 <= y1 <= 1):
+                raise GridError(f"bbox 必须是归一化且 x0≤x1、y0≤y1：{self.bbox!r}")
+        if not isinstance(self.is_header, bool):
+            raise GridError("is_header 必须是 bool")
+        if self.check not in _CHECKS:
+            raise GridError(f"未知 check：{self.check!r}")
 
     def slots(self) -> list[tuple[int, int]]:
         return [
@@ -52,6 +82,12 @@ class TableGrid:
     def __post_init__(self) -> None:
         if not self.cells:
             raise GridError("网格没有任何单元格")
+        if not (_is_int(self.header_rows) and _is_int(self.header_cols)):
+            raise GridError("header_rows/header_cols 必须是 int")
+        if not 0 <= self.header_rows <= self.n_rows:
+            raise GridError(f"header_rows 越界：{self.header_rows}（行数 {self.n_rows}）")
+        if not 0 <= self.header_cols <= self.n_cols:
+            raise GridError(f"header_cols 越界：{self.header_cols}（列数 {self.n_cols}）")
 
     @property
     def n_rows(self) -> int:
@@ -65,12 +101,16 @@ class TableGrid:
     def pages(self) -> tuple[int, ...]:
         return tuple(sorted({c.page for c in self.cells if c.page is not None}))
 
+    @cached_property
+    def _slot_index(self) -> dict[tuple[int, int], GridCell]:
+        index: dict[tuple[int, int], GridCell] = {}
+        for cell in self.cells:  # 后出现者覆盖，与 table_markdown 一致
+            for slot in cell.slots():
+                index[slot] = cell
+        return index
+
     def cell_at(self, row: int, col: int) -> GridCell | None:
-        found: GridCell | None = None
-        for cell in self.cells:
-            if (row, col) in cell.slots():
-                found = cell
-        return found
+        return self._slot_index.get((row, col))
 
     def holes(self) -> list[tuple[int, int]]:
         covered = {s for c in self.cells for s in c.slots()}
@@ -101,7 +141,7 @@ class TableGrid:
 
 def grid_to_json(grid: TableGrid) -> dict[str, Any]:
     return {
-        "v": 1,
+        "v": JSON_SCHEMA_VERSION,
         "engine": grid.source_engine,
         "ref": grid.provider_ref,
         "hr": grid.header_rows,
@@ -123,29 +163,72 @@ def grid_to_json(grid: TableGrid) -> dict[str, Any]:
     }
 
 
-def grid_from_json(data: Mapping[str, Any]) -> TableGrid:
-    if int(data.get("v", 0)) != 1:
-        raise GridError(f"未知网格 JSON 版本：{data.get('v')!r}")
-    cells = tuple(
-        GridCell(
-            int(c["r"]),
-            int(c["c"]),
-            int(c["rs"]),
-            int(c["cs"]),
-            str(c["t"]),
-            page=None if c.get("p") is None else int(c["p"]),
-            bbox=None if c.get("b") is None else cast(BBox, tuple(float(x) for x in c["b"])),
-            is_header=bool(c.get("h", False)),
-            check=cast(CellCheck, str(c.get("k", "not_checked"))),
-        )
-        for c in data["cells"]
+def _req(d: Mapping[str, Any], key: str) -> object:
+    if key not in d:
+        raise GridError(f"网格 JSON 缺少键：{key!r}")
+    return d[key]
+
+
+def _int_field(d: Mapping[str, Any], key: str, default: int | None = None) -> int:
+    v = d.get(key, default) if default is not None else _req(d, key)
+    if not _is_int(v):
+        raise GridError(f"网格 JSON 字段 {key!r} 必须是 int：{v!r}")
+    return cast(int, v)
+
+
+def _cell_from_json(c: object) -> GridCell:
+    if not isinstance(c, Mapping):
+        raise GridError("单元格 JSON 必须是对象")
+    t = _req(c, "t")
+    if not isinstance(t, str):
+        raise GridError(f"字段 't' 必须是 str：{t!r}")
+    page = c.get("p")
+    if page is not None and not _is_int(page):
+        raise GridError(f"字段 'p' 必须是 int 或 null：{page!r}")
+    b = c.get("b")
+    bbox: BBox | None = None
+    if b is not None:
+        if not isinstance(b, (list, tuple)) or len(b) != 4 or not all(_is_num(x) for x in b):
+            raise GridError(f"字段 'b' 必须是 4 个数：{b!r}")
+        bbox = cast(BBox, tuple(float(x) for x in b))
+    h = c.get("h", False)
+    if not isinstance(h, bool):
+        raise GridError(f"字段 'h' 必须是 bool：{h!r}")
+    k = c.get("k", "not_checked")
+    if not isinstance(k, str) or k not in _CHECKS:
+        raise GridError(f"字段 'k' 非法：{k!r}")
+    return GridCell(
+        _int_field(c, "r"),
+        _int_field(c, "c"),
+        _int_field(c, "rs"),
+        _int_field(c, "cs"),
+        t,
+        page=cast("int | None", page),
+        bbox=bbox,
+        is_header=h,
+        check=cast(CellCheck, k),
     )
+
+
+def grid_from_json(data: Mapping[str, Any]) -> TableGrid:
+    v = data.get("v")
+    if not _is_int(v) or v != JSON_SCHEMA_VERSION:
+        raise GridError(f"未知网格 JSON 版本：{v!r}")
+    engine = _req(data, "engine")
+    if not isinstance(engine, str):
+        raise GridError(f"字段 'engine' 必须是 str：{engine!r}")
+    ref = data.get("ref")
+    if ref is not None and not isinstance(ref, str):
+        raise GridError(f"字段 'ref' 必须是 str 或 null：{ref!r}")
+    raw = _req(data, "cells")
+    if not isinstance(raw, (list, tuple)):
+        raise GridError("字段 'cells' 必须是数组")
     return TableGrid(
-        cells=cells,
-        source_engine=str(data["engine"]),
-        provider_ref=None if data.get("ref") is None else str(data["ref"]),
-        header_rows=int(data.get("hr", 0)),
-        header_cols=int(data.get("hc", 0)),
+        cells=tuple(_cell_from_json(c) for c in raw),
+        source_engine=engine,
+        provider_ref=ref,
+        header_rows=_int_field(data, "hr", 0),
+        header_cols=_int_field(data, "hc", 0),
     )
 
 

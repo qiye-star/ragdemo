@@ -94,3 +94,54 @@ def test_remap_pages_for_sub_pdf() -> None:
     assert remap_grid_pages(g, {3: 10, 4: 11}).pages == (10, 11)
     with pytest.raises(GridError):
         remap_grid_pages(g, {3: 10})
+
+
+def test_cell_validation() -> None:
+    for bad in (
+        dict(bbox=(180.0, 1162.0, 1058.0, 1525.0)),  # pixel box
+        dict(bbox=(0.5, 0.5, 0.1, 0.1)),  # inverted
+        dict(bbox=(0.1, 0.1, 0.2, float("nan"))),
+        dict(page=0),
+        dict(page=-1),
+        dict(check="matched"),
+    ):  # fmt: skip
+        with pytest.raises(GridError):
+            GridCell(0, 0, 1, 1, "a", **bad)
+    with pytest.raises(GridError):
+        GridCell(0, 0, 1, 1, None)  # type: ignore[arg-type]
+    with pytest.raises(GridError):
+        GridCell(0.5, 0, 1, 1, "a")  # type: ignore[arg-type]
+
+
+def test_grid_header_bounds() -> None:
+    cell = GridCell(0, 0, 1, 1, "a")
+    for rows, cols in ((2, 0), (-1, 0), (0, 2), (0, -1)):
+        with pytest.raises(GridError):
+            TableGrid(cells=(cell,), source_engine="x", header_rows=rows, header_cols=cols)
+
+
+def test_from_json_is_strict() -> None:
+    base = {"r": 0, "c": 0, "rs": 1, "cs": 1, "t": "a"}
+
+    def mk(**over: object) -> dict[str, Any]:
+        return {"v": 1, "engine": "x", "cells": [{**base, **over}]}
+
+    assert grid_from_json(mk()).cells[0].text == "a"
+    for over in (
+        {"b": [0.1, 0.2, 0.3]}, {"h": "false"}, {"k": "MATCH"}, {"r": True}, {"r": "0"},
+        {"t": 5}, {"p": "2"}, {"p": 0}, {"b": [180, 1162, 1058, 1525]},
+    ):  # fmt: skip
+        with pytest.raises(GridError):
+            grid_from_json(mk(**over))
+    with pytest.raises(GridError):
+        grid_from_json({"v": "1", "engine": "x", "cells": [base]})
+    with pytest.raises(GridError):
+        grid_from_json({"v": 1, "cells": [base]})
+    with pytest.raises(GridError):
+        grid_from_json({"v": 1, "engine": "x", "cells": [base], "hr": 5})
+
+
+def test_grid_version_tied_to_json_v() -> None:
+    from ragdemo.tables.grid import GRID_VERSION
+
+    assert f"tablegrid:v{grid_to_json(_grid())['v']}" == GRID_VERSION
