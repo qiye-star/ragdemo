@@ -289,3 +289,91 @@ def test_column_unit_wins_but_row_conflict_still_blocks() -> None:
     ctx = bind_context(g, caption=None, preceding_texts=["单位：元"])
     assert ctx.unit_for_cell(1, 1, None) == "万元"
     assert ctx.unit_for_cell(2, 1, None) is None
+
+
+# --- U5 单位核对表发现的缺陷（块 427 / 1529）----------------------------------
+
+
+def test_ratio_vocabulary_covers_debt_ratio_and_coverage_multiple() -> None:
+    from ragdemo.tables.context import row_units
+
+    g = _grid(
+        ("项目", "本报告期末", "上年末"),
+        ("资产负债率", "80.60%", "71.49%"),
+        ("EBITDA利息保障倍数", "4.10", "5.23"),
+        ("销售费用率", "5.1", "4.9"),
+        ("营业收入", "1,000", "900"),
+    )
+    assert dict(row_units(g)) == {1: "%", 2: "倍", 3: "%"}
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：万元"])
+    assert ctx.unit_for_cell(1, 1, None) is None
+    assert ctx.unit_for_cell(2, 1, None) is None
+    assert ctx.unit_for_cell(4, 1, None) == "万元"
+
+
+def test_table_of_only_ratios_and_multiples_does_not_inherit_preceding_unit() -> None:
+    g = _grid(
+        ("项目", "本报告期末", "上年末"),
+        ("资产负债率", "80.60%", "71.49%"),
+        ("EBITDA 利息保障倍数", "4.10", "5.23"),
+    )
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：万元"])
+    assert (ctx.unit, ctx.unit_source) == (None, "none")
+    # 没有金额单位可继承；格级单位只剩比率标记（不可换算）
+    assert ctx.unit_for_cell(1, 1, None) == "%" and ctx.unit_for_cell(2, 2, None) == "倍"
+
+
+def test_only_percent_cells_also_drop_preceding_unit() -> None:
+    g = _grid(("项目", "本期"), ("营业收入同比", "12.5%"), ("占比", "30.0%"))
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：元"])
+    assert (ctx.unit, ctx.unit_source) == (None, "none")
+
+
+def test_one_amount_cell_keeps_preceding_unit() -> None:
+    g = _grid(
+        ("项目", "本期"),
+        ("资产负债率", "80.60%"),
+        ("总资产", "1,000"),
+    )
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：万元"])
+    assert (ctx.unit, ctx.unit_source) == ("万元", "preceding_block")
+
+
+def test_unparseable_numeric_cell_keeps_preceding_unit() -> None:
+    # 无法判定这格是不是比率（区间）→ 保守，不丢单位
+    g = _grid(("项目", "本期"), ("资产负债率", "80.60%"), ("某项目", "1,000-2,000"))
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：万元"])
+    assert (ctx.unit, ctx.unit_source) == ("万元", "preceding_block")
+
+
+def test_in_table_unit_is_kept_even_for_ratio_only_table() -> None:
+    g = _grid(("项目", "本期"), ("资产负债率", "80.60%"), ("利息保障倍数", "4.10"))
+    g_unit = _grid(("项目 单位：万元", "本期"), ("资产负债率", "80.60%"), ("利息保障倍数", "4.10"))
+    assert bind_context(g, caption=None, preceding_texts=[]).unit is None
+    ctx = bind_context(g_unit, caption=None, preceding_texts=[])
+    assert (ctx.unit, ctx.unit_source) == ("万元", "in_table")
+
+
+def test_percentage_point_change_cells_count_as_ratio() -> None:
+    g = _grid(
+        ("项目", "本期", "增减"),
+        ("加权平均净资产收益率", "3.88", "增加4.45个百分点"),
+        ("资产负债率", "80.60%", "增加1.2个百分点"),
+    )
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：万元"])
+    assert (ctx.unit, ctx.unit_source) == (None, "none")
+
+
+def test_bracket_unit_tolerates_whitespace_and_br() -> None:
+    from ragdemo.tables.context import row_units
+
+    g = _grid(
+        ("项目", "本期"),
+        ("基本每股收益(元/ 股)", "0.29"),
+        ("稀释每股收益(元/<br>股)", "0.29"),
+        ("稀释每股收益（元 / 股）", "0.29"),
+        ("净利润( 万 元 )", "5"),
+    )
+    assert dict(row_units(g)) == {1: "元/股", 2: "元/股", 3: "元/股", 4: "万元"}
+    ctx = bind_context(g, caption=None, preceding_texts=["单位：元"])
+    assert ctx.unit_for_cell(1, 1, None) is None  # 元/股 与表单位元冲突，不可换算

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Final, Literal
 
+from ragdemo.parse.local.number_closure import numbers_in
 from ragdemo.tables.grid import TableGrid
 from ragdemo.tables.headers import row_label
 from ragdemo.tables.numbers import cell_value
@@ -99,7 +100,11 @@ _BRACKET_UNIT: Final = re.compile(rf"[（(]\s*(?:单位\s*[:：]\s*)?(?P<u>{_UNI
 _FOREIGN_WORD: Final = re.compile("美元|港元|港币|美金|欧元|日元|英镑|外币")
 _RATIO_WORD: Final = re.compile(
     "比例|比率|占比|比重|收益率|毛利率|增长率|增减率|变动幅度|增减幅度|利润率|周转率"
+    "|负债率|费用率|覆盖率|回报率|报酬率|税率|净利率|增速|完成率|达成率|充足率"
 )
+_MULTIPLE_WORD: Final = re.compile("保障倍数|倍数")  # 利息保障倍数等：无量纲的"倍"
+_MULTIPLE_MARK: Final = "倍"
+_BRACKET_INNER: Final = re.compile(r"(?P<l>[（(])(?P<body>[^（()）]{1,24})(?P<r>[)）])")
 _FOREIGN_MARK: Final = "外币"
 
 
@@ -217,8 +222,15 @@ def _norm(text: str) -> str:
     return " ".join(_TAGS.sub(" ", text).split())
 
 
+def _squeeze_brackets(t: str) -> str:
+    """括号内的空白（含 <br> 折成的空格）去掉："(元/ 股)" → "(元/股)"。只用于认括号单位。"""
+    return _BRACKET_INNER.sub(
+        lambda m: m.group("l") + "".join(m.group("body").split()) + m.group("r"), t
+    )
+
+
 def _markers(text: str, *, trailing_percent: bool) -> set[str]:
-    t = _norm(text)
+    t = _squeeze_brackets(_norm(text))
     out: set[str] = set()
     for m in _BRACKET_UNIT.finditer(t):
         u = m.group("u")
@@ -231,6 +243,8 @@ def _markers(text: str, *, trailing_percent: bool) -> set[str]:
         out.add(_FOREIGN_MARK)
     if _RATIO_WORD.search(t):
         out.add("%")
+    if _MULTIPLE_WORD.search(t):
+        out.add(_MULTIPLE_MARK)
     if trailing_percent and re.search(r"[%％]\s*$", t):
         out.add("%")
     return out
@@ -282,6 +296,43 @@ def _table_scan_text(grid: TableGrid) -> str:
     return "\n".join(parts)
 
 
+_RATIO_MARKS: Final = frozenset({"%", _MULTIPLE_MARK})
+
+
+def _all_numeric_cells_are_ratios(
+    grid: TableGrid,
+    col_units: tuple[tuple[int, str], ...],
+    row_us: tuple[tuple[int, str], ...],
+) -> bool:
+    """表体里至少有一个数字格，且每个数字格都是百分数或倍数（行/列标签声明、或格内带 %）。
+
+    判不准的格（区间、多个数字、带金额行内单位、没有任何比率证据的纯数字）一律算"不是"，
+    这样只会少丢单位，不会错丢单位。
+    """
+    cu, ru = dict(col_units), dict(row_us)
+    label_cols = max(grid.header_cols, 1)
+    seen = False
+    for c in grid.cells:
+        if (
+            c.row < grid.header_rows
+            or c.col < label_cols
+            or _is_full_width(grid, c.col, c.col_span)
+        ):
+            continue
+        if not numbers_in(c.text):
+            continue
+        seen = True
+        if "百分点" in c.text:
+            continue
+        v = cell_value(c.text)
+        if v is None or v.inline_unit:
+            return False
+        if v.kind == "percent" or ru.get(c.row) in _RATIO_MARKS or cu.get(c.col) in _RATIO_MARKS:
+            continue
+        return False
+    return seen
+
+
 def bind_context(
     grid: TableGrid, *, caption: str | None, preceding_texts: Sequence[str]
 ) -> TableContext:
@@ -305,7 +356,11 @@ def bind_context(
         if scan.currencies:
             currency = _currency_of(scan.currencies)
             break
-    return TableContext(caption, unit, source, currency, column_units(grid), row_units(grid))
+    col_us, row_us = column_units(grid), row_units(grid)
+    if source == "preceding_block" and _all_numeric_cells_are_ratios(grid, col_us, row_us):
+        # 前文的"单位：万元"管的是金额；这张表里没有金额，不继承（表内自己声明的仍保留）。
+        unit, source = None, "none"
+    return TableContext(caption, unit, source, currency, col_us, row_us)
 
 
 def textin_caption(detail: Sequence[Mapping[str, Any]], item: Mapping[str, Any]) -> str | None:
