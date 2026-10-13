@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 Tier = Literal["L0", "L1", "L2", "L3"]
 TIERS: tuple[Tier, ...] = ("L0", "L1", "L2", "L3")
@@ -61,4 +61,53 @@ def route_from_dict(d: Mapping[str, Any]) -> PageRoute:
         llm_tokens=(int(llm[0]), int(llm[1])),
         vision_tokens=(int(vision[0]), int(vision[1])),
         textin_billed=bool(d.get("textin_billed")),
+    )
+
+
+SkipRuleId = Literal["blank_page", "signature_tail", "research_disclaimer_tail"]
+SKIP_RULE_IDS: Final[tuple[SkipRuleId, ...]] = (
+    "blank_page",
+    "signature_tail",
+    "research_disclaimer_tail",
+)
+
+
+def parse_skip_rules(raw: str) -> frozenset[SkipRuleId]:
+    """`PARSE_SKIP_RULES` 的逗号列表 → 规则集合；未知名一律报错（拼错不能变成"静默不跳"）。"""
+    names = {s.strip() for s in raw.split(",") if s.strip()}
+    unknown = sorted(names - set(SKIP_RULE_IDS))
+    if unknown:
+        raise ValueError(f"未知的减页规则：{unknown}（可选 {list(SKIP_RULE_IDS)}）")
+    return frozenset(cast(SkipRuleId, n) for n in names)
+
+
+@dataclass(frozen=True)
+class TextInCall:
+    """一次 TextIn 调用（整份或一个连续段）。每次计费调用对应一条 provider_snapshot。"""
+
+    pages: tuple[int, ...]  # 原文档页码，升序、连续
+    json_ref: str | None
+    md_ref: str | None
+    engine: str  # TextIn engine_version：textin:<版本>+<参数指纹>
+    billed_pages: int  # 本次实际计费页数；缓存命中为 0
+
+    def __post_init__(self) -> None:
+        if not self.pages or list(self.pages) != sorted(set(self.pages)) or self.pages[0] < 1:
+            raise ValueError(f"TextInCall.pages 必须是升序、无重复、从 1 起的页码：{self.pages}")
+        if self.billed_pages < 0:
+            raise ValueError(f"计费页数不能为负：{self.billed_pages}")
+
+
+def call_to_dict(c: TextInCall) -> dict[str, object]:
+    return {"pages": list(c.pages), "json_ref": c.json_ref, "md_ref": c.md_ref, "engine": c.engine,
+            "billed_pages": c.billed_pages}
+
+
+def call_from_dict(d: Mapping[str, Any]) -> TextInCall:
+    return TextInCall(
+        pages=tuple(int(p) for p in d["pages"]),
+        json_ref=None if d.get("json_ref") is None else str(d["json_ref"]),
+        md_ref=None if d.get("md_ref") is None else str(d["md_ref"]),
+        engine=str(d["engine"]),
+        billed_pages=int(d["billed_pages"]),
     )
