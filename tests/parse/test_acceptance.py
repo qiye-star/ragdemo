@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+from dataclasses import replace
+
+import pytest
 
 from ragdemo.parse.acceptance import (
     DocumentMeta,
@@ -12,6 +15,7 @@ from ragdemo.parse.acceptance import (
     PageInput,
     check_document_meta,
     check_page,
+    coverage_ratio,
     verdict_for_document,
 )
 
@@ -280,3 +284,25 @@ def test_warnings_for_p4_p6_and_unconfigured_threshold() -> None:
     assert any("P4" in w and "阈值" in w for w in d2.warnings)
     badfig = page(chart_regions=1, figures=(dataclasses.replace(FIG, bbox=None),))
     assert any("P6" in w for w in v([badfig]).warnings)
+
+
+def test_skipped_pages_are_not_missing_but_cannot_overlap_or_occur_in_periodic_reports() -> None:
+    p = PageInput(
+        1, "L3", "textin", "plain_text", ("x",), "not_run", "营业收入 91.2", "营业收入 91.2"
+    )
+    meta = DocumentMeta(True, "e", True, page_count=2, skipped_pages=frozenset({2}))
+    assert verdict_for_document([p], meta).state == "accepted"
+    assert verdict_for_document([p], replace(meta, skipped_pages=frozenset())).state == "rejected"
+    assert (
+        verdict_for_document([p], replace(meta, skipped_pages=frozenset({1, 2}))).state
+        == "rejected"
+    )
+    assert verdict_for_document([p], replace(meta, forced_l3=True)).state == "rejected"
+
+
+def test_coverage_ratio_is_reported_without_a_threshold() -> None:
+    text = "营业收入" * 20
+    p = PageInput(1, "L0", "local_det:det-v2", "plain_text", (), "passed", text, "营业收入" * 10)
+    assert coverage_ratio(p) == pytest.approx(0.5)
+    assert coverage_ratio(replace(p, text_layer_text=None)) is None
+    assert coverage_ratio(replace(p, text_layer_text="短")) is None

@@ -32,7 +32,8 @@ verdict_for_document 汇总成 P8（DocVerdict.state，6 种结论之一）。
    私有材料不得处于公共检索空间。meta 缺失（None）按失败处理。
 9. 文档级附加（并入 P1）：页码必须无重复、无缺页（需要 meta.page_count；缺失时只告警）；
    meta.forced_l3（标题/文件名识别出的年报/半年报，识别由 W3 实现，这里只收标志）为真时
-   每一页都必须是 L3，否则文档不合格。
+   每一页都必须是 L3，否则文档不合格。跳页（skipped_pages）不算缺页；跳页与入库页重叠、
+   或 forced_l3 文档有跳页 → 不合格。
 """
 
 from __future__ import annotations
@@ -50,6 +51,9 @@ from ragdemo.parse.local.number_closure import fold_text, numbers_in
 TIERS: Final = ("L0", "L1", "L2", "L3")
 TABLE_KINDS: Final = frozenset({"table", "financial_statement"})
 MIN_COVERAGE_CHARS: Final = 40
+ACCEPTANCE_VERSION: Final = (
+    "acc-v2"  # v2：DocumentMeta.skipped_pages 与 coverage_ratio（L0 + TextIn 分页接入计划 T8）
+)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 TierVerdict = Literal["passed", "failed", "not_run"]
@@ -98,6 +102,7 @@ class DocumentMeta:
     is_private_material: bool = False
     in_public_space: bool = False
     forced_l3: bool = False  # 标题/文件名识别出的定期报告（W3 提供）
+    skipped_pages: frozenset[int] = frozenset()  # 经减页规则跳过、不入库的页（台账 tier='skipped'）
 
 
 @dataclass(frozen=True)
@@ -177,6 +182,18 @@ def _p3(p: PageInput) -> PageCheck:
     return _ok("P3", "数字均可溯源")
 
 
+def coverage_ratio(p: PageInput) -> float | None:
+    """P4 的比值本身（不依赖阈值）；无文字层或文字层内容字符不足 MIN_COVERAGE_CHARS 返回 None。"""
+    if not _has_text_layer(p) or p.text_layer_text is None:
+        return None
+    need = _content_len(p.text_layer_text)
+    if p.stripped_text and p.chart_regions > 0 and p.figures:
+        need -= _content_len(p.stripped_text)
+    if need < MIN_COVERAGE_CHARS:
+        return None
+    return _content_len(plain_text_from_markdown(p.output_markdown)) / need
+
+
 def _p4(p: PageInput, threshold: float | None) -> PageCheck:
     if not _has_text_layer(p) or p.text_layer_text is None:
         return _ok("P4", "无文字层", "na")
@@ -252,9 +269,13 @@ def _structure_problems(pages: Sequence[PageInput], meta: DocumentMeta | None) -
     dup = sorted(n for n, c in Counter(nums).items() if c > 1)
     if dup:
         out.append(f"页码重复 {dup}")
+    skipped = meta.skipped_pages if meta is not None else frozenset()
+    both = sorted(set(nums) & skipped)
+    if both:
+        out.append(f"页既入库又被跳过 {both[:20]}")
     if meta is not None and meta.page_count is not None:
-        missing = sorted(set(range(1, meta.page_count + 1)) - set(nums))
-        extra = sorted(n for n in set(nums) if n < 1 or n > meta.page_count)
+        missing = sorted(set(range(1, meta.page_count + 1)) - set(nums) - skipped)
+        extra = sorted(n for n in set(nums) | skipped if n < 1 or n > meta.page_count)
         if missing:
             out.append(f"缺页 {missing[:20]}")
         if extra:
@@ -263,6 +284,8 @@ def _structure_problems(pages: Sequence[PageInput], meta: DocumentMeta | None) -
         bad = sorted(p.page for p in pages if p.tier != "L3")
         if bad:
             out.append(f"定期报告须整份 L3，非 L3 页 {bad[:20]}")
+        if skipped:
+            out.append(f"定期报告不得跳页 {sorted(skipped)[:20]}")
     return out
 
 
