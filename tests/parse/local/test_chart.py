@@ -551,3 +551,20 @@ def test_i5_fragment_rows_inside_table_regions_are_not_residual_chart_fragments(
     assert residual_fragment_rows([*body_lines(100, 5), *table]) == 0
     loose = [line("40%", 300 + i * LEAD) for i in range(3)]
     assert residual_fragment_rows([*body_lines(100, 5), *table, *loose]) == 3
+
+
+def test_c1_a_single_shaded_header_strip_is_never_a_chart() -> None:
+    # 实测（调参集研报）：表头行的底色条（一行 >= 3 段文字，框高不到 8 个正文字号）被当成矢量图表
+    rows = [("项目", "2023A", "2024A", "2025E", "2026E", "2027E")]
+    lay, cs = strip_first(
+        pdf_page(
+            lambda c: (body(c, 80, 3), shaded_rows(c, 60, 140, rows, (0, 70, 140, 210, 280, 350)))
+        )
+    )
+    assert cs.figures == () and cs.items == ()
+    assert len(cs.layout.words) == len(lay.words)
+
+
+def test_c1_a_tall_chart_with_a_single_tick_row_inside_is_still_a_chart() -> None:
+    _, cs = strip_first(pdf_page(bar_page))
+    assert len(cs.figures) == 1

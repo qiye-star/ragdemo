@@ -291,6 +291,7 @@ def cmd_diag_v1() -> None:
             candidate,
             layer_text="\n".join(s.layout.text for s in stripped),
             stripped_text="\n".join(s.stripped_text for s in stripped),
+            layer_pages=[s.layout.text for s in stripped],
         )
         recomputed = number_recall_precision(reference, candidate)[0]
         if abs(recomputed - float(r[col["num_recall"]])) > 1e-4:

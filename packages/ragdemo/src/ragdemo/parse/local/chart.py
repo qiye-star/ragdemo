@@ -48,6 +48,10 @@ DEDUP_OVERLAP = 0.8
 RESIDUAL_MIN_FRAGMENT_ROWS = 3
 # 绘图框内部 >= 这么多行是多段（对齐的文字列）→ 是表格不是图表（逻辑规则，见调参记录 §2）
 TABLE_LIKE_MIN_ROWS = 3
+# 扁平的底色条（框高 < STRIP_MAX_HEIGHT_EM 个正文字号）里有一行 >= STRIP_MIN_SEGMENTS 段文字：
+# 表头行 / 表格行的底色条，不是图表（T4 评审 C1 的实测补充，逻辑规则，不是调参常量）
+STRIP_MAX_HEIGHT_EM = 8.0
+STRIP_MIN_SEGMENTS = 3
 # 框内 >= 这么多行是"文字标签 + 数字"（营业收入 91.2 60.1）→ 也是表格（T4 评审 C1，规则修复）
 LABEL_NUMBER_MIN_ROWS = 2
 # 标签 / 框内文字低于正文字号这个比例才可能是图表刻度；与正文同字号的短行是正文（T4 评审 C3）
@@ -399,6 +403,11 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
             >= TABLE_LIKE_MIN_ROWS
         ):
             discarded.append(f"{tag}：绘图框内是对齐的文字列（表格），放弃")
+            continue
+        if box[3] - box[1] < STRIP_MAX_HEIGHT_EM * em and any(
+            len(split_segments(r, FRAGMENT_SEGMENT_GAP)) >= STRIP_MIN_SEGMENTS for r in inner_rows
+        ):
+            discarded.append(f"{tag}：扁平底色条里有一行多段文字（表头 / 表格行），放弃")
             continue
         if sum(1 for r in inner_rows if _label_number_row(r)) >= LABEL_NUMBER_MIN_ROWS:
             discarded.append(f"{tag}：绘图框内有 >= 2 行「文字 + 数字」（表格形状），放弃")
