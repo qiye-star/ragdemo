@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace as _replace
 
+from ragdemo.parse.local.columns import REASON_GUTTER
 from ragdemo.parse.local.layout import PageLayout, Word
 from ragdemo.parse.local.number_closure import numbers_in
 from ragdemo.parse.local.typeset import body_font_size, typeset_document
@@ -233,7 +234,7 @@ def _two_columns(n_rows: int = 12) -> list[list[Word]]:
 def test_a_two_column_page_is_layout_unsupported_and_has_no_markdown() -> None:
     (res,) = typeset_document([page(*_two_columns())])
     assert res.status == "layout_unsupported" and res.markdown == ""
-    assert "多栏" in res.reason
+    assert res.reason == REASON_GUTTER
 
 
 def test_a_single_column_page_with_a_few_gapped_rows_is_not_multi_column() -> None:

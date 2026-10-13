@@ -9,7 +9,6 @@ v1 只看"同一行里的空隙"：侧栏行与正文行很少落在同一行（
 from __future__ import annotations
 
 import itertools
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -23,7 +22,9 @@ MIN_SIDE_ROWS = 3  # 空白带两侧各至少这么多行
 X_STEP = 2.0  # 横向扫描步长（pt）
 VERTICAL_MIN_CHARS = 3  # 竖排单字列：同一 x 上至少连续这么多个孤立单字
 VERTICAL_X_TOL = 2.0
-VERTICAL_ISOLATION_EM = 2.0  # 单字与同行其他词的距离 >= 此值 * 字号 才算"孤立"
+VERTICAL_ISOLATION_EM = 2.0  # 单字与同行其他词的距离 >= 此值 * 字号 才算"孤立"（范围 1.0–3.0）
+VERTICAL_PITCH_EM = 3.0  # 竖排单字列相邻两字的纵向间距上限 / 字号（范围 2.0–5.0）
+MAX_BANNER_SHARE = 0.5  # 重叠区间内跨栏横幅行占比上限：超过则不算栏间空白带
 REASON_GUTTER = "多栏版面：纵向空白带"
 REASON_VERTICAL = "多栏版面：竖排单字"
 
@@ -46,67 +47,97 @@ class ColumnVerdict:
     gutter: Gutter | None = None
 
 
-def _wide(ch: str) -> bool:
-    return unicodedata.east_asian_width(ch) in ("W", "F")
-
-
-def _judge(
-    run: Sequence[Sequence[Word]], x: float, min_width: float, lo: float, hi: float
-) -> Gutter | None:
-    left_rows = [r for r in run if any(w.x1 <= x for w in r)]
-    right_rows = [r for r in run if any(w.x0 >= x for w in r)]
-    if len(left_rows) < MIN_SIDE_ROWS or len(right_rows) < MIN_SIDE_ROWS:
-        return None
-    left = max(w.x1 for r in left_rows for w in r if w.x1 <= x)
-    right = min(w.x0 for r in right_rows for w in r if w.x0 >= x)
-    if right - left < min_width or left < lo or right > hi:
-        return None
-    return Gutter(
-        x,
-        left,
-        right,
-        min(w.top for r in run for w in r),
-        max(w.bottom for r in run for w in r),
-        len(left_rows),
-        len(right_rows),
+def _row_side(row: Sequence[Word], x: float) -> tuple[bool, bool, bool]:
+    """(有词跨过 x, 有词整体在 x 左侧, 有词整体在 x 右侧)。"""
+    return (
+        any(w.x0 < x < w.x1 for w in row),
+        any(w.x1 <= x for w in row),
+        any(w.x0 >= x for w in row),
     )
+
+
+def _mid(row: Sequence[Word]) -> float:
+    return sum(w.mid_y for w in row) / len(row)
 
 
 def _gutter_at(
     rows: Sequence[Sequence[Word]], x: float, min_width: float, lo: float, hi: float
 ) -> Gutter | None:
-    run: list[Sequence[Word]] = []
+    """x 处的栏间空白带：跨过 x 的整宽行（横幅）不打断，但左侧行与右侧行必须在纵向上重叠，
+    且重叠区间内两侧各 >= MIN_SIDE_ROWS 行（行内有两侧文字的行两侧都算一行）。"""
+    banners: list[Sequence[Word]] = []
+    left_rows: list[Sequence[Word]] = []
+    right_rows: list[Sequence[Word]] = []
     for row in rows:
-        if any(w.x0 < x < w.x1 for w in row):  # 这一行有词跨过 x：空白带在此中断
-            g = _judge(run, x, min_width, lo, hi)
-            if g is not None:
-                return g
-            run = []
-        else:
-            run.append(row)
-    return _judge(run, x, min_width, lo, hi)
+        cross, has_left, has_right = _row_side(row, x)
+        if cross:
+            banners.append(row)
+            continue
+        if has_left:
+            left_rows.append(row)
+        if has_right:
+            right_rows.append(row)
+    if len(left_rows) < MIN_SIDE_ROWS or len(right_rows) < MIN_SIDE_ROWS:
+        return None
+    left_mids = [_mid(r) for r in left_rows]
+    right_mids = [_mid(r) for r in right_rows]
+    y0, y1 = max(min(left_mids), min(right_mids)), min(max(left_mids), max(right_mids))
+    if y0 > y1:
+        return None
+    in_left = [r for r, m in zip(left_rows, left_mids, strict=True) if y0 <= m <= y1]
+    in_right = [r for r, m in zip(right_rows, right_mids, strict=True) if y0 <= m <= y1]
+    if len(in_left) < MIN_SIDE_ROWS or len(in_right) < MIN_SIDE_ROWS:
+        return None
+    n_banner = sum(y0 <= _mid(r) <= y1 for r in banners)
+    n_side = len({id(r) for r in (*in_left, *in_right)})
+    if n_banner > MAX_BANNER_SHARE * (n_banner + n_side):
+        return None
+    left = max(w.x1 for r in in_left for w in r if w.x1 <= x)
+    right = min(w.x0 for r in in_right for w in r if w.x0 >= x)
+    if right - left < min_width or left < lo or right > hi:
+        return None
+    side = [*in_left, *in_right]
+    return Gutter(
+        x,
+        left,
+        right,
+        min(w.top for r in side for w in r),
+        max(w.bottom for r in side for w in r),
+        len(in_left),
+        len(in_right),
+    )
 
 
 def _vertical_stack(rows: Sequence[Sequence[Word]], body_size: float) -> bool:
+    """竖排单字列：同一 x 上（x0 容差内成簇）连续 >= VERTICAL_MIN_CHARS 个孤立单字（汉字 / 字母 /
+    数字不限），相邻两字的纵向间距 <= VERTICAL_PITCH_EM 个字号。"""
     em = body_size or 10.0
     singles: list[Word] = []
     for r in rows:
         for k, w in enumerate(r):
-            if len(w.text) != 1 or not _wide(w.text):
+            if len(w.text) != 1:
                 continue
             left_gap = w.x0 - r[k - 1].x1 if k > 0 else float("inf")
             right_gap = r[k + 1].x0 - w.x1 if k + 1 < len(r) else float("inf")
             if min(left_gap, right_gap) >= VERTICAL_ISOLATION_EM * em:
                 singles.append(w)
-    singles.sort(key=lambda w: (round(w.x0 / VERTICAL_X_TOL), w.top))
-    run = 1
-    for a, b in itertools.pairwise(singles):
-        if abs(a.x0 - b.x0) <= VERTICAL_X_TOL and 0 < b.top - a.top <= 3 * em:
-            run += 1
-            if run >= VERTICAL_MIN_CHARS:
-                return True
+    singles.sort(key=lambda w: w.x0)
+    clusters: list[list[Word]] = []
+    for w in singles:
+        if clusters and w.x0 - clusters[-1][-1].x0 <= VERTICAL_X_TOL:
+            clusters[-1].append(w)
         else:
-            run = 1
+            clusters.append([w])
+    for cluster in clusters:
+        cluster.sort(key=lambda w: w.top)
+        run = 1
+        for a, b in itertools.pairwise(cluster):
+            if 0 < b.top - a.top <= VERTICAL_PITCH_EM * em:
+                run += 1
+                if run >= VERTICAL_MIN_CHARS:
+                    return True
+            else:
+                run = 1
     return False
 
 
