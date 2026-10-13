@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import itertools
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -150,3 +151,79 @@ def heading_recall_precision(candidate_md: str, reference_md: str) -> tuple[floa
 
 def heading_level_agreement(candidate_md: str, reference_md: str) -> float:
     return heading_matches(candidate_md, reference_md).level_agreement
+
+
+def table_data_rows(md: str) -> list[Counter[str]]:
+    """表格数据行（每表跳过首行、行内 >= 2 个数字）；pipe 与 HTML 表格都算。"""
+    return _table_rows(md)
+
+
+@dataclass(frozen=True)
+class HeadingMatchV2:
+    """v2：两行拆开的标题与参考里合成一行的标题算匹配；层级按相对层级（相邻匹配对的级差符号）比较。"""
+
+    matched: int
+    cand_total: int
+    ref_total: int
+    rel_agree: int
+    rel_total: int
+
+    @property
+    def recall(self) -> float:
+        return self.matched / self.ref_total if self.ref_total else 1.0
+
+    @property
+    def precision(self) -> float:
+        return self.matched / self.cand_total if self.cand_total else 1.0
+
+    @property
+    def relative_level_agreement(self) -> float:
+        return self.rel_agree / self.rel_total if self.rel_total else 1.0
+
+
+def _merge_split_titles(
+    cand: list[tuple[str, int]], ref_keys: Counter[str]
+) -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
+    i = 0
+    while i < len(cand):
+        if i + 1 < len(cand):
+            (a, la), (b, lb) = cand[i], cand[i + 1]
+            if la == lb and a not in ref_keys and b not in ref_keys and (a + b) in ref_keys:
+                out.append((a + b, la))
+                i += 2
+                continue
+        out.append(cand[i])
+        i += 1
+    return out
+
+
+def _aligned_pairs(
+    cand: list[tuple[str, int]], ref: list[tuple[str, int]]
+) -> list[tuple[int, int]]:
+    pairs: list[tuple[int, int]] = []
+    j = 0
+    for i, (key, _) in enumerate(cand):
+        for jj in range(j, len(ref)):
+            if ref[jj][0] == key:
+                pairs.append((i, jj))
+                j = jj + 1
+                break
+    return pairs
+
+
+def _sign(x: int) -> int:
+    return (x > 0) - (x < 0)
+
+
+def heading_matches_v2(candidate_md: str, reference_md: str) -> HeadingMatchV2:
+    ref = _headings(reference_md)
+    ref_keys = Counter(k for k, _ in ref)
+    cand = _merge_split_titles(_headings(candidate_md), ref_keys)
+    cand_keys = Counter(k for k, _ in cand)
+    matched = sum(min(c, ref_keys.get(k, 0)) for k, c in cand_keys.items())
+    agree = total = 0
+    for (i1, j1), (i2, j2) in itertools.pairwise(_aligned_pairs(cand, ref)):
+        total += 1
+        agree += int(_sign(cand[i2][1] - cand[i1][1]) == _sign(ref[j2][1] - ref[j1][1]))
+    return HeadingMatchV2(matched, len(cand), len(ref), agree, total)

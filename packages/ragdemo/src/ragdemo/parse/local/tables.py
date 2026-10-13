@@ -59,6 +59,17 @@ def grid_to_markdown(grid: Sequence[Sequence[str]]) -> str:
     return "\n".join(lines)
 
 
+def split_segments(row: Sequence[Word], gap: float) -> list[list[Word]]:
+    """把一行（已按 x0 升序）在 >= gap 的横向空隙处切成段。"""
+    segs: list[list[Word]] = []
+    for w in row:
+        if segs and w.x0 - segs[-1][-1].x1 < gap:
+            segs[-1].append(w)
+        else:
+            segs.append([w])
+    return segs
+
+
 def _segments(row: Sequence[Word], gap: float) -> int:
     """一行里被 >= gap 的横向空隙隔开的段数；正文句子里词间空隙很小，只有 1 段。"""
     count = 1

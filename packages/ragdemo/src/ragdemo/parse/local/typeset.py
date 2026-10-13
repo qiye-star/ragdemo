@@ -30,6 +30,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ragdemo.parse.local.headings import (
+    MAX_LEVEL,
+    Candidate,
+    Numbering,
+    assign_levels,
+    keep_consistent,
+    numbering_of,
+)
 from ragdemo.parse.local.layout import PageLayout, Word, unsafe_orientation_reason
 from ragdemo.parse.local.number_closure import fold_text
 from ragdemo.parse.local.tables import (
@@ -38,13 +46,21 @@ from ragdemo.parse.local.tables import (
     find_table_regions,
     grid_to_markdown,
     rows_to_grid,
+    split_segments,
 )
 
 # ---- 命名常量 ----
 SIZE_BUCKET = 0.5  # 字号按 0.5pt 取整后统计
 HEADING_SIZE_RATIO = 1.15  # 整行字号 >= 正文 * 此值 才可能是标题
 HEADING_MAX_CHARS = 60
-BOLD_HEADING_MAX_CHARS = 40
+BOLD_HEADING_MAX_CHARS = 20
+NUMBERED_HEADING_MAX_CHARS = 40  # 编号标题（拆行后的第一段）最长字符数
+HEADING_GAP_FACTOR = 1.2  # 编号标题的版式信号：上或下行距 > 正文行距 * 此值
+HEADING_EMPHASIS_RATIO = 1.05  # 编号标题的版式信号：字号 >= 正文 * 此值
+NUMBERED_NEEDS_SIGNAL = True  # 编号标题必须至少有一个版式信号（行距 / 粗体 / 字号）
+HEADING_SPLIT_GAP_EM = 2.0  # 行内 >= 此值 * 字号 的空隙把"编号标题 + 行尾数值"拆成两行
+BOLD_DOC_MAX_SHARE = 0.15  # 全文粗体字符占比超过此值 → 粗体是强调手法，关闭"仅粗体"标题规则
+MIN_BOLD_LEVEL = 3
 BOLD_HEADING_GAP_FACTOR = 1.3  # 粗体标题：上下行距须大于正文行距的这个倍数
 MAX_HEADING_LEVEL = 3
 PARAGRAPH_GAP_FACTOR = 1.6  # 行距 > 正文行距 * 此值 → 另起一段
@@ -86,7 +102,11 @@ class _Line:
     x0: float
     x1: float
     mid: float
+    head_text: str  # 按 HEADING_SPLIT_GAP_EM 切出的第一段；整行一段时等于 text
+    head_x1: float
+    rest_text: str  # 其余段（无则空串）
     heading_level: int = 0
+    split: bool = False  # 标题只取第一段，其余段另起一段（只插入换行）
 
 
 @dataclass
@@ -209,14 +229,21 @@ def _page_items(layout: PageLayout, body_size: float) -> _PageItems:
                 items.append(_Table(md, mids[0], mids[-1]))
             continue
         plain_rows.append(row)
+        size = _line_size(row)
+        segs = split_segments(row, HEADING_SPLIT_GAP_EM * (size or body_size or 10.0))
+        head = segs[0]
+        rest = [w for seg in segs[1:] for w in seg]
         items.append(
             _Line(
-                _join_words(row),
-                _line_size(row),
-                all(w.bold for w in row),
-                row[0].x0,
-                max(w.x1 for w in row),
-                sum(w.mid_y for w in row) / len(row),
+                text=_join_words(row),
+                size=size,
+                bold=all(w.bold for w in row),
+                x0=row[0].x0,
+                x1=max(w.x1 for w in row),
+                mid=sum(w.mid_y for w in row) / len(row),
+                head_text=_join_words(head),
+                head_x1=max(w.x1 for w in head),
+                rest_text=_join_words(rest) if rest else "",
             )
         )
     return _PageItems(
@@ -254,6 +281,50 @@ def _heading_candidate(line: _Line, body_size: float) -> bool:
     )
 
 
+def _gaps(items: Sequence[_Item], i: int) -> tuple[float | None, float | None]:
+    line = items[i]
+    assert isinstance(line, _Line)
+    above = below = None
+    if i > 0:
+        prev = items[i - 1]
+        above = line.mid - (prev.mid if isinstance(prev, _Line) else prev.last_mid)
+    if i + 1 < len(items):
+        nxt = items[i + 1]
+        below = (nxt.mid if isinstance(nxt, _Line) else nxt.first_mid) - line.mid
+    return above, below
+
+
+def _right_margin(items: Sequence[_Item]) -> float:
+    xs = sorted(it.x1 for it in items if isinstance(it, _Line))
+    return xs[int(0.9 * (len(xs) - 1))] if xs else 0.0
+
+
+def _numbered(
+    items: Sequence[_Item], i: int, body_size: float, pitch: float, right: float
+) -> Numbering | None:
+    line = items[i]
+    assert isinstance(line, _Line)
+    head = line.head_text.strip()
+    n = numbering_of(head)
+    if n is None or len(head) > NUMBERED_HEADING_MAX_CHARS:
+        return None
+    if n.system != "keyword" and head[-1] in SENTENCE_END:
+        return None
+    size = line.size or body_size or 10.0
+    if not line.rest_text and line.head_x1 >= right - SHORT_LINE_FACTOR * size:
+        return None  # 一直写到版心右缘：折行的正文段落，不是标题
+    if not NUMBERED_NEEDS_SIGNAL:
+        return n
+    above, below = _gaps(items, i)
+    signal = (
+        line.bold
+        or (body_size > 0 and line.size >= HEADING_EMPHASIS_RATIO * body_size)
+        or (above is not None and above > HEADING_GAP_FACTOR * pitch)
+        or (below is not None and below > HEADING_GAP_FACTOR * pitch)
+    )
+    return n if signal else None
+
+
 def _bold_heading(items: Sequence[_Item], i: int, body_size: float, pitch: float) -> bool:
     line = items[i]
     assert isinstance(line, _Line)
@@ -266,27 +337,70 @@ def _bold_heading(items: Sequence[_Item], i: int, body_size: float, pitch: float
         and (body_size == 0 or line.size <= HEADING_SIZE_RATIO * body_size)
     ):
         return False
-    gaps: list[float] = []
-    if i > 0:
-        prev = items[i - 1]
-        gaps.append(line.mid - (prev.mid if isinstance(prev, _Line) else prev.last_mid))
-    if i + 1 < len(items):
-        nxt = items[i + 1]
-        gaps.append((nxt.mid if isinstance(nxt, _Line) else nxt.first_mid) - line.mid)
+    for j in (i - 1, i + 1):  # 相邻行也是整行粗体：强调段落，不是标题
+        if 0 <= j < len(items):
+            nb = items[j]
+            if isinstance(nb, _Line) and nb.bold:
+                return False
+    above, below = _gaps(items, i)
+    gaps = [g for g in (above, below) if g is not None]
     return bool(gaps) and all(g > BOLD_HEADING_GAP_FACTOR * pitch for g in gaps)
 
 
-# ---- 渲染 ----
-def _render(pi: _PageItems, body_size: float, pitch: float, levels: dict[float, int]) -> str:
-    items = pi.items
-    for i, it in enumerate(items):
-        if not isinstance(it, _Line):
-            continue
-        if _heading_candidate(it, body_size):
-            it.heading_level = levels.get(_bucket(it.size), MAX_HEADING_LEVEL)
-        elif _bold_heading(items, i, body_size, pitch):
-            it.heading_level = MAX_HEADING_LEVEL
+def _mark_headings(
+    per_page: Sequence[_PageItems], body: float, pitch: float, size_levels: dict[float, int]
+) -> None:
+    """整份文档统一定标题：字号标题 → 编号标题（连续性校验 + 按体系定级）→ 仅粗体标题。"""
+    live = [pi for pi in per_page if not pi.multicolumn and pi.orientation_reason is None]
+    total = bold = 0
+    for pi in live:
+        for it in pi.items:
+            if isinstance(it, _Line):
+                n = len(it.text.replace(" ", ""))
+                total += n
+                bold += n if it.bold else 0
+    cands: list[Candidate] = []
+    flat: list[_Line] = []
+    for pi in live:
+        right = _right_margin(pi.items)
+        for i, it in enumerate(pi.items):
+            if not isinstance(it, _Line):
+                continue
+            if _heading_candidate(it, body):
+                it.heading_level = size_levels.get(_bucket(it.size), MAX_HEADING_LEVEL)
+                continue
+            num = _numbered(pi.items, i, body, pitch, right)
+            if num is not None:
+                cands.append(Candidate(len(flat), num))
+                flat.append(it)
+    kept = keep_consistent(cands)
+    base = max(
+        (it.heading_level for pi in live for it in pi.items if isinstance(it, _Line)), default=0
+    )
+    levels = assign_levels([c.numbering.system for c in cands if c.index in kept], base=base)
+    deepest = base
+    for c in cands:
+        if c.index in kept:
+            ln = flat[c.index]
+            ln.heading_level = levels[c.numbering.system]
+            ln.split = bool(ln.rest_text)
+            deepest = max(deepest, ln.heading_level)
+    if total == 0 or bold > BOLD_DOC_MAX_SHARE * total:
+        return
+    bold_level = min(max(MIN_BOLD_LEVEL, deepest + 1), MAX_LEVEL)
+    for pi in live:
+        for i, it in enumerate(pi.items):
+            if (
+                isinstance(it, _Line)
+                and not it.heading_level
+                and _bold_heading(pi.items, i, body, pitch)
+            ):
+                it.heading_level = bold_level
 
+
+# ---- 渲染 ----
+def _render(pi: _PageItems, pitch: float) -> str:
+    items = pi.items
     lines = [it for it in items if isinstance(it, _Line) and not it.heading_level]
     margin = 0.0
     right = 0.0
@@ -312,9 +426,13 @@ def _render(pi: _PageItems, body_size: float, pitch: float, levels: dict[float, 
             flush()
             blocks.append(it.markdown)
             continue
-        if it.heading_level:  # 每个标题行单独成行，只在行首加 #
+        if it.heading_level:  # 标题行只在行首加 #；拆行时其余段另起一段（只插入换行）
             flush()
-            blocks.append("#" * it.heading_level + " " + it.text)
+            if it.split:
+                blocks.append("#" * it.heading_level + " " + it.head_text)
+                para, para_last, para_is_list = it.rest_text, it, False
+            else:
+                blocks.append("#" * it.heading_level + " " + it.text)
             continue
         if para is None or para_last is None:
             para, para_last, para_is_list = it.text, it, bool(LIST_MARKER.match(it.text))
@@ -357,6 +475,7 @@ def typeset_document(pages: Sequence[PageLayout]) -> list[TypesetResult]:
         reverse=True,
     )
     levels = {s: min(i + 1, MAX_HEADING_LEVEL) for i, s in enumerate(sizes)}
+    _mark_headings(per_page, body, pitch, levels)
     out: list[TypesetResult] = []
     for pi in per_page:
         if pi.orientation_reason is not None:
@@ -366,5 +485,5 @@ def typeset_document(pages: Sequence[PageLayout]) -> list[TypesetResult]:
             out.append(TypesetResult("layout_unsupported", "", "多栏版面"))
             continue
         tables = [it.markdown for it in pi.items if isinstance(it, _Table)]
-        out.append(TypesetResult("ok", _render(pi, body, pitch, levels), "", tables))
+        out.append(TypesetResult("ok", _render(pi, pitch), "", tables))
     return out

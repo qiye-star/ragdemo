@@ -88,3 +88,12 @@ def test_two_tables_separated_by_a_text_row_are_two_regions() -> None:
     text_row = [w("以上为经营数据。", 10, 90, 180)]
     second = [Word(x.text, x.x0, x.x1, x.top + 100, x.bottom + 100) for x in TABLE]
     assert len(find_table_regions(cluster_rows(TABLE + text_row + second))) == 2
+
+
+def test_split_segments_cuts_a_row_at_wide_gaps_only() -> None:
+    from ragdemo.parse.local.layout import Word
+    from ragdemo.parse.local.tables import split_segments
+
+    row = [Word("a", 0, 10, 0, 10), Word("b", 12, 20, 0, 10), Word("c", 60, 70, 0, 10)]
+    assert [[w.text for w in s] for s in split_segments(row, 8.0)] == [["a", "b"], ["c"]]
+    assert split_segments([], 8.0) == []

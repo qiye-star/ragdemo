@@ -1,7 +1,9 @@
 from ragdemo.parse.local.compare import (
     _table_rows,
+    heading_matches_v2,
     number_recall_precision,
     plain_text_from_markdown,
+    table_data_rows,
     table_row_recall,
     text_coverage,
 )
@@ -106,3 +108,37 @@ def test_duplicate_headings_match_as_a_multiset() -> None:
 
     m = heading_matches("# 风险提示\n# 风险提示\n", "# 风险提示\n")
     assert m.matched == 1 and m.cand_total == 2
+
+
+def test_two_split_title_lines_match_one_merged_reference_title() -> None:
+    cand = "# 海光信息技术股份有限公司\n# 关于2022年度业绩预告的公告\n## 一、本期业绩预告情况"
+    ref = "# 海光信息技术股份有限公司关于 2022 年度业绩预告的公告\n## 一、 本期业绩预告情况"
+    m = heading_matches_v2(cand, ref)
+    assert (m.matched, m.cand_total, m.ref_total) == (2, 2, 2)
+    assert m.recall == m.precision == 1.0 and m.relative_level_agreement == 1.0
+
+
+def test_relative_level_agreement_ignores_absolute_depth() -> None:
+    assert (
+        heading_matches_v2(
+            "# A\n## B\n## C\n# D", "## A\n### B\n### C\n## D"
+        ).relative_level_agreement
+        == 1.0
+    )
+    m = heading_matches_v2("# A\n# B", "# A\n## B")
+    assert (m.rel_agree, m.rel_total) == (0, 1)
+
+
+def test_unmatched_lines_are_not_merged_when_either_line_matches_alone() -> None:
+    m = heading_matches_v2("# 甲\n# 乙", "# 甲乙\n# 甲")
+    assert (m.matched, m.cand_total) == (1, 2)
+
+
+def test_v2_metrics_with_no_headings_are_vacuously_one() -> None:
+    m = heading_matches_v2("正文", "正文")
+    assert m.recall == m.precision == m.relative_level_agreement == 1.0
+
+
+def test_table_data_rows_is_the_public_row_extractor() -> None:
+    md = "| 项目 | 2024 | 2023 |\n|---|---|---|\n| 收入 | 91.2 | 60.1 |"
+    assert [dict(r) for r in table_data_rows(md)] == [{"91.2": 1, "60.1": 1}]

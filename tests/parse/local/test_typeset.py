@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import replace as _replace
 
 from ragdemo.parse.local.layout import PageLayout, Word
 from ragdemo.parse.local.number_closure import numbers_in
@@ -318,3 +319,146 @@ def test_curly_quotes_next_to_cjk_do_not_get_a_space() -> None:
         line("“公司”预计增长", 100 + LEAD, cjk=True),
     )
     assert md == "简称“海光信息”或“公司”预计增长"
+
+
+BODY = "这是一段足够长的正文内容用来撑满整个版心宽度的句子"  # 25 字，x1 = 310
+
+
+def stack(*items: str | tuple[str, float], top: float = 100.0) -> list[list[Word]]:
+    """依次排版：字符串 = 正常行距的行；(文本, k) = 这一行前面多空 k × LEAD。"""
+    out: list[list[Word]] = []
+    y = top
+    for it in items:
+        text, extra = (it, 0.0) if isinstance(it, str) else it
+        y += extra * LEAD
+        out.append(line(text, y, cjk=True))
+        y += LEAD
+    return out
+
+
+def heads(md: str) -> list[str]:
+    return [ln for ln in md.splitlines() if ln.startswith("#")]
+
+
+def bolded(row: list[Word]) -> list[Word]:
+    return [_replace(w, bold=True) for w in row]
+
+
+def test_numbered_section_headings_get_levels_from_their_numbering_system() -> None:
+    rows = [
+        line("海光信息技术股份有限公司", 60, size=18, cjk=True),
+        *stack(
+            BODY,
+            BODY,
+            ("一、本期业绩预告情况", 0.5),
+            BODY,
+            BODY,
+            ("（一）业绩预告期间", 0.5),
+            BODY,
+            ("（二）业绩预告情况", 0.5),
+            BODY,
+            BODY,
+            ("二、上年同期业绩情况", 0.5),
+            BODY,
+            ("（一）营业收入", 0.5),
+            BODY,
+            BODY,
+        ),
+    ]
+    md = md_of(*rows)
+    assert heads(md) == [
+        "# 海光信息技术股份有限公司",
+        "## 一、本期业绩预告情况",
+        "### （一）业绩预告期间",
+        "### （二）业绩预告情况",
+        "## 二、上年同期业绩情况",
+        "### （一）营业收入",
+    ]
+    assert _content(md) == _page_chars([page(*rows)])
+
+
+def test_a_numbered_line_without_any_layout_signal_is_not_a_heading() -> None:
+    md = md_of(*stack(BODY, "一、本期业绩预告情况", BODY, BODY, "二、上年同期业绩情况", BODY))
+    assert heads(md) == []
+
+
+def test_bold_is_a_layout_signal_for_numbered_lines() -> None:
+    rows = stack(BODY, "一、本期业绩预告情况", BODY, BODY, "二、上年同期业绩情况", BODY)
+    rows[1], rows[4] = bolded(rows[1]), bolded(rows[4])
+    # 没有字号标题时 base = 0，"一、"体系是第 1 级；编号行先定级，不会再被"仅粗体"规则改成 3 级
+    assert heads(md_of(*rows)) == ["# 一、本期业绩预告情况", "# 二、上年同期业绩情况"]
+
+
+def test_out_of_sequence_singleton_or_unit_bearing_numbers_are_not_headings() -> None:
+    md = md_of(
+        *stack(
+            BODY,
+            ("（三）不存在前序的编号", 0.5),
+            BODY,
+            ("3.5亿元来自新品放量", 0.5),
+            BODY,
+            ("一、只出现一次的章节", 0.5),
+            BODY,
+        )
+    )
+    assert heads(md) == []
+
+
+def test_keyword_headings_and_a_heading_row_with_a_far_value_is_split_into_two_lines() -> None:
+    pre = stack(BODY, ("重要内容提示：", 0.5), BODY, ("一、本期业绩预告情况", 0.5))
+    y = pre[-1][0].mid_y + 1.5 * LEAD
+    split_row = line("（一）业绩预告期间", y, cjk=True) + line(
+        "2022年1月1日至2022年12月31日", y, x=300, cjk=True
+    )
+    post = stack(
+        BODY, ("（二）业绩预告情况", 0.5), BODY, ("二、上年同期业绩情况", 0.5), BODY, top=y + LEAD
+    )
+    rows = [*pre, split_row, *post]
+    md = md_of(*rows)
+    assert heads(md) == [
+        "# 重要内容提示：",
+        "# 一、本期业绩预告情况",
+        "## （一）业绩预告期间",
+        "## （二）业绩预告情况",
+        "# 二、上年同期业绩情况",
+    ]
+    assert "## （一）业绩预告期间\n\n2022年1月1日至2022年12月31日" in md
+    assert _content(md) == _page_chars([page(*rows)])  # 拆行只插入换行，不增删字符
+
+
+def test_decimal_headings_nest_under_section_headings() -> None:
+    md = md_of(
+        *stack(
+            BODY,
+            ("第一节重要提示", 0.5),
+            BODY,
+            ("1.1重大风险提示", 0.5),
+            BODY,
+            ("1.2公司全体董事出席", 0.5),
+            BODY,
+            ("第二节公司基本情况", 0.5),
+            BODY,
+            ("2.1公司简介", 0.5),
+            BODY,
+        )
+    )
+    assert heads(md) == [
+        "# 第一节重要提示",
+        "## 1.1重大风险提示",
+        "## 1.2公司全体董事出席",
+        "# 第二节公司基本情况",
+        "## 2.1公司简介",
+    ]
+
+
+def test_bold_rule_is_off_when_bold_is_common_in_the_document() -> None:
+    many_bold = [bolded(r) for r in stack(*[BODY] * 6)]
+    tail = stack(BODY, ("风险提示要点", 1.0), BODY, BODY, top=100 + 8 * LEAD)
+    tail[1] = bolded(tail[1])
+    assert heads(md_of(*many_bold, *tail)) == []
+
+
+def test_consecutive_bold_short_lines_are_emphasis_not_headings() -> None:
+    rows = stack(*[BODY] * 10, ("要点甲", 1.0), "要点乙", (BODY, 1.0), *[BODY] * 10)
+    rows[10], rows[11] = bolded(rows[10]), bolded(rows[11])
+    assert heads(md_of(*rows)) == []
