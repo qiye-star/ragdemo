@@ -198,7 +198,10 @@ def _is_column_flag(res: PageResult) -> bool:
 
 
 def cmd_multicol_eval(set_name: str) -> None:
-    """调参集多栏检测评估：对标注页跑与流水线完全相同的整页判定（含竖排单字检查）。
+    """【仅检测器诊断】调参集多栏检测评估：对标注页跑与流水线相同的整页列判定（含竖排单字检查）。
+    口径与计划的 G4/G5/G11 不同（计划 G4 = L0 接受的 multi 页；G5/G11 按 financial_statement →
+    multicolumn → table 的页型顺序，no_text_layer 不计），数字只作诊断，T5 须用 classify_page /
+    parse_layouts_l0 重测。
     unsure 不进比率；留出集一律拒绝。另报调参集公告页 layout_unsupported 占比（G11 类比）。"""
     sample_set = require_tune_set(set_name)
     split = read_split(SPLIT_PATH)
@@ -250,7 +253,8 @@ def cmd_multicol_eval(set_name: str) -> None:
     for res in unsupported:
         by_reason[res.reason] = by_reason.get(res.reason, 0) + 1
     print(
-        f"G11-analogue: announcement pages {len(pages)}, layout_unsupported {len(unsupported)}"
+        "[detector-only diagnostic] G11-analogue: "
+        f"announcement pages {len(pages)}, layout_unsupported {len(unsupported)}"
         f" ({len(unsupported) / len(pages):.4f}; target <= 0.10); column-flagged "
         f"{sum(_is_column_flag(r) for r in pages)}; by reason {by_reason}"
     )

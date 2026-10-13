@@ -206,13 +206,55 @@ def test_a_full_width_banner_inside_a_two_column_page_does_not_break_the_gutter(
     assert detect_columns(_rows(page(*rows)), W, 10.0).multicolumn
 
 
-def test_a_page_of_mostly_banner_rows_is_not_flagged() -> None:
-    # 重叠区间内：3 行两栏行被 9 行通栏行隔开（通栏占 75%）-> 不算栏间空白带
+def test_a_few_two_column_rows_among_many_banners_are_not_flagged_below_min_side_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 4)  # 固定，不随调参漂移
     rows: list[list[Word]] = []
     for k in range(3):
         rows += _two_columns_rows(1, start=4 * k)
         rows += [line("通栏正文" * 12, 100 + (4 * k + 1 + j) * LEAD, cjk=True) for j in range(3)]
     assert not detect_columns(_rows(page(*rows)), W, 10.0).multicolumn
+
+
+def test_a_real_two_column_block_followed_by_full_width_rows_and_a_signature_is_flagged() -> None:
+    # 回归：页尾的"END + 右对齐落款"不能把窗口拉到无关的通栏行上而冲淡真两栏块
+    block = [
+        line("左" * 8, 100 + i * LEAD, x=60, cjk=True)
+        + line("右" * 8, 100 + i * LEAD, x=330, cjk=True)
+        for i in range(10)
+    ]
+    wide = [line("通栏正文" * 12, 100 + (10 + i) * LEAD, cjk=True) for i in range(12)]
+    y = 100 + 22 * LEAD
+    tail = [
+        line("END", y, x=60),
+        line("SIGN", y + LEAD, x=420),
+        line("DATE", y + 2 * LEAD, x=420),
+    ]
+    p = page(*block, *wide, *tail)
+    assert detect_columns(_rows(p), W, 10.0).multicolumn
+    assert typeset_document([p])[0].status == "layout_unsupported"
+
+
+def test_a_sidebar_of_min_side_rows_minus_one_lines_beside_a_long_body_is_not_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 已接受并记录的漏检风险（参数选择）：MIN_SIDE_ROWS=4 时，2-3 行的侧栏会 ok 并把侧栏文字
+    # 并进正文行；研报评级框（>= 5 行）仍能检出。最终留出集的 G4 会显示这类情况的频率。
+    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 4)
+    body = [line("正文" * 15, 100 + i * LEAD, cjk=True) for i in range(20)]
+    for n in (2, 3):
+        side = _short(n, 100 + 2 * LEAD, 420)
+        assert not detect_columns(_rows(page(*body, *side)), W, 10.0).multicolumn
+
+
+def test_a_sidebar_of_min_side_rows_lines_beside_a_long_body_is_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 4)
+    body = [line("正文" * 15, 100 + i * LEAD, cjk=True) for i in range(20)]
+    side = _short(4, 100 + 2 * LEAD, 420)
+    assert detect_columns(_rows(page(*body, *side)), W, 10.0).multicolumn
 
 
 def test_two_columns_with_offset_baselines_are_a_gutter() -> None:

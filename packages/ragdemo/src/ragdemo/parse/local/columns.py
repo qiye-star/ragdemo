@@ -24,7 +24,6 @@ VERTICAL_MIN_CHARS = 3  # 竖排单字列：同一 x 上至少连续这么多个
 VERTICAL_X_TOL = 2.0
 VERTICAL_ISOLATION_EM = 2.0  # 单字与同行其他词的距离 >= 此值 * 字号 才算"孤立"（范围 1.0–3.0）
 VERTICAL_PITCH_EM = 3.0  # 竖排单字列相邻两字的纵向间距上限 / 字号（范围 2.0–5.0）
-MAX_BANNER_SHARE = 0.5  # 重叠区间内跨栏横幅行占比上限：超过则不算栏间空白带
 REASON_GUTTER = "多栏版面：纵向空白带"
 REASON_VERTICAL = "多栏版面：竖排单字"
 
@@ -69,14 +68,12 @@ def _gutter_at(
 ) -> Gutter | None:
     """x 处的栏间空白带：跨过 x 的整宽行（横幅）不打断，但左侧行与右侧行必须在纵向上重叠，
     且重叠区间内两侧各 >= MIN_SIDE_ROWS 行（行内有两侧文字的行两侧都算一行）。"""
-    banners: list[Sequence[Word]] = []
     left_rows: list[Sequence[Word]] = []
     right_rows: list[Sequence[Word]] = []
     for row in rows:
         cross, has_left, has_right = _row_side(row, x)
         if cross:
-            banners.append(row)
-            continue
+            continue  # 跨栏横幅行：跳过，不设占比限制
         if has_left:
             left_rows.append(row)
         if has_right:
@@ -92,10 +89,6 @@ def _gutter_at(
     in_left = [r for r in left_rows if _touches(r, y0, y1)]
     in_right = [r for r in right_rows if _touches(r, y0, y1)]
     if len(in_left) < MIN_SIDE_ROWS or len(in_right) < MIN_SIDE_ROWS:
-        return None
-    n_banner = sum(_touches(r, y0, y1) for r in banners)
-    n_side = len({id(r) for r in (*in_left, *in_right)})
-    if n_banner > MAX_BANNER_SHARE * (n_banner + n_side):
         return None
     left = max(w.x1 for r in in_left for w in r if w.x1 <= x)
     right = min(w.x0 for r in in_right for w in r if w.x0 >= x)
