@@ -39,6 +39,8 @@
 | [0011](0011-entity-ids-single-value-pending-pushdown-test.md) | `doc_block.entity_id` 暂维持单值，不改数组（待实测数组下推） | 已接受 | 2026-09-22 |
 | [0012](0012-data-source-roles-and-degradation.md) | 数据源分工与降级：Tushare 管行情，Wind 管财务与公告，iFind 只做降级与核对 | 已接受（公告分工被 0013 修订） | 2026-09-28 |
 | [0013](0013-cninfo-primary-announcement-source.md) | 公告全文主源改为巨潮资讯网直连，修订 0012 的公告分工 | 已接受 | 2026-09-28 |
+| [0014](0014-research-reports-internal-retrieval-only.md) | 券商研报入库仅用于检索与内部研究，原文不展示 | 已接受 | 2026-09-30 |
+| [0015](0015-l0-plus-textin-page-level-parsing.md) | 逐页解析路由：框架与逐页台账已接入，L0 与减页规则不启用，生产仅 TextIn（L3），修订 0008 适用范围 | 已接受 | 2026-10-13 |
 
 ## 什么时候要写新 ADR
 

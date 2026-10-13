@@ -108,6 +108,8 @@ AI 产业链时点研究引擎（以下简称「引擎」）的规范级技术�
 |---|---|---|
 | 2026-09-21 | **路径 B 的解析器由 MinerU 换为合合信息 TextIn xParse**（[adr/0008](adr/0008-textin-xparse-document-parsing.md)）。解析产物（完整响应 JSON + Markdown）落对象存储，`core.document` 增三列，迁移 `007_parse_artifacts.sql` | `01` §1/§4/§5、`02` §5.1、`04` §1、`05` §1–2/§3.3/§7.2/§8、`09` §4.1、`10` P1/P4、`11` W2.2、`CLAUDE.md` §2、P1b Task 6/9/10 |
 | 2026-09-22 | **新增内部只读诊断 Web 界面，P1 起可做**（[adr/0010](adr/0010-internal-diagnostic-web-ui-in-p1.md)），收窄而非取代 ADR-0006；后端只读、仅内网、无账号、硬编码只看公共检索空间，账号/私有上传/对外暴露仍留 P4 | `CLAUDE.md` §2/§4、`00` §5、`01` §4/§5、`10` P1/P2/P4、`11` W8（W8.1 拆为 W8.1a/W8.1b）、`12` ②、`adr/README.md`、`api/__init__.py`、`evals/cli.py` |
+| 2026-10-13 | **逐页解析路由框架接入，但 L0 与减页规则均不启用，生产仍只有 TextIn（L3）**（[adr/0015](adr/0015-l0-plus-textin-page-level-parsing.md)，修订 ADR-0008 的适用范围）。新增逐页台账（迁移 033 / 034）；当前不降本，成本 0.1356 元/页 | `05` §2.8、`adr/README.md`、`10.12-plan/验收记录/L0加TextIn-接入评测与灰度.md` |
+
 
 `007_parse_artifacts.sql` 已在真实 ParadeDB 上执行验证：迁移 001–007 全序列
 0 error；三个新列确实出现在 `asof.document` 视图中（`CREATE OR REPLACE VIEW`

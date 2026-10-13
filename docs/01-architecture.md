@@ -11,7 +11,7 @@
 | B. 实体解析 | L1 | `entity` / `entity_alias` / `entity_relation`，别名消歧 | `02-data-model.md` §2 |
 | C. 口径归一 | L2 | `node_metric` 指标字典、AI 收入拆分规则、财年与币种转换 | `02-data-model.md` §3 |
 | D. 时点管理 | L3 | 双时间轴、更正处理、`as_of` 安全视图 | `03-point-in-time.md` |
-| E. 文档管线 | L5 | 结构化公告落库、TextIn xParse 解析、切块、元数据、向量化 | `05-document-pipeline.md` |
+| E. 文档管线 | L5 | 结构化公告落库、TextIn xParse 解析（可按页路由并写逐页台账，生产仅 TextIn，见 ADR-0015）、切块、元数据、向量化 | `05-document-pipeline.md` |
 | F. 权限隔离 | L4 | C 端私有空间；B 端多租户 / SSO / 项目隔离 / 审计 | `09-compliance-security.md` §3 |
 | G. 检索路由 | L6 | 意图路由、结构化查询翻译、元数据过滤、混合检索、重排、父子块 | `06-retrieval.md` |
 | H. Agent 层 | — | 产业链映射 → 基本面 → 事件 → 宏观政策 → 多空辩论 → 观点入库 → 复盘 | `07-agents.md` |

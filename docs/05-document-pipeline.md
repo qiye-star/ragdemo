@@ -224,6 +224,18 @@ if document.owner_user is not None and not settings.textin_allow_private:
 把它写成代码里的闸门而不是文档里的提醒，是因为提醒会被忘记，
 而 `test_private_document_is_not_sent_upstream` 不会。
 
+### 2.8 分页解析（L0 + TextIn）：框架已接入，生产仅 L3
+
+决策见 [adr/0015](adr/0015-l0-plus-textin-page-level-parsing.md)。**先说实情：** L0（本地确定性排版）第二版未通过验收（G9 阅读顺序抽查未过），不启用；L1 在表格页不可用，L2 未建；三条减页规则按事先门槛全部只做影子记录。所以现在**没有任何降本**，生产形态是整份送 TextIn（L3），成本 0.1356 元/页。框架存在的意义是逐页可审计，以及将来接 L0 / 跳页时有现成的开关位置。
+
+- **开关**（`.env`，默认全关，关闭时入库路径与旧路径逐字节一致）：`PARSE_TIERED_ENABLED`、`PARSE_TIERED_DOC_TYPES`（仅 `research_report`、`announcement`）、`PARSE_TIER_L0_ENABLED`（写 true 会在 `load_config` 被拒绝：`L0 v2 not validated (G9)`）、`PARSE_SKIP_RULES`（默认空）。
+- **去向：** 每页只会是 `L3` 或 `skipped`（`skipped` 仅当规则被启用）；无跳页时整份 PDF 一次送 TextIn，有跳页时按连续段切子 PDF，页码按网格映射回原页并经页码偏移守卫校验，装配异常整份退回。
+- **整份 L3：** 年报 / 半年报 / 季报永远整份 L3，不受开关影响；用户私有材料（`owner_user` 非空）与非目标文档类型旁路，不进分级路由。
+- **台账：** 迁移 034 的 `core.parse_page_route`（每页去向、P1–P8、计费页、影子跳页）与 `core.parse_doc_acceptance`（文档结论与退回原因）；每个计费的 TextIn 子调用写一条 `provider_snapshot`。旁路 JSON（`routes`、`shadow_skips`）存对象存储。
+- **块来源：** 迁移 033 为 `core.doc_block` 增 `parse_source` 与 `figure_meta`。图表只存裁剪图与元数据，不提取图内数据；表格仍由 TextIn 逐格解析。
+- **图片 OCR 数字 / 扫描页：** 不静默放行，分别记为 `unverifiable_image`（文档 `textin_unverified`）与 `unverifiable_scan`（文档至多 `accepted_with_scan`）。
+- **未决项：** 迁移 034 尚未应用到开发库；每日汇总告警未接定时任务；P5 对跨页表续页的处理未在真实文档上测。灰度、回滚与停止条件见 `docs/10.12-plan/验收记录/L0加TextIn-接入评测与灰度.md`。
+
 ## 3. 切块规范
 
 ### 3.1 基本规则
