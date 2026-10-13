@@ -48,12 +48,22 @@ DEDUP_OVERLAP = 0.8
 RESIDUAL_MIN_FRAGMENT_ROWS = 3
 # 绘图框内部 >= 这么多行是多段（对齐的文字列）→ 是表格不是图表（逻辑规则，见调参记录 §2）
 TABLE_LIKE_MIN_ROWS = 3
+# 框内 >= 这么多行是"文字标签 + 数字"（营业收入 91.2 60.1）→ 也是表格（T4 评审 C1，规则修复）
+LABEL_NUMBER_MIN_ROWS = 2
+# 标签 / 框内文字低于正文字号这个比例才可能是图表刻度；与正文同字号的短行是正文（T4 评审 C3）
+BODY_SIZE_SHARE = 0.95
 REASON_FIGURE: Final = "figure"
 REASON_FIGURE_ROTATED: Final = "图表区域内的非水平文字含数字"
 REASON_CHART_UNRESOLVED: Final = "图表碎片残留（未检出图表区域）"
 _CAPTION = re.compile(r"^(?:图表?|Figure|Fig\.|Chart)\s*[0-9０-９一二三四五六七八九十]+")
 _SOURCE_NOTE = re.compile(r"^(?:资料来源|数据来源|来源)\s*[:：]")
 _NUMERICISH = frozenset("0123456789.%-+()（）,，％−")
+# 句子 / 列表项 / 脚注的形状：编号、项目符号、"注1："开头，或以句末标点结尾（T4 评审 C3）
+_LIST_OR_NOTE = re.compile(
+    r"^\s*(?:\d{1,2}[、.．)）](?!\d)|[①-⑩]|[(（]\d{1,2}[)）]|[•·▪※]|注\d+|注\s*[:：]|Note)"
+)
+_SENTENCE_END = re.compile(r"(?:[。；！？;!?]|[A-Za-z一-鿿]\.)$")
+_CJK_COMMA = re.compile(r"[一-鿿]，[一-鿿]")
 
 
 @dataclass(frozen=True)
@@ -238,6 +248,43 @@ def plot_boxes(
     return out
 
 
+def _numeric_text(text: str) -> bool:
+    t = _compact(text)
+    return bool(t) and 2 * sum(ch in _NUMERICISH for ch in t) >= len(t)
+
+
+def is_sentence_shaped(text: str) -> bool:
+    """句子 / 列表项 / 脚注：不会是图表刻度或数据标签。"""
+    t = text.strip()
+    return bool(_LIST_OR_NOTE.match(t) or _SENTENCE_END.search(t) or _CJK_COMMA.search(t))
+
+
+def _label_number_row(row: Sequence[Word]) -> bool:
+    """一行里既有文字词又有数字词（营业收入 91.2）：表格行的形状；图表刻度 / 数据标签全是数字。"""
+    return (
+        len(row) >= 2
+        and any(not _numeric_text(w.text) for w in row)
+        and any(_numeric_text(w.text) for w in row)
+    )
+
+
+def _at_body_size(words: Sequence[Word], body_size: float) -> bool:
+    return body_size > 0 and max(w.size for w in words) >= BODY_SIZE_SHARE * body_size
+
+
+def _below_body_size(words: Sequence[Word], body_size: float) -> bool:
+    """字号未知（0）按"小于正文"处理，保持无字号信息的夹具的旧行为。"""
+    sizes = [w.size for w in words]
+    return body_size <= 0 or min(sizes) <= 0 or max(sizes) < BODY_SIZE_SHARE * body_size
+
+
+def _is_band_label(seg: Sequence[Word], body_size: float) -> bool:
+    text = _row_text(seg)
+    if is_sentence_shaped(text):
+        return False
+    return _numeric_text(text) or _below_body_size(seg, body_size)
+
+
 def is_caption_text(text: str) -> bool:
     return bool(_CAPTION.match(text.strip()))
 
@@ -283,6 +330,7 @@ def _is_label_row(row: Sequence[Word]) -> bool:
 
 
 def _nearest(rows: Sequence[Sequence[Word]], box: BBox, gap: float, below: bool) -> str:
+    """rows 可以是整行，也可以是行内的一段（图注 / 来源按段匹配，见 strip_charts）。"""
     best: tuple[float, str] | None = None
     for r in rows:
         x0, x1 = min(w.x0 for w in r), max(w.x1 for w in r)
@@ -299,8 +347,10 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
     em = body_size or 10.0
     words = layout.words
     upright_rows = cluster_rows([w for w in words if w.upright])
-    caption_rows = [r for r in upright_rows if is_caption_text(_row_text(r))]
-    source_rows = [r for r in upright_rows if is_source_note(_row_text(r))]
+    # 图注 / 来源按"段"匹配：图注与左栏正文同基线时整行文字不以"图"开头（T4 评审 I2）
+    segments = [seg for r in upright_rows for seg in split_segments(r, FRAGMENT_SEGMENT_GAP)]
+    caption_rows = [g for g in segments if is_caption_text(_row_text(g))]
+    source_rows = [g for g in segments if is_source_note(_row_text(g))]
     keep = {id(w) for r in (*caption_rows, *source_rows) for w in r}
     grids = grid_boxes(layout.graphics, upright_rows, layout.height)
     candidates: list[tuple[BBox, Detection]] = []
@@ -312,12 +362,9 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
         (b, "vector") for b in plot_boxes(layout.graphics, layout.width, layout.height, grids)
     )
     protected = set(keep) | {id(w) for w in words for g in grids if _center_in(w, g)}
-    for reg in find_table_regions(upright_rows):
-        # 坐标表格的词受保护；落在候选绘图框内部的词除外——那是图表自己的数据标签，
-        # 只是被 cluster_rows 与旁边的表格行聚到了同一行（图表紧邻表格时常见）
-        protected |= {
-            id(w) for r in reg for w in r if not any(_center_in(w, c) for c, _ in candidates)
-        }
+    table_regions = find_table_regions(upright_rows)
+    for reg in table_regions:
+        protected |= {id(w) for r in reg for w in r}
     taken: set[int] = set()
     accepted: list[BBox] = []
     figures: list[FigureRegion] = []
@@ -327,33 +374,61 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
         if any(_overlap_share(box, a) >= DEDUP_OVERLAP for a in accepted):
             continue
         inner = [w for w in words if _center_in(w, box) and id(w) not in taken]
-        if any(id(w) in protected and id(w) not in keep for w in inner):
-            discarded.append(
-                f"{detection} {tuple(round(v) for v in box)}：绘图框内有表格词，放弃（不剥任何字）"
+        tag = f"{detection} {tuple(round(v) for v in box)}"
+        # 表格区域横跨绘图框边缘：>= 2 行同时有框内的文字词和框外的词。框内只有数字词的行是图表自己的
+        # 数据标签（图表紧邻表格时 cluster_rows 把它们与表格行聚到同一行）。T4 评审 C1：此前"落在候选框内
+        # 的表格词不受保护"的豁免让原来的守卫形同虚设
+        if any(
+            sum(
+                1
+                for r in reg
+                if any(_center_in(w, box) and not _numeric_text(w.text) for w in r)
+                and any(not _center_in(w, box) for w in r)
             )
+            >= 2
+            for reg in table_regions
+        ):
+            discarded.append(f"{tag}：表格区域横跨绘图框边缘，放弃（不剥任何字）")
             continue
         inner_rows = cluster_rows([w for w in inner if w.upright and id(w) not in keep])
         if (
             sum(1 for r in inner_rows if len(split_segments(r, FRAGMENT_SEGMENT_GAP)) >= 2)
             >= TABLE_LIKE_MIN_ROWS
         ):
-            discarded.append(
-                f"{detection} {tuple(round(v) for v in box)}：绘图框内是对齐的文字列（表格），放弃"
-            )
+            discarded.append(f"{tag}：绘图框内是对齐的文字列（表格），放弃")
+            continue
+        if sum(1 for r in inner_rows if _label_number_row(r)) >= LABEL_NUMBER_MIN_ROWS:
+            discarded.append(f"{tag}：绘图框内有 >= 2 行「文字 + 数字」（表格形状），放弃")
             continue
         if not all(_is_label_row(r) for r in inner_rows):
-            discarded.append(
-                f"{detection} {tuple(round(v) for v in box)}：绘图框内有正文行，不是图表"
-            )
+            discarded.append(f"{tag}：绘图框内有正文行，不是图表")
             continue
+        # 句子形状的行留在正文；嵌入图片上与正文同字号及以上的文字也留在正文（T4 评审 C3）
+        inner_keep = {
+            id(w)
+            for r in inner_rows
+            for seg in split_segments(r, FRAGMENT_SEGMENT_GAP)
+            if is_sentence_shaped(_row_text(seg))
+            or (detection == "embedded_image" and _at_body_size(seg, body_size))
+            for w in seg
+        }
+        inner = [w for w in inner if id(w) not in inner_keep]
         m = LABEL_MARGIN_EM * em
         outer = (box[0] - m, box[1] - m, box[2] + m, box[3] + m)
         labels: list[Word] = []
         for r in upright_rows:
-            for seg in split_segments(r, FRAGMENT_SEGMENT_GAP):
+            outside = [w for w in r if _center_in(w, outer) and not _center_in(w, box)]
+            segs = split_segments(outside, FRAGMENT_SEGMENT_GAP)
+            # 紧贴图表的表格行（文字 + 数字，或 >= 2 段正文字号）不是图表标签（T4 评审 C2）
+            if (
+                _label_number_row(outside)
+                or sum(1 for g in segs if _at_body_size(g, body_size)) >= 2
+            ):
+                continue
+            for seg in segs:
                 if (
-                    all(_center_in(w, outer) and not _center_in(w, box) for w in seg)
-                    and len(_compact("".join(w.text for w in seg))) <= LABEL_MAX_CHARS
+                    len(_compact("".join(w.text for w in seg))) <= LABEL_MAX_CHARS
+                    and _is_band_label(seg, body_size)
                     and not any(id(w) in protected or id(w) in taken for w in seg)
                 ):
                     labels.extend(seg)

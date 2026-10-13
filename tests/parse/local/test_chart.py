@@ -392,3 +392,149 @@ def test_a_table_drawn_with_shaded_cells_is_never_a_chart(cols: int) -> None:
     lay, cs = strip_first(pdf_page(lambda c: (body(c, 80, 3), shaded_table(c, 60, 140, cols))))
     assert cs.figures == () and cs.items == ()
     assert len(cs.layout.words) == len(lay.words)
+
+
+# ---------------------------------------------------------------- T4 评审修复（C1–C3、I2）
+def shaded_rows(
+    c: canvas.Canvas,
+    x0: float,
+    top: float,
+    rows: list[tuple[str, ...]],
+    xs: tuple[float, ...],
+    rect_w: float | None = None,
+    rect_cols: int | None = None,
+) -> None:
+    """每个单元格一块填充底色；xs 是各列文字起点相对 x0 的偏移。"""
+    for i, row in enumerate(rows):
+        for k, (dx, cell) in enumerate(zip(xs, row, strict=True)):
+            if k < (rect_cols or len(xs)):
+                c.setFillColorRGB(0.85, 0.9, 0.95 if (i + k) % 2 else 1.0)
+                c.rect(x0 + dx - 2, PH - (top + (i + 1) * 16), rect_w or 66, 14, stroke=0, fill=1)
+            c.setFillColorRGB(0, 0, 0)
+            text(c, cell, x0 + dx, top + i * 16 + 11)
+
+
+def kept_texts(cs: ChartStrip) -> set[str]:
+    return {w.text for w in cs.layout.words}
+
+
+def test_c1_a_two_row_shaded_table_is_never_a_chart() -> None:
+    rows = [("营业收入", "91.2", "60.1"), ("营业成本", "40.5", "30.2")]
+    lay, cs = strip_first(
+        pdf_page(lambda c: (body(c, 80, 3), shaded_rows(c, 60, 140, rows, (0, 70, 140))))
+    )
+    assert cs.figures == () and cs.items == ()
+    assert len(cs.layout.words) == len(lay.words)
+
+
+def test_c1_a_tight_two_column_key_value_table_is_never_a_chart() -> None:
+    rows = [("营业收入", "91.2"), ("营业成本", "40.5"), ("毛利润", "50.7"), ("净利润", "20.3")]
+    lay, cs = strip_first(
+        pdf_page(lambda c: (body(c, 80, 3), shaded_rows(c, 60, 140, rows, (0, 45), rect_w=40)))
+    )  # 键与值之间只隔 5pt（< FRAGMENT_SEGMENT_GAP）：一行只有一个段
+    assert cs.figures == () and cs.items == ()
+    assert len(cs.layout.words) == len(lay.words)
+
+
+def test_c1_a_table_straddling_the_plot_box_edge_discards_the_box() -> None:
+    # 底色块只盖住前两列，第三列在框外：表格横跨绘图框边缘
+    rows = [(a, b, c_) for a, b, c_ in TABLE]
+    lay, cs = strip_first(
+        pdf_page(
+            lambda c: (
+                body(c, 80, 3),
+                shaded_rows(c, 60, 140, rows, (0, 90, 160), rect_w=88, rect_cols=2),
+            )
+        )
+    )
+    assert cs.figures == () and cs.items == () and cs.discarded
+    assert len(cs.layout.words) == len(lay.words)
+
+
+def _image_chart(c: canvas.Canvas) -> None:
+    c.drawImage(ImageReader(Image.new("RGB", (400, 250), (200, 220, 240))), 60, PH - 300, 260, 160)
+
+
+@pytest.mark.parametrize(
+    "rows,xs",
+    [
+        ([("营业收入", "91.2"), ("营业成本", "40.5")], (0, 120)),
+        ([("营业收入", "91.2", "60.1"), ("营业成本", "40.5", "30.2")], (0, 90, 180)),
+    ],
+)
+def test_c2_a_small_table_directly_under_an_image_chart_stays_in_the_body(
+    rows: list[tuple[str, ...]], xs: tuple[float, ...]
+) -> None:
+    def draw(c: canvas.Canvas) -> None:
+        body(c, 90, 3)
+        _image_chart(c)
+        for i, row in enumerate(rows):
+            for dx, cell in zip(xs, row, strict=True):
+                text(c, cell, 70 + dx, 315 + i * 15)
+
+    lay, cs = strip_first(pdf_page(draw))
+    cells = {cell for row in rows for cell in row}
+    assert cells <= kept_texts(cs)
+    assert not any(cell in cs.stripped_text for cell in cells)
+    assert_lossless(lay, cs)
+
+
+def test_c3_list_items_and_footnotes_beside_a_chart_are_not_band_labels() -> None:
+    def draw(c: canvas.Canvas) -> None:
+        body(c, 60, 3)
+        bar_chart(c, 80, 120)
+        text(c, "1、同比增12%", 82, 290, size=7)  # 带编号的列表项（字号小于正文）
+        text(c, "注1：2024年", 82, 300, size=7)  # 脚注
+
+    lay, cs = strip_first(pdf_page(draw))
+    assert len(cs.figures) == 1
+    assert {"1、同比增12%", "注1：2024年"} <= kept_texts(cs)
+    assert_lossless(lay, cs)
+
+
+def test_c3_band_labels_at_body_size_are_not_stripped() -> None:
+    def draw(c: canvas.Canvas) -> None:
+        body(c, 60, 3)
+        bar_chart(c, 80, 120)
+        text(c, "全年", 82, 292)  # 10pt 的短行：与正文同字号，不是图表刻度
+        text(c, "2024", 150, 292)
+
+    lay, cs = strip_first(pdf_page(draw))
+    assert len(cs.figures) == 1 and {"全年", "2024"} <= kept_texts(cs)
+    assert_lossless(lay, cs)
+
+
+def test_c3_short_infographic_lines_over_a_large_image_stay_in_the_body() -> None:
+    def draw(c: canvas.Canvas) -> None:
+        c.drawImage(ImageReader(Image.new("RGB", (400, 250), (200, 220, 240))), 40, 120, 500, 550)
+        for i, s in enumerate(
+            ("市占率 35%", "营收 12亿", "增速 18%", "毛利率 45%", "客户 200家", "区域 5个")
+        ):
+            text(c, s, 100, 200 + i * 20)
+
+    lay, cs = strip_first(pdf_page(draw))
+    assert cs.stripped_words == 0 and len(cs.layout.words) == len(lay.words)
+
+
+def test_i2_a_caption_sharing_a_baseline_with_a_left_column_line_is_still_the_caption() -> None:
+    def draw(c: canvas.Canvas) -> None:
+        text(c, SENTENCE, 60, 106)
+        text(c, "图1：营业收入", 345, 106, size=9)
+        bar_chart(c, 345, 120)
+
+    _, cs = strip_first(pdf_page(draw))
+    (fig,) = cs.figures
+    assert fig.caption == "图1：营业收入"
+    assert "图1：营业收入" in kept_texts(cs) and SENTENCE in kept_texts(cs)
+
+
+def test_i2_two_charts_side_by_side_each_get_their_own_caption() -> None:
+    def draw(c: canvas.Canvas) -> None:
+        text(c, "图5：甲公司", 40, 106, size=9)
+        text(c, "图6：乙公司", 320, 106, size=9)
+        bar_chart(c, 40, 120)
+        bar_chart(c, 320, 120)
+
+    _, cs = strip_first(pdf_page(draw))
+    figs = sorted(cs.figures, key=lambda f: f.bbox[0])
+    assert [f.caption for f in figs] == ["图5：甲公司", "图6：乙公司"]
