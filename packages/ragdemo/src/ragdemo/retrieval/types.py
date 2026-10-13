@@ -32,8 +32,12 @@ class RetrievalConfig:
     # embedding_input），而不是块的裸 content。默认关闭，行为与加这个字段之前一致；
     # 翻默认值须跑 C2 评测与 `eval table-gate`（见 重排输入改造评测.md）。
     rerank_rich_input: bool = False
+    # 仅对重排输入生效的字符上限；None = 沿用嵌入上限（DEFAULT_MAX_EMBED_CHARS）。嵌入本身不受影响。
+    rerank_rich_max_chars: int | None = None
 
     def validate(self) -> None:
+        if self.rerank_rich_max_chars is not None and self.rerank_rich_max_chars <= 0:
+            raise ValueError("rerank_rich_max_chars 必须为正")
         if self.top_k > self.fusion_k:
             raise ValueError(f"top_k {self.top_k} 不能大于 fusion_k {self.fusion_k}")
         if self.fusion_k > self.candidate_k * 2:

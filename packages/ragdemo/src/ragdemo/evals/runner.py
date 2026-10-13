@@ -167,6 +167,10 @@ def run_retrieval_eval(
                     else None
                 ),
                 "final_rank": _best_rank(ordered10, gold_set),
+                "ms_total": round(latencies_ms[-1], 1),
+                "ms_rerank": round(top.stats.ms_rerank, 1),
+                "ms_embed_vec": round(top.stats.ms_vec, 1),
+                "ms_bm25": round(top.stats.ms_bm25, 1),
             }
         )
         hits10.append(recall_at_k(ordered10, gold_set, 10))

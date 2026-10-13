@@ -177,6 +177,12 @@ def add_retrieval(
     default=False,
     help="重排输入与嵌入同一拼法（标题+章节路径+描述+正文），而非裸正文",
 )
+@click.option(
+    "--rerank-rich-max-chars",
+    type=int,
+    default=None,
+    help="丰富重排输入的字符上限（仅重排，嵌入不变）；默认沿用嵌入上限 2000",
+)
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 @click.option(
     "--author-prefix",
@@ -196,6 +202,7 @@ def run(
     period_boost: float,
     bm25_desc: bool,
     rerank_rich_input: bool,
+    rerank_rich_max_chars: int | None,
     label: str,
     author_prefix: str | None,
 ) -> None:
@@ -214,6 +221,7 @@ def run(
         period_boost=period_boost,
         bm25_desc=bm25_desc,
         rerank_rich_input=rerank_rich_input,
+        rerank_rich_max_chars=rerank_rich_max_chars,
     )
     config.validate()
     synonyms = load_synonyms() if rewrite else None

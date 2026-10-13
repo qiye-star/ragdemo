@@ -281,3 +281,45 @@ def test_rerank_rich_input_matches_embedding_input(
         d.startswith("寒武纪 2024 年三季报\n第三节 主营业务\n各业务分部收入同比表\n")
         for d in spy.docs
     )
+
+
+def test_rerank_rich_max_chars_defaults_to_none() -> None:
+    assert RetrievalConfig().rerank_rich_max_chars is None
+
+
+def test_rerank_rich_max_chars_must_be_positive() -> None:
+    with pytest.raises(ValueError):
+        RetrievalConfig(rerank_rich_max_chars=0).validate()
+
+
+@pytest.mark.db
+def test_rerank_rich_max_chars_truncates_rerank_input_only(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    spy = _SpyReranker()
+    _service(corpus, spy).search(
+        RetrievalRequest(
+            query="智能计算 收入",
+            as_of=as_of_2024,
+            config=RetrievalConfig(rerank_rich_input=True, rerank_rich_max_chars=20),
+        )
+    )
+    assert spy.docs
+    assert all(len(d) <= 20 for d in spy.docs)
+    assert any(len(d) == 20 for d in spy.docs)
+
+
+@pytest.mark.db
+def test_rerank_rich_max_chars_none_keeps_embedding_cap(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    spy = _SpyReranker()
+    _service(corpus, spy).search(
+        RetrievalRequest(
+            query="智能计算 收入",
+            as_of=as_of_2024,
+            config=RetrievalConfig(rerank_rich_input=True),
+        )
+    )
+    assert spy.docs
+    assert any(len(d) > 20 for d in spy.docs)

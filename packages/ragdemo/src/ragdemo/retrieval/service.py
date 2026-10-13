@@ -139,7 +139,10 @@ class RetrievalService:
             ms_rerank = 0.0
             if cfg.rerank_enabled and fused:
                 contents = _leaf_contents(
-                    conn, [f.block_id for f in fused], rich=cfg.rerank_rich_input
+                    conn,
+                    [f.block_id for f in fused],
+                    rich=cfg.rerank_rich_input,
+                    max_chars=cfg.rerank_rich_max_chars,
                 )
                 t0 = time.perf_counter()
                 outcome = rerank_or_degrade(self.reranker, req.query, fused, contents, cfg.top_k)
@@ -276,7 +279,11 @@ def chroma_backed_service(
 
 
 def _leaf_contents(
-    conn: psycopg.Connection, block_ids: list[int], *, rich: bool = False
+    conn: psycopg.Connection,
+    block_ids: list[int],
+    *,
+    rich: bool = False,
+    max_chars: int | None = None,
 ) -> dict[int, str]:
     """按 block_id 取叶子块文本，供重排使用（重排要叶子块，不要父块，见 rerank.py）。
 
@@ -304,6 +311,7 @@ def _leaf_contents(
             section_path=str(r[2] or ""),
             content_desc=str(r[3] or ""),
             content=str(r[4]),
+            **({} if max_chars is None else {"max_chars": max_chars}),
         )
         for r in rich_rows
     }
