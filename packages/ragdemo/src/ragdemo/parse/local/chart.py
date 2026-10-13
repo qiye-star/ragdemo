@@ -375,9 +375,9 @@ def strip_charts(layout: PageLayout, body_size: float) -> ChartStrip:
             continue
         inner = [w for w in words if _center_in(w, box) and id(w) not in taken]
         tag = f"{detection} {tuple(round(v) for v in box)}"
-        # 表格区域横跨绘图框边缘：>= 2 行同时有框内的文字词和框外的词。框内只有数字词的行是图表自己的
-        # 数据标签（图表紧邻表格时 cluster_rows 把它们与表格行聚到同一行）。T4 评审 C1：此前"落在候选框内
-        # 的表格词不受保护"的豁免让原来的守卫形同虚设
+        # 表格区域横跨绘图框边缘：>= 2 行同时有框内的文字词和框外的词。框内只有数字词的行是图表
+        # 自己的数据标签（图表紧邻表格时 cluster_rows 把它们与表格行聚到同一行）。
+        # T4 评审 C1：此前"落在候选框内的表格词不受保护"的豁免让原来的守卫形同虚设
         if any(
             sum(
                 1
