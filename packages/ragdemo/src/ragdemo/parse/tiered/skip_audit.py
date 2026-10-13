@@ -4,7 +4,7 @@ docs/10.12-plan/验收记录/减页规则测量.md 事先登记，代码常量�
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Final, Literal
@@ -80,3 +80,34 @@ def savings(
         inc = sum(1 for c in mine if not c.l0_accepted)
         out[rule] = RuleSavings(len(mine), inc, price * inc)
     return out
+
+
+INK_GRAY_THRESHOLD: Final = 180  # 灰度低于此值的像素算墨迹（事先登记于减页规则测量.md）
+INK_RATIO_REVIEW: Final = 0.005  # 墨迹比超过它的 blank_page 命中页逐页目检
+
+
+def ink_ratio(gray: bytes) -> float:
+    """8 位灰度像素里"墨迹"（灰度 < INK_GRAY_THRESHOLD）所占比例；空输入为 0。"""
+    if not gray:
+        return 0.0
+    return sum(1 for v in gray if v < INK_GRAY_THRESHOLD) / len(gray)
+
+
+def drawing_group(kinds: Iterable[str]) -> str:
+    """页面绘制对象的分组标签：含 image / curve 的优先（blank_page 已排除这两类），
+    其次只有 rect / line，否则 none。"""
+    present = set(kinds)
+    if "image" in present:
+        return "image"
+    if "curve" in present:
+        return "curve"
+    if present & {"rect", "line"}:
+        return "rect_line"
+    return "none"
+
+
+def summary_base(title: str) -> str | None:
+    """标题含"摘要"时返回去掉它的标题（用于找同名全文）；否则 None。"""
+    if "摘要" not in title:
+        return None
+    return title.replace("摘要", "").strip()

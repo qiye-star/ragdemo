@@ -43,3 +43,22 @@ def test_savings_exclude_pages_that_l0_takes_for_free() -> None:
     s = savings(c, price=Decimal("0.1356"))
     assert s["blank_page"] == RuleSavings(2, 2, Decimal("0.2712"))
     assert s["signature_tail"] == RuleSavings(1, 0, Decimal("0"))
+
+
+def test_ink_ratio_counts_only_dark_pixels() -> None:
+    from ragdemo.parse.tiered.skip_audit import ink_ratio
+
+    assert ink_ratio(b"") == 0.0
+    assert ink_ratio(bytes([255, 255, 255, 255])) == 0.0
+    assert ink_ratio(bytes([0, 179, 180, 255])) == 0.5
+
+
+def test_drawing_group_and_summary_base() -> None:
+    from ragdemo.parse.tiered.skip_audit import drawing_group, summary_base
+
+    assert drawing_group([]) == "none"
+    assert drawing_group(["rect", "line"]) == "rect_line"
+    assert drawing_group(["rect", "curve"]) == "curve"
+    assert drawing_group(["curve", "image"]) == "image"
+    assert summary_base("2024年年度报告摘要") == "2024年年度报告"
+    assert summary_base("2024年年度报告") is None
