@@ -150,3 +150,57 @@ def test_split_lost_priority_header_footer_chart_table_other() -> None:
 def test_examples_are_values_only_sorted_and_capped() -> None:
     c = Counter({str(n): 1 for n in range(9, 0, -1)})
     assert examples(c) == ["1", "2", "3", "4", "5"]
+
+
+def test_merged_cell_counts_once_in_unexpanded_and_p3_passes() -> None:
+    from ragdemo.parse.acceptance import PageInput, check_page
+
+    table = {
+        "type": "table",
+        "page_id": 1,
+        "cells": [_cell(0, 0, "801", 1, cs=2), _cell(0, 2, "7", 1)],
+    }
+    pages, _ = split_detail_by_page([table])
+    st = pages[1]
+    assert st.unexpanded_text == "801\n7"
+    assert st.stored_text.count("801") == 2
+
+    def p3(text: str) -> bool:
+        pin = PageInput(1, "L3", "textin", "k", ("r",), "not_run", "801 7", text)
+        return next(c for c in check_page(pin) if c.id == "P3").passed
+
+    assert p3(st.unexpanded_text)
+    assert not p3(st.stored_text)  # 旧口径：展开后多出一个 801
+
+
+def test_heal_spacing_makes_comparison_pass_without_touching_source() -> None:
+    from ragdemo.parse.acceptance import PageInput, check_page
+
+    raw = "增加1 . 81 个百分点，持有 5 , 223 , 600 股"
+
+    def p3(text: str) -> bool:
+        pin = PageInput(
+            1, "L3", "textin", "k", ("r",), "not_run", "增加1.81个百分点 5,223,600股", text
+        )
+        return next(c for c in check_page(pin) if c.id == "P3").passed
+
+    assert not p3(raw)
+    assert p3(heal_spacing(raw))
+    assert "1 . 81" in raw  # 只在比较处重接，原文不变
+
+
+def test_list_number_merge_and_title_year_categories() -> None:
+    from ragdemo.parse.textin_audit import CAT_LIST_MERGE, CAT_TITLE_YEAR
+
+    cats = classify_invented(
+        "4.2023年 2020-2028", "4.2023年 2020-2028", "9", title_text="2020-2028"
+    )
+    assert cats[CAT_LIST_MERGE] == Counter({"4.2023": 1})
+    assert sum(cats[CAT_TITLE_YEAR].values()) >= 1
+
+
+def test_image_title_items_collected() -> None:
+    pages, _ = split_detail_by_page(
+        [{"type": "paragraph", "sub_type": "image_title", "page_id": 1, "text": "预测 2020-2028"}]
+    )
+    assert pages[1].image_title_text == "预测 2020-2028"

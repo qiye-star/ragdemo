@@ -39,29 +39,40 @@ from ragdemo.parse.textin_audit import (
     CAT_ADJACENT_PAGE,
     CAT_FORMAT_VARIANT,
     CAT_IMAGE_OCR,
+    CAT_LIST_MERGE,
     CAT_MERGE_EXPANSION,
     CAT_SPACING,
+    CAT_TITLE_YEAR,
     CAT_VALUE_ABSENT,
     PageStore,
     box_px_to_pt,
     classify_invented,
     examples,
     excess,
+    heal_spacing,
     page_offset,
     split_detail_by_page,
     split_lost,
 )
 from ragdemo_core.blob import LocalBlobStore
 
+STATES = (
+    "accepted",
+    "accepted_with_scan",
+    "partially_accepted",
+    "textin_unverified",
+    "rejected",
+    "empty_document",
+)
 LEGACY_REASON = "legacy_textin_full_doc"
 PAGE_HEADER = (
     "doc_id\tcontent_hash12\tpage\tp3_state\tlayer_chars\tstored_items\tstored_numbers"
-    "\tlayer_numbers\tinvented\tinvented_examples\tinv_merge_expansion\tinv_format_variant"
-    "\tinv_spacing\tinv_image_ocr\tinv_adjacent_page\tinv_value_absent\tvalue_absent_examples\thf_numbers\tlost_total\tlost_header_footer"
+    "\tlayer_numbers\tinvented\tinvented_old_expanded\tinvented_examples\tinv_merge_expansion\tinv_format_variant"
+    "\tinv_spacing\tinv_image_ocr\tinv_adjacent_page\tinv_title_year\tinv_list_merge\tinv_value_absent\tvalue_absent_examples\thf_numbers\tlost_total\tlost_header_footer"
     "\tlost_chart\tlost_table\tlost_other"
 )
 DOC_HEADER = (
-    "doc_id\tcontent_hash12\tdoc_type\tpages\tverdict\tinvented\thard_invented\timage_ocr\tscan_pages"
+    "doc_id\tcontent_hash12\tdoc_type\tpages\tverdict\tverdict_old_expanded\tverdict_healed\tinvented\thard_invented\timage_ocr\tscan_pages"
     "\tpages_with_invented\tlost_total\tlost_other"
 )
 
@@ -117,41 +128,60 @@ def audit_doc(
     by_page = {lay.page: lay.text for lay in layouts}
     adjacent = {p: by_page.get(p - 1, "") + "\n" + by_page.get(p + 1, "") for p in by_page}
     inputs: list[PageInput] = []
+    inputs_old: list[PageInput] = []
+    inputs_heal: list[PageInput] = []
     agg: Counter[str] = Counter()
     pages_with_invented = 0
     for lay in layouts:
         st = stores.get(lay.page, PageStore())
-        pin = PageInput(
-            page=lay.page,
-            tier="L3",
-            engine=engine,
-            page_kind="legacy_unclassified",
-            reasons=(LEGACY_REASON,),
-            tier_verdict="not_run",
-            text_layer_text=lay.text if lay.text.strip() else None,
-            output_markdown=st.stored_text,
-        )
+        layer = lay.text if lay.text.strip() else None
+
+        def mk(text: str, page: int = lay.page, layer: str | None = layer) -> PageInput:
+            return PageInput(
+                page=page,
+                tier="L3",
+                engine=engine,
+                page_kind="legacy_unclassified",
+                reasons=(LEGACY_REASON,),
+                tier_verdict="not_run",
+                text_layer_text=layer,
+                output_markdown=text,
+            )
+
+        inputs_old.append(mk(st.stored_text))  # 旧口径：合并单元格展开
+        inputs_heal.append(mk(heal_spacing(st.unexpanded_text)))  # 仅比较时重接空白
+        pin = mk(st.unexpanded_text)  # 新口径：每个单元格只算一次
         inputs.append(pin)
         c3 = _p3(check_page(pin))
-        out_n, lay_n = numbers_in(st.stored_text), numbers_in(lay.text)
+        old_c3 = _p3(check_page(inputs_old[-1]))
+        out_n, lay_n = numbers_in(st.unexpanded_text), numbers_in(lay.text)
         scan = c3.state == "unverifiable_scan"
         invented = Counter() if scan else excess(out_n, lay_n)  # 扫描页无参照，不记「多余」
         if not scan:
             assert c3.count == sum(invented.values()), (doc_id, lay.page)
         cats = classify_invented(
-            "" if scan else st.stored_text,
+            "" if scan else st.unexpanded_text,
             "" if scan else st.unexpanded_text,
             lay.text,
             st.image_ocr_text,
             adjacent[lay.page],
+            st.image_title_text,
         )
+        agg["invented_old"] += old_c3.count
+        heal_c3 = _p3(check_page(inputs_heal[-1]))
+        agg["pages_pass"] += c3.state == "pass"
+        agg["pages_pass_old"] += old_c3.state == "pass"
+        agg["pages_pass_heal"] += heal_c3.state == "pass"
+        agg["invented_heal"] += heal_c3.count
+        if not scan:
+            agg["checkable_numbers"] += sum(out_n.values())
         if scan:
             agg["scan_numbers"] += sum(out_n.values())
             lost = {"header_footer": 0, "chart": 0, "table": 0, "other": 0}
         else:
             lost = split_lost(
                 lay.text,
-                st.stored_text,
+                st.unexpanded_text,
                 st.header_footer_text,
                 _chart_text(lay, body),
                 _table_word_texts(lay, st, dims.get(lay.page, (0, 0))),
@@ -169,6 +199,8 @@ def audit_doc(
         agg[CAT_IMAGE_OCR] += sum(cats[CAT_IMAGE_OCR].values())
         agg[CAT_SPACING] += sum(cats[CAT_SPACING].values())
         agg[CAT_ADJACENT_PAGE] += sum(cats[CAT_ADJACENT_PAGE].values())
+        agg[CAT_TITLE_YEAR] += sum(cats[CAT_TITLE_YEAR].values())
+        agg[CAT_LIST_MERGE] += sum(cats[CAT_LIST_MERGE].values())
         agg["lost_total"] += sum(lost.values())
         agg["lost_other"] += lost["other"]
         page_rows.append(
@@ -183,12 +215,15 @@ def audit_doc(
                     str(sum(out_n.values())),
                     str(sum(lay_n.values())),
                     str(n_inv),
+                    str(old_c3.count),
                     ",".join(examples(invented)),
                     str(sum(cats[CAT_MERGE_EXPANSION].values())),
                     str(sum(cats[CAT_FORMAT_VARIANT].values())),
                     str(sum(cats[CAT_SPACING].values())),
                     str(sum(cats[CAT_IMAGE_OCR].values())),
                     str(sum(cats[CAT_ADJACENT_PAGE].values())),
+                    str(sum(cats[CAT_TITLE_YEAR].values())),
+                    str(sum(cats[CAT_LIST_MERGE].values())),
                     str(sum(cats[CAT_VALUE_ABSENT].values())),
                     ",".join(examples(cats[CAT_VALUE_ABSENT])),
                     str(sum(numbers_in(st.header_footer_text).values())),
@@ -207,6 +242,8 @@ def audit_doc(
         page_count=page_count,
     )
     verdict = verdict_for_document(inputs, meta)
+    agg["old_state"] = STATES.index(verdict_for_document(inputs_old, meta).state)
+    agg["heal_state"] = STATES.index(verdict_for_document(inputs_heal, meta).state)
     agg["pages"] = len(layouts)
     agg["scan_pages"] = verdict.scan_pages
     agg["pages_with_invented"] = pages_with_invented
@@ -228,6 +265,8 @@ def main() -> None:
     page_rows: list[str] = [PAGE_HEADER]
     doc_rows: list[str] = [DOC_HEADER]
     verdicts: Counter[str] = Counter()
+    verdicts_old: Counter[str] = Counter()
+    verdicts_heal: Counter[str] = Counter()
     totals: Counter[str] = Counter()
     docs_with_invented = docs_with_hard = 0
     for doc_id, chash, doc_type, engine, page_count, raw_ref in rows:
@@ -248,6 +287,8 @@ def main() -> None:
             page_rows,
         )
         verdicts[state] += 1
+        verdicts_old[STATES[agg["old_state"]]] += 1
+        verdicts_heal[STATES[agg["heal_state"]]] += 1
         totals.update(agg)
         docs_with_invented += agg.get("invented", 0) > 0
         docs_with_hard += agg.get("hard_invented", 0) > 0
@@ -259,6 +300,8 @@ def main() -> None:
                     str(doc_type),
                     str(agg["pages"]),
                     state,
+                    STATES[agg["old_state"]],
+                    STATES[agg["heal_state"]],
                     str(agg["invented"]),
                     str(agg["hard_invented"]),
                     str(agg[CAT_IMAGE_OCR]),
@@ -276,7 +319,8 @@ def main() -> None:
     (out_dir / f"textin-page-audit-{today}-docs.tsv").write_text(
         "\n".join(doc_rows) + "\n", encoding="utf-8"
     )
-    print(f"\n文档 {len(rows)} 份；结论分布：{dict(verdicts)}")
+    print(f"\n文档 {len(rows)} 份；新口径（不展开）：{dict(verdicts)}")
+    print(f"旧口径（展开）：{dict(verdicts_old)}；新口径+比较时重接空白：{dict(verdicts_heal)}")
     print(
         f"有未溯源数字的文档 {docs_with_invented}；含图片OCR/邻页/完全缺失数字的 {docs_with_hard}"
     )

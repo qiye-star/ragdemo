@@ -25,6 +25,8 @@ BoxPx = tuple[float, float, float, float]
 CAT_MERGE_EXPANSION: Final = "merge_expansion"  # 合并单元格展开成重复值多出来的
 CAT_SPACING: Final = "spacing_artifact"  # TextIn 在小数点/千分位逗号两侧插了空白（"9 . 44"）
 CAT_ADJACENT_PAGE: Final = "adjacent_page"  # 数值在相邻页的文字层里：条目被归到了错的一页
+CAT_LIST_MERGE: Final = "list_number_merge"  # 列表编号 "4." 与下一行年份粘连成 "4.2023"
+CAT_TITLE_YEAR: Final = "chart_title_year"  # 图表标题（image_title 条目）里的年份/区间，文字层无
 CAT_FORMAT_VARIANT: Final = "format_variant"  # 数值在文字层里有，但符号/括号/百分号/小数尾零不同
 CAT_IMAGE_OCR: Final = (
     "image_ocr"  # 数值不在文字层，但 TextIn 的 image 条目（图表/图片 OCR 文字）里有
@@ -38,6 +40,7 @@ class PageStore:
 
     stored: list[str] = field(default_factory=list)  # 入库内容（合并单元格展开）
     unexpanded: list[str] = field(default_factory=list)  # 同上但合并单元格只算一次
+    title_text: list[str] = field(default_factory=list)  # sub_type == image_title 的条目文本
     image_text: list[str] = field(default_factory=list)  # type == image 的条目文本（图表/图片 OCR）
     header_footer: list[str] = field(default_factory=list)  # content == 1 的条目文本
     table_boxes: list[BoxPx] = field(default_factory=list)  # 表格在本页的外接框（TextIn 像素）
@@ -50,6 +53,10 @@ class PageStore:
     @property
     def unexpanded_text(self) -> str:
         return "\n".join(self.unexpanded)
+
+    @property
+    def image_title_text(self) -> str:
+        return "\n".join(self.title_text)
 
     @property
     def image_ocr_text(self) -> str:
@@ -129,6 +136,8 @@ def split_detail_by_page(detail: Sequence[Mapping[str, Any]]) -> tuple[dict[int,
             st.unexpanded.append(text)
             if kind == "image":
                 st.image_text.append(text)
+            if str(item.get("sub_type")) == "image_title":
+                st.title_text.append(text)
     return pages, unpaged
 
 
@@ -148,6 +157,9 @@ def value_key(token: str) -> str:
 
 
 _SPACED_SEP = re.compile(r"(?<=\d)(?:[ \t]+([.,])[ \t]*|[ \t]*([.,])[ \t]+)(?=\d)")
+
+
+_LIST_MERGE = re.compile(r"^\d{1,2}\.(?:19|20)\d{2}$")
 
 
 def heal_spacing(text: str) -> str:
@@ -175,11 +187,14 @@ def classify_invented(
     layer_text: str,
     image_text: str = "",
     adjacent_layer_text: str = "",
+    title_text: str = "",
 ) -> dict[str, Counter[str]]:
     """把「入库数字 − 文字层数字」的多余部分分成互斥的几类（见 CAT_*），按此顺序先到先得：
 
     merge_expansion：展开后多出、不展开就不多的那部分；
     spacing_artifact：把 "9 . 44" / "5 , 223 , 600" 的空白去掉后就消失的那部分；
+    chart_title_year：同一 token 在图表标题条目里；
+    list_number_merge：形如 "4.2023" 的编号+年份粘连；
     image_ocr：同一 token 在 TextIn 的 image 条目里（图表/图片 OCR）；
     adjacent_page：同一 token 出现在相邻页（±1）的文字层——条目页码归属偏了一页；
     format_variant：数值键在文字层出现过（符号/括号/百分号/尾零不同；最弱的一条，放在精确匹配之后）；
@@ -193,7 +208,10 @@ def classify_invented(
     base = raw_base & healed
     spacing = raw_base - base
     ocr, rest = _take(base, numbers_in(image_text))
+    title, rest = _take(rest, numbers_in(title_text))
     adjacent, rest = _take(rest, numbers_in(adjacent_layer_text))
+    list_merge = Counter({t: c for t, c in rest.items() if _LIST_MERGE.match(t)})
+    rest = rest - list_merge
     layer_keys = {value_key(t) for t in src}
     fmt: Counter[str] = Counter()
     absent: Counter[str] = Counter()
@@ -205,6 +223,8 @@ def classify_invented(
         CAT_FORMAT_VARIANT: fmt,
         CAT_IMAGE_OCR: ocr,
         CAT_ADJACENT_PAGE: adjacent,
+        CAT_TITLE_YEAR: title,
+        CAT_LIST_MERGE: list_merge,
         CAT_VALUE_ABSENT: absent,
     }
 
