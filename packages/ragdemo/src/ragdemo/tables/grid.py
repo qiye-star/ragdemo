@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_args
 
-if TYPE_CHECKING:  # T6 creates ragdemo.tables.context; drop the ignore then
-    from ragdemo.tables.context import TableContext  # type: ignore[import-untyped, unused-ignore]
+if TYPE_CHECKING:
+    from ragdemo.tables.context import TableContext
 
 JSON_SCHEMA_VERSION: Final = 1
 GRID_VERSION: Final = f"tablegrid:v{JSON_SCHEMA_VERSION}"

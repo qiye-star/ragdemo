@@ -25,6 +25,7 @@ from typing import Any, Final, NoReturn, Protocol, runtime_checkable
 import httpx
 
 from ragdemo.adapters.announcements import NormalizedBlock
+from ragdemo.tables.context import bind_context, textin_caption, textin_preceding_texts
 from ragdemo.tables.grid import TableAttachment
 from ragdemo.tables.textin_cells import grid_from_textin_item, textin_locator
 from ragdemo_core.blob import BlobStore
@@ -285,7 +286,7 @@ def blocks_from_detail(
     stack: list[str] = []
     blocks: list[NormalizedBlock] = []
 
-    for item in detail:
+    for i, item in enumerate(detail):
         if int(item.get("content", 0) or 0) == 1:
             continue  # 页眉页脚，供应商标注的非正文（05 §3.3）
 
@@ -312,7 +313,18 @@ def blocks_from_detail(
                 engine=engine,
                 provider_ref=textin_locator(json_ref, item),
             )
-            table = TableAttachment(grid=grid) if grid is not None else None
+            table = (
+                TableAttachment(
+                    grid=grid,
+                    context=bind_context(
+                        grid,
+                        caption=textin_caption(detail, item),
+                        preceding_texts=textin_preceding_texts(detail, i),
+                    ),
+                )
+                if grid is not None
+                else None
+            )
         elif kind == "image":
             block_type, content = "figure", text
         elif level >= 0:
