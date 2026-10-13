@@ -26,9 +26,11 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import click
 import psycopg
@@ -60,8 +62,9 @@ from ragdemo.ingest.assets_docs import (
 from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
-from ragdemo.ingest.parse_pending import run_parse_pending
+from ragdemo.ingest.parse_pending import _select_pending, run_parse_pending, tier_for_document
 from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier
+from ragdemo.ingest.pdf_pages import pdf_page_count
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import TableDescriber
@@ -75,11 +78,20 @@ from ragdemo.parse.textin import (
     artifact_keys,
     param_fingerprint,
 )
+from ragdemo.parse.tiered.cost_model import (
+    DEFAULT_PRIORITY,
+    BacklogDoc,
+    backlog_scenarios,
+    compare_costs,
+    plan_budget,
+    unverified_rate,
+)
+from ragdemo.parse.tiered.ledger import format_tier_summary, tier_summary
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo.retrieval.models import build_models
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
-from ragdemo_core.blob import BlobStore, LocalBlobStore
+from ragdemo_core.blob import BlobNotFound, BlobStore, LocalBlobStore
 
 
 def _dsn() -> str:
@@ -799,6 +811,191 @@ def docs_parse_pending(
             f"（{report.parsed_pages} 页），无块 {report.stored_unparsed}，"
             f"预算跳过 {report.skipped_budget}"
         )
+
+
+# --- docs parse-cost（L0 + TextIn 分页接入计划 T12）-------------------------
+
+
+def _load_backlog(conn: psycopg.Connection, blob: BlobStore) -> list[BacklogDoc]:
+    """待解析积压（与 parse-pending 同一选择口径，仅 SELECT）。
+
+    页数读本地 PDF，读不到按档位经验估算。"""
+    out: list[BacklogDoc] = []
+    for row in _select_pending(conn, None):
+        tier = tier_for_document(row.source, row.doc_type, row.title)
+        try:
+            pages = pdf_page_count(blob.get(row.raw_ref))
+        except BlobNotFound:
+            pages = None
+        out.append(
+            BacklogDoc(
+                doc_id=row.doc_id,
+                tier=tier.value,
+                pages=pages or ESTIMATED_PAGES[tier],
+                publish_at=row.publish_at,  # type: ignore[arg-type]
+                title=row.title,
+                pages_estimated=pages is None,
+            )
+        )
+    return out
+
+
+@docs_group.command("parse-cost")
+@click.option(
+    "--month", default=None, help="YYYY-MM（北京时间自然月）：另按逐页台账汇总启用前后每页成本"
+)
+@click.option("--doc-type", default=None, help="台账汇总只看一类：research_report / announcement")
+@click.option(
+    "--budget-pages", type=int, default=None, help="页预算规划：给定页数，列出装得下哪些文档"
+)
+@click.option(
+    "--priority",
+    default=",".join(DEFAULT_PRIORITY),
+    show_default=True,
+    help="档位优先级（逗号分隔，须含 first,none,second 各一次）；档内按公告日新到旧",
+)
+@click.option(
+    "--strict-order",
+    is_flag=True,
+    default=False,
+    help="遇到第一份放不下的文档就停，不越过它装后面的小文档",
+)
+@click.option(
+    "--skip-pages",
+    type=int,
+    default=None,
+    help="跳页规则的实测节省页数（T2 实测前不传，场景 b 显示待实测）",
+)
+@click.option(
+    "--research-pages",
+    type=int,
+    default=596,
+    show_default=True,
+    help="未入库研报页数（普查口径，另算不进规划）",
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def parse_cost(
+    month: str | None,
+    doc_type: str | None,
+    budget_pages: int | None,
+    priority: str,
+    strict_order: bool,
+    skip_pages: int | None,
+    research_pages: int,
+    blob_root_opt: Path | None,
+) -> None:
+    """只读、免费：积压解析成本估算（各路由场景）+ 页预算规划 + 可选的台账每页成本。
+
+    不调用 TextIn / LLM，不写库。现行生产只有 L3（TextIn）：L0 场景只作展示，标注不可用。
+    """
+    cfg = _load_config()
+    price: Decimal = cfg.textin_cost_per_page_cny
+    order = tuple(x.strip() for x in priority.split(",") if x.strip())
+    if sorted(order) != sorted(DEFAULT_PRIORITY):
+        raise click.ClickException("--priority 须恰含 first、none、second 各一次")
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    ledger_rows = None
+    u = None
+    with psycopg.connect(_dsn()) as conn:
+        backlog = _load_backlog(conn, blob)
+        ledger_missing = False
+        if (
+            month is not None
+            and (conn.execute("SELECT to_regclass('core.parse_page_route')").fetchone() or (None,))[
+                0
+            ]
+            is None
+        ):
+            ledger_missing = True
+        elif month is not None:
+            start = datetime.strptime(f"{month}-01", "%Y-%m-%d").replace(
+                tzinfo=ZoneInfo("Asia/Shanghai")
+            )
+            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            ledger_rows = tier_summary(
+                conn, start=start, end=end, textin_per_page=price, doc_type=doc_type
+            )
+            u = conn.execute(
+                "SELECT coalesce(sum(unverified_numbers), 0), coalesce(sum(output_numbers), 0)"
+                "  FROM core.parse_page_route WHERE tier = 'L0'"
+                "   AND routed_at >= %s AND routed_at < %s"
+                "   AND (%s::text IS NULL OR doc_type = %s)",
+                (start, end, doc_type, doc_type),
+            ).fetchone()
+    total = sum(d.pages for d in backlog)
+    est_docs = sum(1 for d in backlog if d.pages_estimated)
+    click.echo(f"单价 {price} 元/页（实测估算，待供应商发票复核）")
+    click.echo(f"积压：{len(backlog)} 份 / {total} 页（其中 {est_docs} 份页数为经验估算）")
+    click.echo("| 档位 | 文档数 | 页数 | 费用（元） |\n|---|---|---|---|")
+    for t in DEFAULT_PRIORITY:
+        ds = [d for d in backlog if d.tier == t]
+        pg = sum(d.pages for d in ds)
+        click.echo(f"| {t} | {len(ds)} | {pg} | {price * pg:.4f} |")
+    click.echo("")
+    click.echo("| 场景 | 可用 | TextIn 页数 | 费用（元） | 说明 |\n|---|---|---|---|---|")
+    for sc in backlog_scenarios(total, price=price, skip_pages=skip_pages):
+        pg_s = "—" if sc.textin_pages is None else str(sc.textin_pages)
+        cny_s = "—" if sc.cny is None else f"{sc.cny:.4f}"
+        click.echo(
+            f"| {sc.key} {sc.name} | {'是' if sc.available else '否'} | {pg_s} | {cny_s} |"
+            f" {sc.note} |"
+        )
+    click.echo(
+        f"研报（未入库，另算）：{research_pages} 页 × {price} = "
+        f"{price * research_pages:.4f} 元（全送 TextIn）"
+    )
+    lo, hi = price * total * Decimal("0.9"), price * total * Decimal("1.1")
+    click.echo(
+        f"不确定性：单价 ±10% 即 {lo:.2f} ~ {hi:.2f} 元；页数为 pypdf 实测（估算页见上）；"
+        "不假设 L0/L1/L2 的任何节省。"
+    )
+    if budget_pages is not None:
+        plan = plan_budget(
+            backlog,
+            budget_pages=budget_pages,
+            price=price,
+            priority=order,
+            strict_order=strict_order,
+        )
+        click.echo("")
+        click.echo(
+            f"页预算 {budget_pages} 页（优先级 {'>'.join(order)}，档内新到旧"
+            f"{'，严格顺序' if strict_order else '，可越过放不下的大文档'}）"
+        )
+        click.echo(
+            "| # | doc_id | 档位 | 公告日 | 页数 | 累计页 | 累计元 | 标题 |\n"
+            "|---|---|---|---|---|---|---|---|"
+        )
+        for i, ln in enumerate(plan.selected, 1):
+            d = ln.doc
+            est = "~" if d.pages_estimated else ""
+            click.echo(
+                f"| {i} | {d.doc_id} | {d.tier} | {d.publish_at:%Y-%m-%d} | {est}{d.pages} |"
+                f" {ln.cum_pages} | {ln.cum_cny:.4f} | {d.title} |"
+            )
+        click.echo(
+            f"装入 {len(plan.selected)} 份 / {plan.used_pages} 页 / {plan.used_cny:.4f} 元；"
+            f"预算余 {plan.budget_left_pages} 页"
+        )
+        click.echo(
+            f"剩余积压：{len(plan.remaining)} 份 / {plan.remaining_pages} 页 / "
+            f"{plan.remaining_cny:.4f} 元"
+        )
+    if ledger_missing:
+        click.echo("")
+        click.echo("逐页台账表 core.parse_page_route 不存在（迁移 034 未应用到此库），跳过台账汇总")
+    if ledger_rows is not None:
+        click.echo("")
+        click.echo(format_tier_summary(ledger_rows))
+        if sum(r.pages for r in ledger_rows):
+            c = compare_costs(ledger_rows, price=price)
+            click.echo(
+                f"每页成本：实际 {c.actual_per_page} 元 / 全送 TextIn {price} 元；"
+                f"节省 {c.saving_share:.2%}"
+                f"（缓存命中的 L3 页 {c.unbilled_l3_pages} 页按计费页算）"
+            )
+        rate = unverified_rate(int(u[0]), int(u[1])) if u else None
+        click.echo(f"L0 页未溯源数字率：{'无 L0 页' if rate is None else rate}")
 
 
 # --- docs announcements（公告双源接入计划 Task 12）----------------------------
