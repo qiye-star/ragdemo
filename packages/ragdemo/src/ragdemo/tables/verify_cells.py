@@ -3,6 +3,8 @@
 每个含数字的单元格，其数字多重集必须与该格 bbox 内 PDF 文字层词里的数字多重集**相等**
 （不是子集：框内多出的数字——脚注号、相邻格、过大的框——一律 mismatch）。
 校验是单页的：不做 ±1 页放宽，相邻页偏移记为 mismatch（虚警可接受，假通过不可接受）。
+v3：格文本先用 heal_spacing 重接 TextIn 在小数点/千分位逗号两侧插入的空白（只作用于格，
+文字层一侧不动；不跨词重接，"1 95" 不重接），重接后的数字仍须与框内数字多重集相等。
 框内有游离的 '-' / '%' / 括号词而格文本里没有，也记 mismatch。
 扫描页（无文字层）、旋转页、无坐标的格各自是独立状态，永远不记为 match。
 
@@ -27,10 +29,11 @@ import pdfplumber
 
 from ragdemo.parse.local.layout import PageLayout, Word, _word_font, _word_is_horizontal
 from ragdemo.parse.local.number_closure import fold_text, numbers_in
+from ragdemo.parse.textin_audit import heal_spacing
 from ragdemo.parse.tiered.types import Tier
 from ragdemo.tables.grid import BBox, CellCheck, GridCell, TableGrid
 
-VERIFY_CELLS_VERSION: Final = "cellverify:v2"
+VERIFY_CELLS_VERSION: Final = "cellverify:v3"
 BBOX_PAD_PT: Final = 0.0  # b3 探针：>0 时相邻格的词会被框进来；语料上 0 / 0.5 / 1.5 结果相同
 _SIGN_ONLY: Final = re.compile(r"[-%()\s]+")
 
@@ -112,7 +115,7 @@ def words_in_bbox(pw: PageWords, bbox: BBox, *, pad: float = BBOX_PAD_PT) -> lis
 
 
 def check_cell(cell: GridCell, pages: Mapping[int, PageWords]) -> CellCheck:
-    need = numbers_in(cell.text)
+    need = numbers_in(heal_spacing(cell.text))  # v3：只在格一侧重接 TextIn 的 "1 . 95" 空白
     if not need:
         return "no_numbers"
     if cell.page is None or cell.bbox is None:

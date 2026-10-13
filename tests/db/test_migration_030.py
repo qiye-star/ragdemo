@@ -58,7 +58,7 @@ def _insert(
         _INSERT_COLS
         + " VALUES (10, 1, %s::jsonb, 'tablegrid:v1', 1, 1, 0, 0, '{3}', 'none', 'other',"
         " 'textin:t',"
-        " 'cellverify:v2', %s, 1, 0, 0, 1, 'quarterly', '2025-10-28 18:00+08', true,"
+        " 'cellverify:v3', %s, 1, 0, 0, 1, 'quarterly', '2025-10-28 18:00+08', true,"
         " '2025-10-28', %s, 'mock', 'r1')",
         (GRID_JSON, verdict, known_at),
     )

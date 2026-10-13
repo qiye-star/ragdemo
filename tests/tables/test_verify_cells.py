@@ -94,7 +94,7 @@ def test_multiset_not_set_and_spaced_decimal_is_mismatch() -> None:
     cell = GridCell(0, 0, 1, 1, "1,234.50 1,234.50", page=1, bbox=(0.1, 0.1, 0.5, 0.2))
     assert check_cell(cell, PAGES) == "mismatch"  # 框内只有一个
     spaced = GridCell(0, 0, 1, 1, "1,234 . 50", page=1, bbox=(0.1, 0.1, 0.5, 0.2))
-    assert check_cell(spaced, PAGES) == "mismatch"  # 空白缺陷：虚警，不是假通过
+    assert check_cell(spaced, PAGES) == "match"  # v3：格侧重接空白
 
 
 def test_summary_counts_and_unverified_grid() -> None:
@@ -153,7 +153,7 @@ def _c(
 
 
 def test_version_and_verdict_set() -> None:
-    assert vc.VERIFY_CELLS_VERSION == "cellverify:v2"
+    assert vc.VERIFY_CELLS_VERSION == "cellverify:v3"
     assert "text_layer_cells_partial" in vc.TableVerdict.__args__  # type: ignore[attr-defined]
 
 
@@ -302,3 +302,32 @@ def test_words_in_bbox_sort_order() -> None:
 def test_b3_neighbour_word_just_outside_bbox_is_not_pulled_in() -> None:
     pages = _pw(("7", 30.5, 31.5, 12, 18))  # 词中心 31.0，bbox 右缘 30.0
     assert check_cell(_c("7"), pages) == "mismatch"
+
+
+def test_v3_spaced_cell_text_is_healed_cell_side_only() -> None:
+    assert vc.VERIFY_CELLS_VERSION == "cellverify:v3"
+    assert check_cell(_c("1 . 95"), _pw(("1.95", 12, 28, 12, 18))) == "match"
+    assert check_cell(_c("1 . 95"), _pw(("1.96", 12, 28, 12, 18))) == "mismatch"
+    assert check_cell(_c("5 , 223 , 600"), _pw(("5,223,600", 12, 28, 12, 18))) == "match"
+    assert check_cell(_c("-1 . 95"), _pw(("-1.95", 12, 28, 12, 18))) == "match"
+    assert (
+        check_cell(_c("50 . 76 %"), _pw(("50.76%", 12, 28, 12, 18))) == "mismatch"
+    )  # 百分号前的空白不在重接范围（保守）
+    assert (
+        check_cell(_c("50 . 76 %"), _pw(("50.76", 12, 22, 12, 18), ("%", 22.5, 25, 12, 18)))
+        == "match"
+    )
+
+
+def test_v3_never_heals_across_layer_word_boundaries_or_layer_side() -> None:
+    sep = _pw(("12", 12, 16, 12, 18), ("5", 17, 21, 12, 18))
+    assert check_cell(_c("12 . 5"), sep) == "mismatch"
+    assert check_cell(_c("12.5"), sep) == "mismatch"
+    spaced_layer = _pw(("1 . 95", 12, 28, 12, 18))
+    assert check_cell(_c("1.95"), spaced_layer) == "mismatch"  # 文字层一侧不重接
+
+
+def test_v3_only_exact_artefact_shapes_are_healed() -> None:
+    assert check_cell(_c("1 95"), _pw(("1.95", 12, 28, 12, 18))) == "mismatch"
+    assert check_cell(_c("1 95"), _pw(("195", 12, 28, 12, 18))) == "mismatch"
+    assert check_cell(_c("1 95"), _pw(("1", 12, 14, 12, 18), ("95", 15, 28, 12, 18))) == "match"

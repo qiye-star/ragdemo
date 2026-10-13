@@ -237,7 +237,7 @@ def test_verify_version_bump_supersedes_and_reinserts(
     wired: psycopg.Connection, blob: LocalBlobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_backfill(wired, blob, ingest_run_id="t", write=True)
-    monkeypatch.setattr(bf, "VERIFY_CELLS_VERSION", "cellverify:v3")
+    monkeypatch.setattr(bf, "VERIFY_CELLS_VERSION", "cellverify:v4")
     rep = run_backfill(wired, blob, ingest_run_id="t2", write=True)
     d = rep.docs[0]
     assert (d.superseded, d.inserted, d.deferred) == (1, 1, 0)
@@ -245,7 +245,7 @@ def test_verify_version_bump_supersedes_and_reinserts(
         "SELECT count(*) FROM core.doc_table WHERE superseded_at IS NOT NULL"
     ).fetchone()
     assert old == (1,)
-    assert [r[2] for r in _live(wired)] == ["cellverify:v3"]
+    assert [r[2] for r in _live(wired)] == ["cellverify:v4"]
     assert check_schema_invariants(wired) == []
 
 
@@ -259,12 +259,12 @@ def test_row_whose_known_at_is_in_the_future_is_deferred_not_superseded(
     wired.execute("UPDATE core.doc_block SET known_at = now() + interval '1 day' WHERE doc_id = 1")
     wired.execute("UPDATE core.doc_table SET known_at = now() + interval '1 day' WHERE doc_id = 1")
     wired.commit()
-    monkeypatch.setattr(bf, "VERIFY_CELLS_VERSION", "cellverify:v3")
+    monkeypatch.setattr(bf, "VERIFY_CELLS_VERSION", "cellverify:v4")
     rep = run_backfill(wired, blob, ingest_run_id="t2", write=True)
     d = rep.docs[0]
     assert rep.failed == {}
     assert (d.deferred, d.superseded, d.inserted) == (1, 0, 0)
-    assert [r[2] for r in _live(wired)] == ["cellverify:v2"]  # 旧行原样
+    assert [r[2] for r in _live(wired)] == ["cellverify:v3"]  # 旧行原样
 
 
 @pytest.mark.db
