@@ -5,12 +5,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from ragdemo.config import ConfigError, load_config
+from ragdemo.config import DEFAULT_TEXTIN_COST_PER_PAGE_CNY, ConfigError, load_config
 
 
 def test_defaults_when_env_is_empty() -> None:
@@ -69,9 +70,13 @@ def test_require_textin_base_url_returns_value_when_set() -> None:
     assert cfg.require_textin_base_url() == "http://127.0.0.1:8081"
 
 
-def test_textin_cost_per_page_cny_defaults_to_none() -> None:
+def test_textin_cost_per_page_cny_defaults_to_measured_price() -> None:
+    # 实测 2026-10-13：34.84 元 / 257 页；旧记账价 0.04 低估约 3.4 倍
     cfg = load_config({})
-    assert cfg.textin_cost_per_page_cny is None
+    assert cfg.textin_cost_per_page_cny == DEFAULT_TEXTIN_COST_PER_PAGE_CNY == Decimal("0.1356")
+    assert load_config({"TEXTIN_COST_PER_PAGE_CNY": "  "}).textin_cost_per_page_cny == Decimal(
+        "0.1356"
+    )
 
 
 def test_textin_cost_per_page_cny_reads_from_env() -> None:
@@ -84,8 +89,8 @@ def test_textin_cost_per_page_cny_rejects_non_numeric() -> None:
         load_config({"TEXTIN_COST_PER_PAGE_CNY": "not-a-number"})
 
 
-def test_require_textin_cost_per_page_cny_raises_when_missing() -> None:
-    cfg = load_config({})
+def test_require_textin_cost_per_page_cny_raises_when_explicitly_none() -> None:
+    cfg = dataclasses.replace(load_config({}), textin_cost_per_page_cny=None)
     with pytest.raises(ConfigError, match="TEXTIN_COST_PER_PAGE_CNY"):
         cfg.require_textin_cost_per_page_cny()
 

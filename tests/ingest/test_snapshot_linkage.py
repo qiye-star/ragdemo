@@ -362,3 +362,32 @@ def test_parse_cost_is_null_when_price_is_not_configured(
         "SELECT cost_cents FROM core.provider_snapshot WHERE snapshot_id = %s", (snapshot_id,)
     ).fetchone()
     assert row is not None and row[0] is None, "单价未知就记 NULL，不能记 0——0 会被当成免费"
+
+
+@pytest.mark.db
+def test_ten_page_parse_records_measured_default_price_without_rounding(
+    conn: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    """记账单价默认 0.1356 元/页（2026-10-13 实测）：10 页 = 135.6 分，不取整。"""
+    from dataclasses import replace
+
+    from ragdemo.config import load_config
+
+    payload = json.loads(Path("tests/fixtures/xparse/annual_report.json").read_text("utf-8"))
+    parser = TextInParser(
+        "http://proxy.invalid",
+        blob,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)),
+    )
+    prepared = prepare_documents(
+        [_path_b_doc(blob)], parser, blob, PageBudget(10_000), owner_user=None
+    )
+    prepared = [replace(prepared[0], billed_pages=10)]
+    price = load_config({}).require_textin_cost_per_page_cny()
+    (snapshot_id,) = record_parse_snapshots(
+        conn, prepared, ingest_run_id="r1", cost_per_page_cny=price
+    )
+    row = conn.execute(
+        "SELECT cost_cents FROM core.provider_snapshot WHERE snapshot_id = %s", (snapshot_id,)
+    ).fetchone()
+    assert row is not None and Decimal(row[0]) == Decimal("135.6")

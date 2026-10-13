@@ -192,3 +192,14 @@ def test_null_cost_snapshots_of_credit_or_free_providers_are_not_unknown_cost(
     conn.commit()
     status = month_to_date(conn, now=NOW, cap_cny=CAP)
     assert status.unknown_cost_calls == 0 and status.level is BudgetLevel.OK
+
+
+@pytest.mark.db
+def test_monthly_budget_uses_measured_textin_price(conn: psycopg.Connection) -> None:
+    """3 万页按实测 0.1356 元/页 = 4068 元（81.36%，已过告警线）；旧价 0.04 仅 1200 元。"""
+    from ragdemo.config import DEFAULT_TEXTIN_COST_PER_PAGE_CNY
+
+    _spend(conn, 30_000 * DEFAULT_TEXTIN_COST_PER_PAGE_CNY)
+    status = month_to_date(conn, now=NOW, cap_cny=CAP)
+    assert status.spent_cny == Decimal("4068")
+    assert status.level is BudgetLevel.WARN

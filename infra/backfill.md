@@ -39,7 +39,7 @@ uv run ragdemo db check        # schema 不变量 + 时点泄漏自检，必须"
 | Tushare MCP | `daily` 可用；`stock_basic` / `trade_cal` / `adj_factor` **限频 1 次/小时**；财务、汇率、公告接口**无权限** | 三层降级（MCP → REST → Wind K 线）；回填命令**关闭 Wind K 线层**（逐日调用耗额度）；被拒后该层冷却，其余实体快速失败 |
 | Wind MCP | **按调用耗额度**；自然语言接口，响应形态不稳定 | 每次响应先落快照；连续 3 次网关失败中止整批；`--from-snapshots` 用留存快照免费重解析 |
 | CFETS | **`pageSize` ≥ 100 返回 403**（与频率无关）；只在交易日有值 | 页大小固定 50，按半年分窗；令牌桶 30 次/分钟 |
-| TextIn | 0.04 元/页；月预算 `MONTHLY_BUDGET_CNY` | `--max-pages` 页数预算；只对试点实体下载并解析 |
+| TextIn | 0.1356 元/页（2026-10-13 实测，待发票复核；原 0.04 为低估）；月预算 `MONTHLY_BUDGET_CNY` | `--max-pages` 页数预算；只对试点实体下载并解析 |
 
 ## 3. Wind 额度：先估再跑
 

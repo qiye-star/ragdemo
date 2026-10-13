@@ -34,6 +34,13 @@ DEFAULT_DESCRIBE_PROMPT = "v3"
 _TRUTHY = frozenset({"1", "true", "TRUE", "True", "yes", "YES", "on", "ON"})
 
 
+# TextIn xParse 记账单价（人民币/页）。实测值，2026-10-13：34.84 元 / 257 页 = 0.1356；
+# holdout2 抽检 51 页实付约 6.92 元（同口径 0.1357）。此前记账按 0.04 元/页，低估约 3.4 倍。
+# 这是实测估算而非合同价：**须以供应商发票复核**后用环境变量 TEXTIN_COST_PER_PAGE_CNY 覆盖。
+# 存储在 provider_snapshot.cost_cents（numeric(10,4)，单位分）：页数 × 单价 × 100 精确到 0.0001 分，
+# 不做取整（13.56 分/页原样入账）。
+DEFAULT_TEXTIN_COST_PER_PAGE_CNY = Decimal("0.1356")
+
 # 起步期数据 + 模型每月预算上限（docs/00-overview.md §3 约束，docs/04-ingestion.md §5.3）。
 DEFAULT_MONTHLY_BUDGET_CNY = Decimal(5000)
 
@@ -77,9 +84,9 @@ class RagdemoConfig:
 
     def require_textin_cost_per_page_cny(self) -> Decimal:
         """只有真正要判定 C 档月度预算（`parse/router.py::check_monthly_
-        budget`）时才调用这个方法。C 档单价是商务合同条款，不该在代码里
-        编一个默认数字——没有配置就应该让调用方明确知道"预算判断做不了"，
-        而不是悄悄用一个瞎猜的价格算出一个看起来正常的数字。
+        budget`）时才调用这个方法。单价默认取
+        `DEFAULT_TEXTIN_COST_PER_PAGE_CNY`（实测值，待发票复核），环境变量覆盖；
+        只有显式构造 `textin_cost_per_page_cny=None` 的配置才会走到下面的报错。
         """
         if self.textin_cost_per_page_cny is None:
             raise ConfigError("环境变量 TEXTIN_COST_PER_PAGE_CNY 未设置（参见 .env.example）")
@@ -127,7 +134,7 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
                 f"环境变量 TEXTIN_COST_PER_PAGE_CNY 必须是数字，收到 {raw_cost_per_page!r}"
             ) from exc
     else:
-        textin_cost_per_page_cny = None
+        textin_cost_per_page_cny = DEFAULT_TEXTIN_COST_PER_PAGE_CNY
 
     siliconflow_base_url = source.get("SILICONFLOW_BASE_URL") or None
     siliconflow_embed_model = (
