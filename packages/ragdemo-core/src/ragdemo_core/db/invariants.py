@@ -143,12 +143,54 @@ def check_schema_invariants(conn: psycopg.Connection[tuple[object, ...]]) -> lis
             "      OR t.owner_tenant IS DISTINCT FROM b.owner_tenant"
             "      OR t.owner_user   IS DISTINCT FROM b.owner_user"
             "      OR t.can_show_raw IS DISTINCT FROM b.can_show_raw"
+            "      OR t.valid_from   IS DISTINCT FROM b.valid_from"
+            "      OR t.source       IS DISTINCT FROM b.source"
+            "      OR t.source_ref   IS DISTINCT FROM b.source_ref"
             "      OR (b.superseded_at IS NOT NULL AND t.superseded_at IS NULL)"
             "   LIMIT 1000) x"
         ).fetchone()
         if table_mismatch and table_mismatch[0]:
             violations.append(
                 f"doc_table 与所属 doc_block 的时点/归属列不一致: {table_mismatch[0]} 行"
+            )
+
+        # 反规范化列与自己的 grid JSON 也不得打架（行数/列数/表头/页集合/引擎/校验计数与结论）。
+        # 页集合：网格里有页码的格的页码并集；全部未定位时回落块页码（insert_table 的同一规则）。
+        grid_mismatch = conn.execute(
+            "SELECT count(*) FROM ("
+            "  SELECT t.table_id FROM core.doc_table t JOIN core.doc_block b USING (block_id)"
+            "  CROSS JOIN LATERAL ("
+            "    SELECT count(*) AS n,"
+            "           max((c->>'r')::int + (c->>'rs')::int) AS nr,"
+            "           max((c->>'c')::int + (c->>'cs')::int) AS nc,"
+            "           count(*) FILTER (WHERE c->>'k' = 'match') AS m,"
+            "           count(*) FILTER (WHERE c->>'k' = 'mismatch') AS mm,"
+            "           coalesce(array_agg(DISTINCT (c->>'p')::int ORDER BY (c->>'p')::int)"
+            "                    FILTER (WHERE c->>'p' IS NOT NULL), '{}'::int[]) AS pg"
+            "      FROM jsonb_array_elements("
+            "             CASE WHEN jsonb_typeof(t.grid->'cells') = 'array'"
+            "                  THEN t.grid->'cells' ELSE '[]'::jsonb END) c"
+            "  ) g"
+            "   WHERE g.n = 0"
+            "      OR t.n_rows IS DISTINCT FROM g.nr"
+            "      OR t.n_cols IS DISTINCT FROM g.nc"
+            "      OR t.header_rows IS DISTINCT FROM (t.grid->>'hr')::int"
+            "      OR t.header_cols IS DISTINCT FROM (t.grid->>'hc')::int"
+            "      OR t.pages IS DISTINCT FROM"
+            "         COALESCE(NULLIF(g.pg, '{}'::int[]),"
+            "                  CASE WHEN b.page IS NULL THEN NULL ELSE ARRAY[b.page] END)"
+            "      OR t.source_engine IS DISTINCT FROM t.grid->>'engine'"
+            "      OR t.provider_ref  IS DISTINCT FROM t.grid->>'ref'"
+            "      OR t.cells_match    <> g.m"
+            "      OR t.cells_mismatch <> g.mm"
+            "      OR (t.cells_mismatch > 0) <> (t.verify_verdict = 'text_layer_cells_mismatch')"
+            "      OR (t.verify_verdict = 'text_layer_cells_ok'"
+            "          AND (t.cells_numeric = 0 OR t.cells_match <> t.cells_numeric))"
+            "   LIMIT 1000) x"
+        ).fetchone()
+        if grid_mismatch and grid_mismatch[0]:
+            violations.append(
+                f"doc_table 的反规范化元数据与 grid JSON 不一致: {grid_mismatch[0]} 行"
             )
 
     # 不变量 6（新增）：core / asof 的对象不得由超级用户持有。

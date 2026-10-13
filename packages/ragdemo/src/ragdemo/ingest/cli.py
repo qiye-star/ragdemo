@@ -986,3 +986,80 @@ def docs_verify_announcements(
     click.echo(f"对账 {len(rows)} 家，不一致 {len(bad)} 家")
     if bad:
         raise SystemExit(1)
+
+
+@docs_group.command("backfill-tables")
+@click.option(
+    "--doc-id", "doc_ids", multiple=True, type=int, help="只回填这些文档（可重复）；不传则全部"
+)
+@click.option("--yes", is_flag=True, default=False, help="写库；不传则只 dry run（算指标、不写）")
+@click.option(
+    "--reverify",
+    is_flag=True,
+    default=False,
+    help="同版本下也重算并与库里比对，有差异就 supersede 重写（补校验 not_checked 网格）",
+)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--json-out",
+    "json_out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="把逐文档指标与不一致单元格样本写成 JSON（验收记录用）",
+)
+def docs_backfill_tables(
+    doc_ids: tuple[int, ...],
+    yes: bool,
+    reverify: bool,
+    blob_root_opt: Path | None,
+    json_out: Path | None,
+) -> None:
+    """用缓存的 TextIn JSON 与本地 PDF 为已解析文档补建表格单元格网格（零外部调用）。
+
+    只处理现行版 TextIn 文档；被取代的旧版不回填。整份文档一个事务，对不上就整份不写。
+    不调 TextIn / LLM / 嵌入。写库后跑 `check_schema_invariants`，有违规以非零码退出。
+    """
+    import json as _json
+    from dataclasses import asdict
+
+    from ragdemo.tables.backfill import run_backfill
+    from ragdemo_core.db.invariants import check_schema_invariants
+
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    with psycopg.connect(_dsn()) as conn:
+        report = run_backfill(
+            conn,
+            blob,
+            ingest_run_id=f"cli:docs-backfill-tables:{uuid.uuid4().hex[:8]}",
+            write=yes,
+            doc_ids=list(doc_ids) or None,
+            reverify=reverify,
+        )
+        violations = check_schema_invariants(conn) if yes else []
+    mode = "写库" if yes else "dry run"
+    totals = report.totals()
+    click.echo(f"[{mode}] " + "  ".join(f"{k}={v}" for k, v in totals.items()))
+    for doc_id, why in sorted(report.failed.items()):
+        click.echo(f"  失败 doc {doc_id}: {why}")
+    for v in violations:
+        click.echo(f"  不变量违规: {v}")
+    if json_out is not None:
+        json_out.write_text(
+            _json.dumps(
+                {
+                    "mode": mode,
+                    "totals": totals,
+                    "failed": {str(k): v for k, v in report.failed.items()},
+                    "docs": [asdict(d) for d in report.docs],
+                    "invariants": violations,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    if not yes:
+        click.echo("[dry run] 未写库，--yes 才会写入")
+    if report.failed or violations:
+        raise SystemExit(1)

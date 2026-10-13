@@ -17,12 +17,15 @@ summarize_grid 不能重新校验，信任格上已存的 check（但 no_numbers
 
 from __future__ import annotations
 
+import io
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Final, Literal
 
-from ragdemo.parse.local.layout import PageLayout, Word
+import pdfplumber
+
+from ragdemo.parse.local.layout import PageLayout, Word, _word_font, _word_is_horizontal
 from ragdemo.parse.local.number_closure import fold_text, numbers_in
 from ragdemo.parse.tiered.types import Tier
 from ragdemo.tables.grid import BBox, CellCheck, GridCell, TableGrid
@@ -56,6 +59,41 @@ def page_words_from_layouts(layouts: Sequence[PageLayout]) -> dict[int, PageWord
         lay.page: PageWords(lay.page, lay.width, lay.height, tuple(lay.words), lay.rotation)
         for lay in layouts
     }
+
+
+def extract_page_words(pdf_bytes: bytes, pages: Collection[int] | None) -> dict[int, PageWords]:
+    """只取所需页的词坐标（页码从 1 起；`None` = 全部）。越界页忽略。
+
+    与 `page_words_from_layouts(extract_pages(pdf))` 对同一页逐字相同，但不解析其余页，
+    也不取文字层全文与图形对象——回填一份几百页的年报时只需要表格所在的那几页。
+    """
+    try:
+        pdf = pdfplumber.open(io.BytesIO(pdf_bytes))
+    except Exception as exc:
+        raise ValueError(f"不是有效的 PDF：{exc}") from exc
+    out: dict[int, PageWords] = {}
+    with pdf:
+        wanted = sorted(set(range(1, len(pdf.pages) + 1)) if pages is None else set(pages))
+        for number in wanted:
+            if not 1 <= number <= len(pdf.pages):
+                continue
+            p = pdf.pages[number - 1]
+            words = tuple(
+                Word(
+                    str(w["text"]),
+                    float(w["x0"]),
+                    float(w["x1"]),
+                    float(w["top"]),
+                    float(w["bottom"]),
+                    _word_is_horizontal(w),
+                    *_word_font(w.get("chars", [])),
+                )
+                for w in p.extract_words(keep_blank_chars=False, return_chars=True)
+            )
+            out[number] = PageWords(
+                number, float(p.width), float(p.height), words, int(p.rotation or 0)
+            )
+    return out
 
 
 def words_in_bbox(pw: PageWords, bbox: BBox, *, pad: float = BBOX_PAD_PT) -> list[Word]:

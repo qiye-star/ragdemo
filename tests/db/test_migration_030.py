@@ -37,6 +37,11 @@ def conn(temp_db: str) -> Iterator[psycopg.Connection]:
         yield c
 
 
+GRID_JSON = (
+    '{"v":1,"engine":"textin:t","ref":null,"hr":0,"hc":0,"cells":'
+    '[{"r":0,"c":0,"rs":1,"cs":1,"t":"7","p":3,"b":null,"h":false,"k":"not_checked"}]}'
+)
+
 _INSERT_COLS = (
     "INSERT INTO core.doc_table (block_id, doc_id, grid, grid_version, n_rows, n_cols,"
     " header_rows, header_cols, pages, unit_source, statement_kind, source_engine,"
@@ -51,11 +56,11 @@ def _insert(
 ) -> None:
     c.execute(
         _INSERT_COLS
-        + " VALUES (10, 1, '{\"v\":1}', 'tablegrid:v1', 1, 1, 0, 0, '{3}', 'none', 'other',"
+        + " VALUES (10, 1, %s::jsonb, 'tablegrid:v1', 1, 1, 0, 0, '{3}', 'none', 'other',"
         " 'textin:t',"
-        " 'cellverify:v2', %s, 0, 0, 0, 0, 'quarterly', '2025-10-28 18:00+08', true,"
+        " 'cellverify:v2', %s, 1, 0, 0, 1, 'quarterly', '2025-10-28 18:00+08', true,"
         " '2025-10-28', %s, 'mock', 'r1')",
-        (verdict, known_at),
+        (GRID_JSON, verdict, known_at),
     )
 
 
@@ -125,3 +130,41 @@ def test_verdict_check_accepts_partial_and_rejects_unknown(conn: psycopg.Connect
 def test_row_units_column_exists_and_defaults_empty(conn: psycopg.Connection) -> None:
     _insert(conn)
     assert conn.execute("SELECT row_units, column_units FROM core.doc_table").fetchone() == ({}, {})
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "n_rows = 2",
+        "n_cols = 4",
+        "header_rows = 1",
+        "header_cols = 1",
+        "pages = '{4}'",
+        "cells_match = 1, cells_unverifiable = 0",
+        "cells_mismatch = 1, cells_unverifiable = 0",
+        "verify_verdict = 'text_layer_cells_mismatch'",
+        "verify_verdict = 'text_layer_cells_ok'",
+        "valid_from = '2025-10-29'",
+        "source = 'other'",
+        "source_engine = 'textin:x'",
+        "provider_ref = 'x'",
+    ],
+)
+def test_denormalised_metadata_drift_from_grid_json_is_a_violation(
+    conn: psycopg.Connection, assignment: str
+) -> None:
+    _insert(conn)
+    conn.commit()
+    assert check_schema_invariants(conn) == []
+    conn.execute(f"UPDATE core.doc_table SET {assignment}")
+    conn.commit()
+    assert any("doc_table" in v for v in check_schema_invariants(conn)), assignment
+
+
+@pytest.mark.db
+def test_grid_without_cells_is_a_violation(conn: psycopg.Connection) -> None:
+    _insert(conn)
+    conn.execute("UPDATE core.doc_table SET grid = '{\"v\":1}'::jsonb")
+    conn.commit()
+    assert any("doc_table" in v for v in check_schema_invariants(conn))
