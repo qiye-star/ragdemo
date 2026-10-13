@@ -81,6 +81,14 @@ def test_entities_and_tbody_thead_supported() -> None:
         "<table><td>a</td></table>",
         # colspan lands on a slot already taken by an earlier rowspan
         '<table><tr><td>x</td><td rowspan="2">y</td></tr><tr><td colspan="2">z</td></tr></table>',
+        # inline tags / comments would be flattened with zero width into wrong numbers
+        "<table><tr><td><p>2024</p><p>2023</p></td></tr></table>",
+        "<table><tr><td><div>1,000</div><div>900</div></td></tr></table>",
+        "<table><tr><td>1<sup>2</sup></td></tr></table>",
+        "<table><tr><td><span>1</span><span>000</span></td></tr></table>",
+        "<table><tr><td>1<!-- x -->000</td></tr></table>",
+        # tfoot before tbody: source order differs from rendered order
+        "<table><tfoot><tr><td>sum 9</td></tr></tfoot><tbody><tr><td>a</td></tr></tbody></table>",
         "<p>no table</p>",
         "",
         "<table><tr><td>a</td></tr></table><table><tr><td>b</td></tr></table>",
@@ -108,3 +116,9 @@ def test_negative_span_is_one_zero_span_refused() -> None:
 
 def test_invalid_page_returns_none() -> None:
     assert grid_from_html("<table><tr><td>a</td></tr></table>", page=0, engine="e") is None
+
+
+def test_br_variants_are_single_spaces() -> None:
+    h = "<table><tr><td>a<br>b<br/>c<br />d</td></tr></table>"
+    g = grid_from_html(h, page=1, engine="e")
+    assert g is not None and g.cells[0].text == "a b c d"

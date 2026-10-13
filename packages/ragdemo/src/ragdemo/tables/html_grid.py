@@ -5,6 +5,8 @@
 （留洞）、跨度越界或冲突、rowspan/colspan 为 0、过大的跨度、单元格里出现会丢内容的标签
 （img 等）、未闭合的标签、没有行或有空行。
 
+单元格内只接受 <br>，其余标签/注释拒绝；tfoot 拒绝。
+
 语义与 `parse.textin.table_markdown` 的展开规则一致：逐行从左找第一个未被占用的列放置，
 跨度占位。跨度属性不是纯 ASCII 数字（含负数、空串）按 1；"0" 在 HTML 里表示"延伸到分组末尾"，
 与我们的语义不同，拒绝。`<br>` 视为空格；文本 `" ".join(split())`；单元格 `bbox=None`、`page=page`。
@@ -19,10 +21,7 @@ from ragdemo.tables.grid import GridCell, GridError, TableGrid
 from ragdemo.tables.headers import infer_headers
 
 MAX_SPAN: Final = 200
-_INLINE: Final = frozenset(
-    {"b", "i", "u", "em", "strong", "span", "sup", "sub", "p", "div", "font"}
-)
-_SECTIONS: Final = frozenset({"thead", "tbody", "tfoot"})
+_SECTIONS: Final = frozenset({"thead", "tbody"})  # tfoot 拒绝：源顺序与渲染顺序不同
 
 
 class _Refuse(Exception):
@@ -76,8 +75,6 @@ class _Collector(HTMLParser):
             if self.cell is None:
                 raise _Refuse("br outside cell")
             self.cell.append(" ")
-        elif tag in _INLINE and self.cell is not None:
-            pass
         else:
             raise _Refuse(f"unsupported <{tag}>")
 
@@ -107,8 +104,6 @@ class _Collector(HTMLParser):
                 raise _Refuse("unbalanced td")
             self.row.append((" ".join("".join(self.cell).split()), *self.cell_span))
             self.cell = None
-        elif tag in _INLINE and self.cell is not None:
-            pass
         else:
             raise _Refuse(f"unsupported </{tag}>")
 
@@ -119,7 +114,8 @@ class _Collector(HTMLParser):
             raise _Refuse("text outside cell")
 
     def handle_comment(self, data: str) -> None:
-        pass  # 注释不含单元格内容
+        if self.cell is not None:  # 单元格内的注释会把数字零宽粘连
+            raise _Refuse("comment inside cell")
 
     def handle_decl(self, decl: str) -> None:
         raise _Refuse("declaration")
@@ -153,7 +149,13 @@ def _place(rows: list[list[tuple[str, int, int]]], page: int | None) -> list[Gri
 def grid_from_html(
     table_html: str, *, page: int | None, engine: str, provider_ref: str | None = None
 ) -> TableGrid | None:
-    """HTML → 已推断表头的网格；任何无法忠实转换的情形返回 None。"""
+    """HTML → 已推断表头的网格；任何无法忠实转换的情形返回 None。
+
+    调用方须先跑 `parse.tiered.markup_normalize.normalize_markup`，并只传 `<table>…</table>`
+    这一段（表外的正文会被拒绝，而不是吞掉）。单元格内只接受 `<br>`（视为空格）；任何其他
+    标签或注释一律拒绝，因为零宽展平会把相邻数字粘成另一个数（`<p>2024</p><p>2023</p>`）。
+    `tfoot` 拒绝：浏览器把它渲染在末尾，源顺序不同。
+    """
     try:
         parser = _Collector()
         parser.feed(table_html)

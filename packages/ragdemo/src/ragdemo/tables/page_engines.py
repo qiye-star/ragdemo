@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any
 
 from ragdemo.parse.tiered.types import PageRoute, Tier, route_from_dict
+from ragdemo.parse.tiered.verify import Verdict
 from ragdemo_core.blob import BlobNotFound, BlobStore
 
 
@@ -39,7 +40,18 @@ def routes_from_sidecar(blob: BlobStore, json_ref: str) -> dict[int, PageRoute]:
     return {r.page: r for r in routes if r.page not in dup}
 
 
-def table_engine(route: PageRoute | None, fallback: str) -> tuple[str, Tier | None]:
-    if route is None:
-        return fallback, None
-    return f"{route.tier}:{route.engine}", route.tier
+def table_engine(route: PageRoute | None, fallback: str) -> str:
+    """只返回引擎标签；层级不在这里给（见 `tier_for_summary`）。"""
+    return fallback if route is None else f"{route.tier}:{route.engine}"
+
+
+def tier_for_summary(route: PageRoute | None, verdict: Verdict | None) -> Tier | None:
+    """传给 `summarize_grid(..., tier=)` 的层级。旁路 JSON 的字符串本身什么都不授予。
+
+    L2：必须持有 `verify_dual` 的 Verdict 且 ok；L1：必须持有页级文字层校验
+    （`verify_against_text_layer`）的 Verdict 且 ok。无路由、无 verdict、verdict 不 ok、
+    或层级是 L0/L3（L3 的网格来自 TextIn cells，不走本路径）→ None。
+    """
+    if route is None or verdict is None or not verdict.ok:
+        return None
+    return route.tier if route.tier in ("L1", "L2") else None
