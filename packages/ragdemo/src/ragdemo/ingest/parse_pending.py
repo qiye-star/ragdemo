@@ -144,12 +144,14 @@ def run_parse_pending(
     budget: PageBudget,
     ingest_run_id: str,
     dry_run: bool,
+    doc_ids: frozenset[int] | None = None,
 ) -> ParsePendingReport:
     entity_id = _resolve_entity_id(conn, entity_ref) if entity_ref is not None else None
     candidates = [
         row
         for row in _select_pending(conn, entity_id)
         if tier_for_document(row.source, row.doc_type, row.title) in tiers
+        and (doc_ids is None or row.doc_id in doc_ids)
     ]
 
     report = ParsePendingReport(selected=len(candidates))

@@ -279,3 +279,40 @@ def test_edgar_document_without_blocks_is_picked_up(
         "SELECT superseded_at FROM core.document WHERE doc_id = %s", (doc_id,)
     ).fetchone()
     assert superseded_at != (None,)
+
+
+@pytest.mark.db
+def test_doc_ids_restrict_the_selection(conn: psycopg.Connection, tmp_path: Path) -> None:
+    blob = LocalBlobStore(tmp_path)
+    keep = _insert_pending_document(
+        conn,
+        blob,
+        entity_id="CN.688041",
+        source="cninfo",
+        doc_type="announcement",
+        title="海光信息:关于召开股东会的通知",
+        raw_bytes=_pdf_bytes(1, marker="5"),
+        source_ref="5",
+    )
+    _insert_pending_document(
+        conn,
+        blob,
+        entity_id="CN.688041",
+        source="cninfo",
+        doc_type="announcement",
+        title="海光信息:关于董事会决议的公告",
+        raw_bytes=_pdf_bytes(1, marker="6"),
+        source_ref="6",
+    )
+    report = run_parse_pending(
+        conn,
+        parser=MockDocumentParser(),
+        blob=blob,
+        entity_ref=None,
+        tiers=frozenset({ParseTier.NONE}),
+        budget=PageBudget(remaining=100),
+        ingest_run_id="t",
+        dry_run=True,
+        doc_ids=frozenset({keep}),
+    )
+    assert report.selected == 1

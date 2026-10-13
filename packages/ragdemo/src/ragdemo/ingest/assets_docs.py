@@ -22,6 +22,7 @@ Dagster 会把它们当成需要上游资产产出的「输入」，直接调用
 Python 3.11 原生支持 `list[X]` / `X | None`，去掉这行不影响其余注解写法。
 """
 
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -41,6 +42,7 @@ from ragdemo.ingest.assets import DAILY
 from ragdemo.ingest.documents import DocumentWriter, ParseArtifacts
 from ragdemo.ingest.partitions import partition_window
 from ragdemo.ingest.snapshot import record_blob_snapshot, record_snapshot
+from ragdemo.ops.alerts import raise_alert
 from ragdemo.parse.chunker import Chunk, chunk_document
 from ragdemo.parse.confidence import table_looks_closed
 from ragdemo.parse.config import ChunkConfig
@@ -55,6 +57,7 @@ from ragdemo.parse.router import (
     should_route_to_tier_c,
 )
 from ragdemo.parse.textin import (
+    DocTypeAwareParser,
     DocumentParser,
     PageBudget,
     ParsePermanent,
@@ -63,11 +66,16 @@ from ragdemo.parse.textin import (
     PrivateDocumentEgressBlocked,
     TextInParser,
 )
+from ragdemo.parse.tiered.ledger import l3_no_output_alerts, record_parse_ledger
+from ragdemo.parse.tiered.records import ParseLedger
+from ragdemo.parse.tiered.types import TextInCall
 from ragdemo.parse.tree import build_tree
 from ragdemo.parse.validate import validate_chunks
 from ragdemo.quality.budget import ensure_budget
 from ragdemo.quality.metrics import MetricResult, record_metric
 from ragdemo_core.blob import BlobNotFound, BlobStore
+
+_LOG = logging.getLogger(__name__)
 
 # block_embeddings 每次 run 的上限。不传 limit 的话 embed_pending_blocks 会
 # 把（本分区收窄后的）待办队列一次性吃进内存、一次性把它们全部送去调嵌入
@@ -95,6 +103,9 @@ class PreparedDocument:
     # 这一次真的向供应商发起解析、被计费的页数；缓存命中与路径 A 都是 0。
     # record_parse_snapshots 靠它判断"有没有一次需要留底的供应商调用"。
     billed_pages: int = 0
+    # 分页路由（T10）：每次 TextIn 调用（逐次留快照）与逐页台账；旧路径为空。
+    textin_calls: tuple[TextInCall, ...] = ()
+    ledger: ParseLedger | None = None
 
 
 _MISSING_DESC_RE = re.compile(r"^块 (\d+): 表格块缺少 content_desc$")
@@ -230,7 +241,12 @@ def prepare_documents(
             continue
 
         try:
-            result = parser.parse(raw_bytes, owner_user=owner_user)
+            if isinstance(parser, DocTypeAwareParser):
+                result = parser.parse_for(
+                    raw_bytes, doc_type=doc.doc_type, title=doc.title, owner_user=owner_user
+                )
+            else:
+                result = parser.parse(raw_bytes, owner_user=owner_user)
         except ParsePermanent as exc:
             # 记号留在 parse_engine 里，意思是「别再试了」。文档行照写，
             # 只是没有块——否则下次分区重跑会再拉一遍、再失败一遍。
@@ -266,7 +282,10 @@ def prepare_documents(
         except PrivateDocumentEgressBlocked:
             raise  # 闸门不能被静默吞掉
 
-        billed = 0 if result.from_cache else result.page_count
+        if result.billable_pages is not None:
+            billed = result.billable_pages
+        else:
+            billed = 0 if result.from_cache else result.page_count
         if billed:
             budget.charge(billed)
         prepared.append(
@@ -280,6 +299,8 @@ def prepare_documents(
                 ),
                 owner_user=owner_user,
                 billed_pages=billed,
+                textin_calls=result.textin_calls,
+                ledger=result.ledger,
             )
         )
     return prepared
@@ -298,6 +319,8 @@ def record_parse_snapshots(
 ) -> list[int]:
     """给每一次真实的供应商解析调用留一条 provider_snapshot（CLAUDE.md §1.5）。
 
+    分页文档（`textin_calls` 非空）每次计费的 TextIn 调用各一条快照，并写逐页台账与（有则）告警。
+
     原始响应（xParse JSON）已经由 TextInParser 落在 blob 里（`json_ref`），
     快照只记引用。缓存命中、路径 A、解析失败都没有产生新的供应商调用，不留快照。
     `cost_cents` = 计费页数 × 单价；单价未配置时记 NULL 而不是 0。
@@ -306,29 +329,86 @@ def record_parse_snapshots(
     ids: list[int] = []
     for item in prepared:
         artifacts = item.artifacts
-        if item.billed_pages <= 0 or artifacts is None or artifacts.json_ref is None:
-            continue
-        cost = (
-            None
-            if cost_per_page_cny is None
-            else Decimal(item.billed_pages) * cost_per_page_cny * 100
-        )
-        ids.append(
-            record_blob_snapshot(
-                conn,
-                provider=TEXTIN_PROVIDER,
-                endpoint=TEXTIN_ENDPOINT,
-                params={
-                    "engine": artifacts.engine,
-                    "content_hash": item.doc.content_hash,
-                    "provider_doc_id": item.doc.provider_doc_id,
-                    "billed_pages": item.billed_pages,
-                },
-                response_ref=artifacts.json_ref,
-                ingest_run_id=ingest_run_id,
-                cost_cents=cost,
+        if item.textin_calls:
+            for call in item.textin_calls:
+                if call.billed_pages <= 0 or call.json_ref is None:
+                    continue
+                cost = (
+                    None
+                    if cost_per_page_cny is None
+                    else Decimal(call.billed_pages) * cost_per_page_cny * 100
+                )
+                ids.append(
+                    record_blob_snapshot(
+                        conn,
+                        provider=TEXTIN_PROVIDER,
+                        endpoint=TEXTIN_ENDPOINT,
+                        params={
+                            "engine": call.engine,
+                            "document_engine": artifacts.engine if artifacts is not None else None,
+                            "content_hash": item.doc.content_hash,
+                            "provider_doc_id": item.doc.provider_doc_id,
+                            "billed_pages": call.billed_pages,
+                            "pages": list(call.pages),
+                        },
+                        response_ref=call.json_ref,
+                        ingest_run_id=ingest_run_id,
+                        cost_cents=cost,
+                    )
+                )
+        elif item.billed_pages > 0 and artifacts is not None and artifacts.json_ref is not None:
+            # 旧路径（整份一次调用一条快照），与改动前逐字相同
+            cost = (
+                None
+                if cost_per_page_cny is None
+                else Decimal(item.billed_pages) * cost_per_page_cny * 100
             )
-        )
+            ids.append(
+                record_blob_snapshot(
+                    conn,
+                    provider=TEXTIN_PROVIDER,
+                    endpoint=TEXTIN_ENDPOINT,
+                    params={
+                        "engine": artifacts.engine,
+                        "content_hash": item.doc.content_hash,
+                        "provider_doc_id": item.doc.provider_doc_id,
+                        "billed_pages": item.billed_pages,
+                    },
+                    response_ref=artifacts.json_ref,
+                    ingest_run_id=ingest_run_id,
+                    cost_cents=cost,
+                )
+            )
+        if item.ledger is not None:
+            record_parse_ledger(
+                conn,
+                ledger=item.ledger,
+                content_hash=item.doc.content_hash,
+                doc_type=item.doc.doc_type,
+                ingest_run_id=ingest_run_id,
+                routed_at=datetime.now(UTC),
+                textin_per_page=cost_per_page_cny,
+            )
+            conn.commit()
+            d = item.ledger.doc
+            _LOG.info(
+                "parse ledger recorded",
+                extra={
+                    "run_id": ingest_run_id,
+                    "as_of": None,
+                    "entity_id": item.doc.entity_ref,
+                    "routes_ref": item.ledger.routes_ref,
+                    "state": d.state,
+                    "l0_pages": d.l0_pages,
+                    "l3_pages": d.l3_pages,
+                    "skipped_pages": d.skipped_pages,
+                    "billed_pages": d.billed_pages,
+                    "fallback": d.fallback_reason,
+                },
+            )
+            # L3 页没有 TextIn JSON / 输出为空：数字无处可溯源，必须有人看
+            for alert in l3_no_output_alerts(item.ledger):
+                raise_alert(conn, alert)
     return ids
 
 

@@ -18,6 +18,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Final
+
+from ragdemo.parse.tiered.types import SkipRuleId
+from ragdemo.parse.tiered.types import parse_skip_rules as _parse_skip_rules
 
 DEFAULT_BLOB_ROOT = "data/blob"
 DEFAULT_MAX_PAGES_PER_RUN = 500
@@ -45,6 +49,13 @@ DEFAULT_TEXTIN_COST_PER_PAGE_CNY = Decimal("0.1356")
 DEFAULT_MONTHLY_BUDGET_CNY = Decimal(5000)
 
 
+_ROUTABLE_DOC_TYPES: Final = frozenset({"announcement", "research_report"})
+_WHOLE_DOC_TYPES: Final = frozenset({"annual_report", "quarterly"})
+# 裁决（2026-10-13）：L0 v2 未通过 G9（阅读顺序人工抽查），不启用。开关保留为"永远只能是假"，
+# 配置加载与 with_tiered_routing 都拒绝真值；重开要新增 ADR / 重开记录，不是改这个常量。
+L0_REFUSED_MESSAGE: Final = "L0 v2 not validated (G9)"
+
+
 class ConfigError(RuntimeError):
     """必填的环境配置缺失或格式不合法。"""
 
@@ -64,8 +75,28 @@ class RagdemoConfig:
     model_base_url: str | None = None
     model_name: str = DEFAULT_MODEL_NAME
     describe_prompt: str = DEFAULT_DESCRIBE_PROMPT
+    # L0 + TextIn 分页接入（docs/10.12-plan/2026-10-13-L0加TextIn分页接入与减页计划.md）。默认全关。
+    # parse_tier_l0_enabled 只能为 False（见 L0_REFUSED_MESSAGE）；减页规则是 shadow_only，
+    # 只有显式列在 parse_skip_rules 里的才会真的跳页。
+    parse_tiered_enabled: bool = False
+    parse_tiered_doc_types: frozenset[str] = frozenset()
+    parse_tier_l0_enabled: bool = False
+    parse_skip_rules: frozenset[SkipRuleId] = frozenset()
 
     def validate(self) -> None:
+        if self.parse_tier_l0_enabled:
+            raise ConfigError(f"PARSE_TIER_L0_ENABLED=true 被拒绝：{L0_REFUSED_MESSAGE}")
+        whole = sorted(self.parse_tiered_doc_types & _WHOLE_DOC_TYPES)
+        if whole:
+            raise ConfigError(
+                f"{whole} 永远整份走 TextIn（ADR-0008），不能放进 PARSE_TIERED_DOC_TYPES"
+            )
+        unknown = sorted(self.parse_tiered_doc_types - _ROUTABLE_DOC_TYPES)
+        if unknown:
+            raise ConfigError(
+                "环境变量 PARSE_TIERED_DOC_TYPES 只允许 "
+                f"{sorted(_ROUTABLE_DOC_TYPES)}，收到 {unknown}"
+            )
         if self.textin_max_pages_per_run <= 0:
             raise ConfigError(
                 "环境变量 TEXTIN_MAX_PAGES_PER_RUN 必须是正整数，"
@@ -154,6 +185,12 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
     if monthly_budget_cny <= 0:
         raise ConfigError(f"环境变量 RAGDEMO_MONTHLY_BUDGET_CNY 必须为正数，收到 {raw_budget!r}")
 
+    raw_types = source.get("PARSE_TIERED_DOC_TYPES") or ""
+    try:
+        skip_rules = _parse_skip_rules(source.get("PARSE_SKIP_RULES") or "")
+    except ValueError as exc:
+        raise ConfigError(f"环境变量 PARSE_SKIP_RULES：{exc}") from exc
+
     cfg = RagdemoConfig(
         blob_root=blob_root,
         textin_base_url=textin_base_url,
@@ -167,6 +204,10 @@ def load_config(env: Mapping[str, str] | None = None) -> RagdemoConfig:
         model_base_url=source.get("MODEL_BASE_URL") or None,
         model_name=source.get("MODEL_NAME") or DEFAULT_MODEL_NAME,
         describe_prompt=source.get("DESCRIBE_PROMPT_VERSION") or DEFAULT_DESCRIBE_PROMPT,
+        parse_tiered_enabled=(source.get("PARSE_TIERED_ENABLED") or "").strip() in _TRUTHY,
+        parse_tiered_doc_types=frozenset(s.strip() for s in raw_types.split(",") if s.strip()),
+        parse_tier_l0_enabled=(source.get("PARSE_TIER_L0_ENABLED") or "").strip() in _TRUTHY,
+        parse_skip_rules=skip_rules,
     )
     cfg.validate()
     return cfg

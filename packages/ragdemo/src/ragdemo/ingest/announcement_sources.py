@@ -31,6 +31,7 @@ from ragdemo.ingest.edgar_index import EdgarLayerDeps
 from ragdemo.ingest.hkexnews_docs import HkexnewsLayerDeps
 from ragdemo.parse.describer_factory import build_describer
 from ragdemo.parse.textin import DocumentParser, MockDocumentParser, TextInParser
+from ragdemo.parse.tiered.factory import with_tiered_routing
 from ragdemo_core.blob import LocalBlobStore
 
 CNINFO_USER_AGENT_ENV = "RAGDEMO_CNINFO_USER_AGENT"
@@ -50,10 +51,15 @@ def _configured(env: str) -> bool:
 def _parser_for(cfg: RagdemoConfig) -> DocumentParser:
     if cfg.textin_base_url is None:
         return MockDocumentParser()
-    return TextInParser(
-        cfg.require_textin_base_url(),
-        LocalBlobStore(cfg.blob_root),
-        allow_private=cfg.textin_allow_private,
+    blob = LocalBlobStore(cfg.blob_root)
+    return with_tiered_routing(
+        TextInParser(
+            cfg.require_textin_base_url(),
+            blob,
+            allow_private=cfg.textin_allow_private,
+        ),
+        blob,
+        cfg,
     )
 
 

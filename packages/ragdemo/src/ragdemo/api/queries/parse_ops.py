@@ -47,10 +47,11 @@ TIER_RULE = (
     "A = parse_engine 前缀 vendor（供应商结构化接口，不走 xParse）；"
     "B = 前缀 textin 且 supersedes_doc_id IS NULL；"
     "C = 前缀 textin 且 supersedes_doc_id IS NOT NULL（重解析新行）；"
+    "T = 前缀 tiered（分页路由，迁移 033/034 之后的新文档；L0 未启用时实为 TextIn 连续段）；"
     "other = 其余（NULL 或未知前缀）"
 )
 
-_TIER_ORDER = ("A", "B", "C", "failed", "other")
+_TIER_ORDER = ("A", "B", "C", "T", "failed", "other")
 
 
 def classify_tier(
@@ -63,6 +64,8 @@ def classify_tier(
         return "other"
     if parse_engine.startswith("vendor:"):
         return "A"
+    if parse_engine.startswith("tiered:"):
+        return "T"
     if parse_engine.startswith("textin:"):
         return "C" if supersedes_doc_id is not None else "B"
     return "other"

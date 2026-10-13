@@ -82,6 +82,7 @@ from ragdemo.parse.textin import (
     PageBudget,
     TextInParser,
 )
+from ragdemo.parse.tiered.factory import with_tiered_routing
 from ragdemo.quality.budget_asset import monthly_cost
 from ragdemo.quality.checks import ALL_CHECKS
 from ragdemo.sources.backlog import Backlog
@@ -162,10 +163,15 @@ def parser_resource(_context: InitResourceContext) -> DocumentParser:
     cfg = load_config()
     if cfg.textin_base_url is None:
         return MockDocumentParser()
-    return TextInParser(
-        cfg.require_textin_base_url(),
-        LocalBlobStore(cfg.blob_root),
-        allow_private=cfg.textin_allow_private,
+    blob = LocalBlobStore(cfg.blob_root)
+    return with_tiered_routing(
+        TextInParser(
+            cfg.require_textin_base_url(),
+            blob,
+            allow_private=cfg.textin_allow_private,
+        ),
+        blob,
+        cfg,
     )
 
 

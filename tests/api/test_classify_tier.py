@@ -54,3 +54,9 @@ def test_unknown_prefix_is_other() -> None:
     assert (
         classify_tier(parse_engine="mineru:1.0", supersedes_doc_id=None, block_count=5) == "other"
     )
+
+
+def test_tiered_documents_get_their_own_tier() -> None:
+    engine = "tiered:v1+abcd"
+    assert classify_tier(parse_engine=engine, supersedes_doc_id=None, block_count=3) == "T"
+    assert classify_tier(parse_engine=engine, supersedes_doc_id=None, block_count=0) == "failed"

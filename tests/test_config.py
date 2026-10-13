@@ -156,3 +156,52 @@ def test_monthly_budget_reads_from_env() -> None:
 def test_monthly_budget_rejects_non_positive_or_non_numeric(value: str) -> None:
     with pytest.raises(ConfigError, match="RAGDEMO_MONTHLY_BUDGET_CNY"):
         load_config({"RAGDEMO_MONTHLY_BUDGET_CNY": value})
+
+
+def test_tiered_parsing_is_off_by_default() -> None:
+    cfg = load_config({})
+    assert (
+        cfg.parse_tiered_enabled,
+        cfg.parse_tiered_doc_types,
+        cfg.parse_tier_l0_enabled,
+        cfg.parse_skip_rules,
+    ) == (False, frozenset(), False, frozenset())
+
+
+def test_tiered_switches_read_from_env() -> None:
+    cfg = load_config(
+        {
+            "PARSE_TIERED_ENABLED": "true",
+            "PARSE_TIERED_DOC_TYPES": "research_report, announcement",
+            "PARSE_SKIP_RULES": "blank_page",
+        }
+    )
+    assert cfg.parse_tiered_enabled and not cfg.parse_tier_l0_enabled
+    assert cfg.parse_tiered_doc_types == frozenset({"research_report", "announcement"})
+    assert cfg.parse_skip_rules == frozenset({"blank_page"})
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "TRUE"])
+@pytest.mark.parametrize("master", ["", "true"])
+def test_l0_is_hard_refused_until_validated(value: str, master: str) -> None:
+    """裁决（2026-10-13）：L0 v2 未通过 G9，PARSE_TIER_L0_ENABLED 为真一律在配置加载时拒绝。"""
+    with pytest.raises(ConfigError, match=r"L0 v2 not validated \(G9\)"):
+        load_config({"PARSE_TIER_L0_ENABLED": value, "PARSE_TIERED_ENABLED": master})
+
+
+@pytest.mark.parametrize("value", ["", "false", "0"])
+def test_l0_switch_off_spellings_are_accepted(value: str) -> None:
+    assert load_config({"PARSE_TIER_L0_ENABLED": value}).parse_tier_l0_enabled is False
+
+
+@pytest.mark.parametrize("value", ["annual_report", "quarterly", "announcement,annual_report"])
+def test_periodic_reports_can_never_be_routed(value: str) -> None:
+    with pytest.raises(ConfigError, match="整份走 TextIn"):
+        load_config({"PARSE_TIERED_DOC_TYPES": value})
+
+
+def test_unknown_doc_types_and_skip_rules_are_rejected() -> None:
+    with pytest.raises(ConfigError, match="PARSE_TIERED_DOC_TYPES"):
+        load_config({"PARSE_TIERED_DOC_TYPES": "8-K"})
+    with pytest.raises(ConfigError, match="PARSE_SKIP_RULES"):
+        load_config({"PARSE_SKIP_RULES": "cover_page"})

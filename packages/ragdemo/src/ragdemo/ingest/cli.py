@@ -86,6 +86,7 @@ from ragdemo.parse.tiered.cost_model import (
     plan_budget,
     unverified_rate,
 )
+from ragdemo.parse.tiered.factory import with_tiered_routing
 from ragdemo.parse.tiered.ledger import format_tier_summary, tier_summary
 from ragdemo.quality.budget import BudgetExceeded, ensure_budget
 from ragdemo.retrieval.models import build_models
@@ -267,7 +268,9 @@ def docs_ingest(
         parser = MockDocumentParser()
     else:
         base_url = cfg.require_textin_base_url()
-        parser = TextInParser(base_url, blob, allow_private=cfg.textin_allow_private)
+        parser = with_tiered_routing(
+            TextInParser(base_url, blob, allow_private=cfg.textin_allow_private), blob, cfg
+        )
 
     budget = PageBudget(max_pages)
     failures = 0
@@ -741,9 +744,17 @@ def docs_ingest_cninfo(
     default="textin",
     help="mock 用于离线开发与测试，完全不发网络请求",
 )
+@click.option(
+    "--doc-id",
+    "doc_ids",
+    multiple=True,
+    type=int,
+    help="只处理这些 doc_id（可重复；holdout2 补跑等）",
+)
 @click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
 def docs_parse_pending(
     entity_ref: str | None,
+    doc_ids: tuple[int, ...],
     tier_names: tuple[str, ...],
     max_pages_opt: int | None,
     yes: bool,
@@ -773,6 +784,7 @@ def docs_parse_pending(
                 budget=PageBudget(max_pages),
                 ingest_run_id="cli:docs-parse-pending",
                 dry_run=True,
+                doc_ids=frozenset(doc_ids) or None,
             )
             click.echo(f"[dry run] 选中 {report.selected} 份待解析文档")
             for tier, pages in sorted(report.estimated_pages.items()):
@@ -785,7 +797,9 @@ def docs_parse_pending(
             parser = MockDocumentParser()
         else:
             base_url = cfg.require_textin_base_url()
-            parser = TextInParser(base_url, blob, allow_private=cfg.textin_allow_private)
+            parser = with_tiered_routing(
+                TextInParser(base_url, blob, allow_private=cfg.textin_allow_private), blob, cfg
+            )
 
         if parser_kind == "textin":
             try:
@@ -805,6 +819,7 @@ def docs_parse_pending(
             budget=PageBudget(max_pages),
             ingest_run_id="cli:docs-parse-pending",
             dry_run=False,
+            doc_ids=frozenset(doc_ids) or None,
         )
         click.echo(
             f"选中 {report.selected}，重解析 {report.reparsed}"
