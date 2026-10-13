@@ -15,11 +15,7 @@
 （pdfplumber 会把这类文字的字序倒过来，数字变成 "12.5" → "5.21"，而自检基准同样是倒的）。
 
 Known limitations（v1 只用于实验，不得用于实验以外的场景）：
-- 两栏但基线错位（右栏整体偏移几个 pt）时，行聚类会把左右栏的行交错，行间空白带检测
-  （MULTICOLUMN_ROW_SHARE）抓不到，数字可能被接到错误的标签后面（见
-  tests/parse/local/test_deterministic.py::test_two_columns_with_offset_baselines_known_limitation）。
-  数字顺序检查（pipeline._self_check 的 ordered_numbers）能拦下一部分，但不能保证；
-  第二版计划（docs/10.12-plan/2026-10-12-确定性排版第二版计划.md T3）用整页纵向空白带处理。
+- 两栏基线错位（v1 限制 I1）已由 columns.detect_columns 的整页纵向空白带处理。
 - 研报首页的侧栏 + 图表页同理可能产出 ok 但顺序错乱的文字。"""
 
 from __future__ import annotations
@@ -33,6 +29,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ragdemo.parse.local.columns import detect_columns
 from ragdemo.parse.local.headings import (
     MAX_LEVEL,
     Candidate,
@@ -69,10 +66,6 @@ MAX_HEADING_LEVEL = 3
 PARAGRAPH_GAP_FACTOR = 1.6  # 行距 > 正文行距 * 此值 → 另起一段
 INDENT_FACTOR = 1.2  # 首行缩进 >= 字号 * 此值 → 另起一段
 SHORT_LINE_FACTOR = 3.0  # 上一行右端比版心右缘短这么多个字宽，且以句末标点收尾 → 另起一段
-MIN_GUTTER_CHARS = 3.0  # 栏间空白带宽度 >= 此值 * 正文字宽
-GUTTER_ZONE = (0.2, 0.8)  # 栏间空白带必须整个落在页宽的这个区间内（排除右对齐的页码 / 日期）
-MULTICOLUMN_ROW_SHARE = 0.30  # 被同一条空白带分开的行占非表格行的比例 >= 此值 → 多栏
-MIN_COLUMN_ROWS = 3
 PITCH_CAP_FACTOR = 2.0  # 统计正文行距时，忽略大于字号 * 此值的行间距（段间距、标题间距）
 FALLBACK_PITCH_FACTOR = 1.3  # 文档里凑不出行距样本时，行距 = 字号 * 此值
 
@@ -127,6 +120,7 @@ class _PageItems:
     items: list[_Item]
     orientation_reason: str | None  # 旋转 / 倒向文字：不排版
     multicolumn: bool
+    column_reason: str = ""
 
 
 # ---- 文本拼接 ----
@@ -193,27 +187,6 @@ def _line_size(words: Sequence[Word]) -> float:
     return min((w.size for w in words), default=0.0)
 
 
-def _is_multicolumn(rows: Sequence[Sequence[Word]], width: float, body_size: float) -> bool:
-    if len(rows) < MIN_COLUMN_ROWS:
-        return False
-    threshold = MIN_GUTTER_CHARS * (body_size or 10.0)
-    lo, hi = GUTTER_ZONE[0] * width, GUTTER_ZONE[1] * width
-    gaps_per_row: list[list[tuple[float, float]]] = []
-    for row in rows:
-        gaps = [
-            (a.x1, b.x0)
-            for a, b in itertools.pairwise(row)
-            if b.x0 - a.x1 >= threshold and a.x1 >= lo and b.x0 <= hi
-        ]
-        gaps_per_row.append(gaps)
-    candidates = {round((a + b) / 2) for gaps in gaps_per_row for a, b in gaps}
-    best = max(
-        (sum(1 for gaps in gaps_per_row if any(a <= x <= b for a, b in gaps)) for x in candidates),
-        default=0,
-    )
-    return best >= MIN_COLUMN_ROWS and best >= MULTICOLUMN_ROW_SHARE * len(rows)
-
-
 def _page_items(layout: PageLayout, body_size: float) -> _PageItems:
     rows = cluster_rows([w for w in layout.words if w.upright])
     regions = find_table_regions(rows)
@@ -249,11 +222,8 @@ def _page_items(layout: PageLayout, body_size: float) -> _PageItems:
                 rest_text=_join_words(rest) if rest else "",
             )
         )
-    return _PageItems(
-        items,
-        unsafe_orientation_reason(layout),
-        _is_multicolumn(plain_rows, layout.width, body_size),
-    )
+    verdict = detect_columns(plain_rows, layout.width, body_size)
+    return _PageItems(items, unsafe_orientation_reason(layout), verdict.multicolumn, verdict.reason)
 
 
 def _body_pitch(all_items: Sequence[_PageItems], body_size: float) -> float:
@@ -485,7 +455,7 @@ def typeset_document(pages: Sequence[PageLayout]) -> list[TypesetResult]:
             out.append(TypesetResult("layout_unsupported", "", pi.orientation_reason))
             continue
         if pi.multicolumn:
-            out.append(TypesetResult("layout_unsupported", "", "多栏版面"))
+            out.append(TypesetResult("layout_unsupported", "", pi.column_reason))
             continue
         tables = [it.markdown for it in pi.items if isinstance(it, _Table)]
         out.append(TypesetResult("ok", _render(pi, pitch), "", tables))
