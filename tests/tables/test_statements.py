@@ -48,3 +48,8 @@ def test_order_balance_before_income() -> None:
     assert (
         statement_kind(_grid("流动资产合计", "资产总计", "营业收入", "营业成本")) == "balance_sheet"
     )
+
+
+def test_pin_main_accounting_data_is_classified_income() -> None:
+    """已知偏高：主要会计数据表（营业收入 + 利润总额）被判成 income。T10/T18 报告里要注明。"""
+    assert statement_kind(_grid("营业收入", "利润总额")) == "income"

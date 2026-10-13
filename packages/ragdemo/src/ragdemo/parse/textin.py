@@ -332,18 +332,27 @@ def blocks_from_detail(
                         "paragraph_id": item.get("paragraph_id"),
                     },
                 )
-            table = (
-                TableAttachment(
-                    grid=grid,
-                    context=bind_context(
+            table = None
+            if grid is not None:
+                context = None
+                try:
+                    context = bind_context(
                         grid,
                         caption=textin_caption(detail, item),
                         preceding_texts=textin_preceding_texts(detail, i),
-                    ),
-                )
-                if grid is not None
-                else None
-            )
+                    )
+                except Exception as exc:  # 上下文是附加品，任何异常都不能拖垮解析
+                    _LOG.warning(
+                        "table context skipped: %s",
+                        type(exc).__name__,
+                        extra={
+                            "json_ref": json_ref,
+                            "table_index": table_index,
+                            "page_id": item.get("page_id"),
+                            "paragraph_id": item.get("paragraph_id"),
+                        },
+                    )
+                table = TableAttachment(grid=grid, context=context)
         elif kind == "image":
             block_type, content = "figure", text
         elif level >= 0:
