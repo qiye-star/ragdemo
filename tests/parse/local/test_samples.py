@@ -184,3 +184,15 @@ def test_tuning_commands_refuse_the_holdout_set() -> None:
         require_tune_set("holdout")
     with pytest.raises(ValueError):
         require_tune_set("other")
+
+
+def test_a_fixture_with_an_unknown_graphic_kind_is_rejected() -> None:
+    fx = {
+        "page": 1,
+        "width": 100.0,
+        "height": 100.0,
+        "words": [],
+        "graphics": [["blob", 0, 1, 0, 1, False, 0]],
+    }
+    with pytest.raises(ValueError, match="graphic"):
+        layout_from_fixture(fx)

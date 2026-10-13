@@ -146,3 +146,59 @@ def test_figure_dicts_round_trip(tmp_path: Path) -> None:
         "stripped_words",
     }
     assert figure_from_dict(d) == ref
+
+
+# ---------------------------------------------------------------- T4 评审修复（I1 与小项）
+def test_i1_a_media_box_with_a_non_zero_origin_is_skipped_not_cropped_offset(
+    tmp_path: Path,
+) -> None:
+    raw = _pdf()
+    assert b"/MediaBox [ 0 0 595 842 ]" in raw
+    shifted = raw.replace(b"/MediaBox [ 0 0 595 842 ]", b"/MediaBox [ 9 9 604 851 ]")
+    refs, skips = _crop(shifted, LocalBlobStore(tmp_path))
+    assert refs == [] and len(skips) == 1 and "原点" in skips[0].reason
+    assert not any(tmp_path.rglob("*.png"))
+
+
+@pytest.mark.parametrize("bad", ["../../escape", "abc", "G" * 64, DOC.upper()])
+def test_figure_key_requires_a_64_hex_doc_sha256(bad: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="doc_sha256"):
+        fig_mod.figure_key(bad, b"png")
+    with pytest.raises(ValueError, match="doc_sha256"):
+        crop_figures(
+            _pdf(),
+            [REGION],
+            doc_sha256=bad,
+            blob=LocalBlobStore(tmp_path),
+            source="local",
+            detector_version="chart-v1",
+            page_sizes={1: (595.0, 842.0)},
+        )
+    assert not any(tmp_path.rglob("*"))
+
+
+def test_degenerate_regions_out_of_range_pages_and_missing_page_sizes_are_skips(
+    tmp_path: Path,
+) -> None:
+    def crop(region: FigureRegion, sizes: dict[int, tuple[float, float]]) -> list[FigureSkip]:
+        refs, skips = crop_figures(
+            _pdf(),
+            [region],
+            doc_sha256=DOC,
+            blob=LocalBlobStore(tmp_path),
+            source="local",
+            detector_version="chart-v1",
+            page_sizes=sizes,
+        )
+        assert refs == []
+        return skips
+
+    sizes = {1: (595.0, 842.0)}
+    (tiny,) = crop(FigureRegion(1, (100.0, 100.0, 100.5, 100.5), "vector"), sizes)
+    assert "过小" in tiny.reason
+    (oor,) = crop(FigureRegion(5, REGION.bbox, "vector"), sizes)
+    assert "页码" in oor.reason
+    (zero,) = crop(FigureRegion(0, REGION.bbox, "vector"), sizes)
+    assert "页码" in zero.reason
+    (nosize,) = crop(REGION, {})
+    assert "页面尺寸" in nosize.reason

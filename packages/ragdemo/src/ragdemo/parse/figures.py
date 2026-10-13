@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import io
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal
@@ -40,6 +41,8 @@ FIGURE_KEY_PREFIX: Final = (
     "parse/figures"  # 与 parse/textin/<hash>/... 并列，在 blob_root（默认 data/blob）下
 )
 PAGE_SIZE_TOL_PT: Final = 0.5
+FIGURE_MIN_SIDE_PT: Final = 2.0  # 未加留白的区域边长下限：更小的是退化框，不是图
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,9 @@ class FigureRegion:
 
 @dataclass(frozen=True)
 class FigureRef:
+    """裁出的一张图。注意没有 can_show_raw：T10 入库时必须继承文档的 can_show_raw，
+    研报（can_show_raw=false）的图只能内部查看、不得对外展示原图。"""
+
     doc_sha256: str  # 原始 PDF 字节的 sha256（= core.document.content_hash）；doc_id 在入库时绑定
     page: int
     bbox_pt: BBox  # 实际裁剪框（含 FIGURE_PAD_PT 留白，已裁到页面内）
@@ -79,7 +85,13 @@ class FigureSkip:
     reason: str
 
 
+def _check_doc_sha256(doc_sha256: str) -> None:
+    if not _SHA256_HEX.fullmatch(doc_sha256):
+        raise ValueError("doc_sha256 必须是 64 位小写十六进制（它是对象存储 key 的一段）")
+
+
 def figure_key(doc_sha256: str, png: bytes) -> tuple[str, str]:
+    _check_doc_sha256(doc_sha256)
     digest = hashlib.sha256(png).hexdigest()
     return f"{FIGURE_KEY_PREFIX}/{doc_sha256}/{digest}.png", digest
 
@@ -114,14 +126,33 @@ def crop_figures(
     detector_version: str,
     page_sizes: Mapping[int, tuple[float, float]],
 ) -> tuple[list[FigureRef], list[FigureSkip]]:
+    _check_doc_sha256(doc_sha256)
     refs: list[FigureRef] = []
     skips: list[FigureSkip] = []
     pdf = pdfium.PdfDocument(pdf_bytes)
     try:
         for r in regions:
+            if not 1 <= r.page <= len(pdf):
+                skips.append(
+                    FigureSkip(r.page, r.bbox, f"页码 {r.page} 超出文档范围 1..{len(pdf)}")
+                )
+                continue
+            if r.page not in page_sizes:
+                skips.append(FigureSkip(r.page, r.bbox, "缺该页的版面页面尺寸，无法核对裁图坐标"))
+                continue
+            if (
+                r.bbox[2] - r.bbox[0] < FIGURE_MIN_SIDE_PT
+                or r.bbox[3] - r.bbox[1] < FIGURE_MIN_SIDE_PT
+            ):
+                skips.append(FigureSkip(r.page, r.bbox, "区域过小（退化框）"))
+                continue
             page = pdf[r.page - 1]
             try:
                 width, height = page.get_size()
+                boxes = (page.get_mediabox(), page.get_cropbox())
+                if any(b is not None and (abs(b[0]) > 0.01 or abs(b[1]) > 0.01) for b in boxes):
+                    skips.append(FigureSkip(r.page, r.bbox, "页面框原点不在 (0,0)，裁图坐标会错位"))
+                    continue
                 if page.get_rotation() % 360 != 0:
                     skips.append(FigureSkip(r.page, r.bbox, "页面带 /Rotate，裁图坐标不可信"))
                     continue

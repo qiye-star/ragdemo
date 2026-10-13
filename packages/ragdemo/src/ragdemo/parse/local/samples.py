@@ -11,9 +11,9 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, cast, get_args
 
-from ragdemo.parse.local.layout import Graphic, PageLayout, Word
+from ragdemo.parse.local.layout import Graphic, GraphicKind, PageLayout, Word
 
 SPLIT_SEED: Final = 20261012
 Group = Literal["docs", "research"]
@@ -181,6 +181,13 @@ def layout_to_fixture(layout: PageLayout) -> dict[str, Any]:
     }
 
 
+def _graphic_kind(kind: object) -> GraphicKind:
+    for allowed in get_args(GraphicKind):
+        if kind == allowed:
+            return cast(GraphicKind, allowed)
+    raise ValueError(f"夹具里有未知的 graphic 类型 {kind!r}，允许 {get_args(GraphicKind)}")
+
+
 def layout_from_fixture(d: Mapping[str, Any]) -> PageLayout:
     words = [
         Word(
@@ -196,7 +203,15 @@ def layout_from_fixture(d: Mapping[str, Any]) -> PageLayout:
         for t, x0, x1, top, bottom, up, size, bold in d["words"]
     ]
     graphics = tuple(
-        Graphic(str(k), float(x0), float(x1), float(top), float(bottom), bool(filled), int(points))  # type: ignore[arg-type]
+        Graphic(
+            _graphic_kind(k),
+            float(x0),
+            float(x1),
+            float(top),
+            float(bottom),
+            bool(filled),
+            int(points),
+        )
         for k, x0, x1, top, bottom, filled, points in d.get("graphics", [])
     )
     return PageLayout(
