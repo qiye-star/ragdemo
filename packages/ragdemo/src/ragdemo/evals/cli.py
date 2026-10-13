@@ -169,6 +169,9 @@ def add_retrieval(
 @click.option("--candidate-k", type=int, default=None, help="每一路的候选数")
 @click.option("--rewrite/--no-rewrite", default=False, help="是否启用同义词查询改写")
 @click.option("--period-boost", type=float, default=0.0, help="期别感知排序偏置，0 = 关闭")
+@click.option(
+    "--bm25-desc/--no-bm25-desc", default=False, help="BM25 同时匹配 content_desc（表格描述）"
+)
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 @click.option(
     "--author-prefix",
@@ -186,6 +189,7 @@ def run(
     candidate_k: int | None,
     rewrite: bool,
     period_boost: float,
+    bm25_desc: bool,
     label: str,
     author_prefix: str | None,
 ) -> None:
@@ -202,6 +206,7 @@ def run(
         rerank_enabled=rerank,
         rewrite_enabled=rewrite,
         period_boost=period_boost,
+        bm25_desc=bm25_desc,
     )
     config.validate()
     synonyms = load_synonyms() if rewrite else None

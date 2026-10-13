@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 import psycopg
 import pytest
 
-from ragdemo.retrieval.lexical import bm25_search, explain_bm25
-from ragdemo.retrieval.types import RetrievalRequest
+from ragdemo.retrieval.lexical import _statement, bm25_search, explain_bm25
+from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
 
 
 @pytest.mark.db
@@ -99,3 +99,43 @@ def test_a_question_with_extra_words_still_matches_on_any_term(
     合成评测集实测：`@@@`（合取）下 BM25 单路 recall@10 仅 0.09，`|||` 下 0.88。"""
     question = "请问云端训练芯片相关的业务情况到底怎么样呢"
     assert bm25_search(corpus, RetrievalRequest(query=question, as_of=as_of_2024))
+
+
+@pytest.mark.db
+def test_bm25_desc_finds_table_only_described_in_content_desc(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    corpus.execute(
+        "UPDATE core.doc_block SET content_desc = '寒武纪产品出货结构一览'"
+        " WHERE block_type = 'table'"
+    )
+    corpus.commit()
+    # 查询词只出现在描述里：表格 content（业务分部/收入/同比）与段落都不含"结构一览"。
+    off = bm25_search(corpus, RetrievalRequest(query="结构一览", as_of=as_of_2024))
+    on = bm25_search(
+        corpus,
+        RetrievalRequest(
+            query="结构一览", as_of=as_of_2024, config=RetrievalConfig(bm25_desc=True)
+        ),
+    )
+    row = corpus.execute("SELECT block_id FROM core.doc_block WHERE block_type='table'").fetchone()
+    assert row is not None
+    assert row[0] not in {h.block_id for h in off}
+    assert row[0] in {h.block_id for h in on}
+
+
+@pytest.mark.db
+def test_bm25_desc_is_pushed_into_a_single_paradedb_scan(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    plan = explain_bm25(
+        corpus,
+        RetrievalRequest(query="收入", as_of=as_of_2024, config=RetrievalConfig(bm25_desc=True)),
+    )
+    assert plan.count("ParadeDB") == 1
+    assert '"content_desc"' in plan and '"should"' in plan
+
+
+def test_default_sql_is_unchanged() -> None:
+    sql, _ = _statement(RetrievalRequest(query="收入", as_of=datetime(2025, 1, 1, tzinfo=UTC)))
+    assert "content ||| %(query)s" in sql and "content_desc" not in sql

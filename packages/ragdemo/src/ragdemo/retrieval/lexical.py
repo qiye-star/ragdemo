@@ -15,12 +15,15 @@ from ragdemo.retrieval.filters import build_filters
 from ragdemo.retrieval.types import RetrievalRequest
 from ragdemo_core.db.session import as_of_session
 
+_MATCH_CONTENT = "content ||| %(query)s"
+_MATCH_CONTENT_AND_DESC = "(content ||| %(query)s OR content_desc ||| %(query)s)"
+
 _SQL = """
 SELECT block_id,
        ROW_NUMBER() OVER (ORDER BY paradedb.score(block_id) DESC) AS rnk,
        paradedb.score(block_id) AS raw_score
   FROM asof.doc_block
- WHERE content ||| %(query)s
+ WHERE {match}
  {filters}
  ORDER BY paradedb.score(block_id) DESC
  LIMIT %(candidate_k)s
@@ -42,7 +45,8 @@ def _statement(req: RetrievalRequest) -> tuple[str, dict[str, object]]:
     filters, params = build_filters(req)
     params["query"] = req.query
     params["candidate_k"] = req.config.candidate_k
-    return _SQL.format(filters=filters), params
+    match = _MATCH_CONTENT_AND_DESC if req.config.bm25_desc else _MATCH_CONTENT
+    return _SQL.format(match=match, filters=filters), params
 
 
 def bm25_search(conn: psycopg.Connection, req: RetrievalRequest) -> list[RankedHit]:

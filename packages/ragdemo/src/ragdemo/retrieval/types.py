@@ -25,6 +25,9 @@ class RetrievalConfig:
     # 期别感知的排序偏置（retrieval/period.py）：问题里有唯一明确年份时，同年份文档的块
     # 分数 ×(1+boost)、别的年份 ×(1−boost)。0 = 关闭（默认，行为与加这个字段之前一致）。
     period_boost: float = 0.0
+    # BM25 同时匹配 content_desc（表格/图的自然语言描述；索引自 004 起已含该列）。默认关闭，
+    # 行为与加这个字段之前一致；翻默认值须过 `eval table-gate`。
+    bm25_desc: bool = False
 
     def validate(self) -> None:
         if self.top_k > self.fusion_k:
