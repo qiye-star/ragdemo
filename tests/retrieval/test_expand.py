@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import psycopg
 import pytest
 
 from ragdemo.retrieval.expand import expand_to_evidence
+from tests.tables.conftest import insert_test_grid
 
 
 def _leaf_ids(conn: psycopg.Connection, doc_id: int) -> list[int]:
@@ -135,3 +136,98 @@ def test_future_block_is_invisible_through_asof_view(
         corpus, [future_block], {future_block: 1.0}, reranked=True, top_k=10, as_of=as_of_2024
     )
     assert evidence == []
+
+
+@pytest.mark.db
+def test_table_evidence_carries_unit_caption_verdict(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    block_id = insert_test_grid(
+        corpus, unit="万元", caption="分部收入", verdict="text_layer_cells_ok"
+    )
+    (ev,) = expand_to_evidence(
+        corpus, [block_id], {block_id: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+    )
+    assert (ev.table_unit, ev.table_caption, ev.table_verdict) == (
+        "万元",
+        "分部收入",
+        "text_layer_cells_ok",
+    )
+
+
+@pytest.mark.db
+def test_paragraph_evidence_has_no_table_fields(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    insert_test_grid(corpus)
+    pid = _leaf_ids(corpus, 1)[0]
+    (ev,) = expand_to_evidence(
+        corpus, [pid], {pid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+    )
+    assert (ev.table_unit, ev.table_caption, ev.table_verdict) == (None, None, None)
+
+
+@pytest.mark.db
+def test_table_without_grid_has_no_table_fields(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """没有网格就不猜：字段缺省为 None。"""
+    row = corpus.execute("SELECT block_id FROM core.doc_block WHERE block_type='table'").fetchone()
+    assert row is not None
+    bid = int(row[0])
+    (ev,) = expand_to_evidence(
+        corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+    )
+    assert (ev.table_unit, ev.table_caption, ev.table_verdict) == (None, None, None)
+
+
+@pytest.mark.db
+def test_grid_known_after_as_of_is_not_visible(corpus: psycopg.Connection) -> None:
+    """时点：网格的 known_at 晚于 as_of 时，证据不带表格字段。"""
+    bid = insert_test_grid(corpus)
+    early = datetime(2024, 10, 27, tzinfo=UTC)  # 三季报 10-28 才发布 -> 块本身也不可见
+    assert (
+        expand_to_evidence(corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=early) == []
+    )
+    corpus.execute("UPDATE core.doc_table SET known_at = known_at + interval '60 days'")
+    corpus.commit()
+    mid = datetime(2024, 11, 15, tzinfo=UTC)
+    (ev,) = expand_to_evidence(corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=mid)
+    assert ev.table_verdict is None and ev.table_unit is None
+
+
+@pytest.mark.db
+def test_foreign_currency_table_hides_unit(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    for cur in ("USD", "OTHER"):
+        corpus.execute("DELETE FROM core.doc_table")
+        corpus.commit()
+        bid = insert_test_grid(corpus, unit="万元", currency=cur)
+        (ev,) = expand_to_evidence(
+            corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+        )
+        assert ev.table_unit is None
+        assert ev.table_verdict == "text_layer_cells_ok"  # 校验结论照常带出
+
+
+@pytest.mark.db
+def test_cny_currency_keeps_unit(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
+    bid = insert_test_grid(corpus, unit="万元", currency="CNY")
+    (ev,) = expand_to_evidence(
+        corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+    )
+    assert ev.table_unit == "万元"
+
+
+@pytest.mark.db
+def test_no_show_raw_table_hides_caption(corpus: psycopg.Connection, as_of_2024: datetime) -> None:
+    """研报 can_show_raw=false：不额外带出表名原文（单位 / 结论是归一化标记，可带）。"""
+    bid = insert_test_grid(corpus, unit="万元", caption="分部收入")
+    corpus.execute("UPDATE core.doc_table SET can_show_raw = false")
+    corpus.commit()
+    (ev,) = expand_to_evidence(
+        corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+    )
+    assert ev.table_caption is None
+    assert ev.table_unit == "万元"

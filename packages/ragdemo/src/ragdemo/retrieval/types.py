@@ -77,6 +77,11 @@ class EvidenceBlock:
     known_at: datetime
     score: float
     reranked: bool
+    # 表格块的量纲 / 表名 / 校验结论，取自 asof.doc_table（只带出，不参与排序）。
+    # 没有网格（或网格在 as_of 时点不可见）时全为 None——不猜。
+    table_unit: str | None = None
+    table_caption: str | None = None
+    table_verdict: str | None = None
 
 
 @dataclass(frozen=True)

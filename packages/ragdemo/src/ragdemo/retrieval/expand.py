@@ -36,9 +36,15 @@ SELECT b.block_id,
        d.title,
        b.section_path,
        b.page,
-       b.known_at
+       b.known_at,
+       t.unit,
+       t.caption,
+       t.verify_verdict,
+       t.currency,
+       t.can_show_raw
   FROM asof.doc_block b
   JOIN asof.document d ON d.doc_id = b.doc_id
+  LEFT JOIN asof.doc_table t ON t.block_id = b.block_id
  WHERE b.block_id = ANY(%(block_ids)s)
 """
 
@@ -110,6 +116,10 @@ def expand_to_evidence(
         row = by_id[best]
         parent_block_id = int(row[1]) if row[1] is not None else None
         content = parent_content[parent_block_id] if parent_block_id is not None else str(row[2])
+        has_grid = row[10] is not None  # verify_verdict NOT NULL：有网格才非空
+        # 外币 / 未识别币种的表不展示单位（不把外币表的单位当人民币）；currency 为 None
+        # 表示未声明，沿用单位。研报（can_show_raw = false）不额外带出表名原文。
+        unit_ok = has_grid and row[11] in (None, "CNY")
         evidence.append(
             EvidenceBlock(
                 block_id=best,
@@ -123,6 +133,9 @@ def expand_to_evidence(
                 known_at=row[7],
                 score=scores.get(best, 0.0),
                 reranked=reranked,
+                table_unit=str(row[8]) if unit_ok and row[8] is not None else None,
+                table_caption=str(row[9]) if has_grid and row[12] and row[9] else None,
+                table_verdict=str(row[10]) if row[10] is not None else None,
             )
         )
     return evidence
