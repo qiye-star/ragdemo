@@ -425,6 +425,19 @@ def label_sheet(out: Path, n: int, seed: int) -> None:
     click.echo(f"已导出 {count} 个段落到 {out}；填好 question / difficulty 后用 label-import 导入")
 
 
+@eval_group.command("table-label-sheet")
+@click.option("--out", "out", required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--seed", type=int, default=20261013, show_default=True)
+def table_label_sheet(out: Path, seed: int) -> None:
+    """导出人工表格题标注表（四层按配额 2 倍候选；passage 不含表格描述）。"""
+    from ragdemo.evals.table_labels import TABLE_QUOTA, export_table_label_sheet
+
+    with psycopg.connect(_dsn()) as conn:
+        count = export_table_label_sheet(conn, out, seed=seed)
+    quota = "、".join(f"{k} {v}" for k, v in TABLE_QUOTA.items())
+    click.echo(f"已导出 {count} 个候选表格到 {out}（配额：{quota}）；填好后用 label-import 导入")
+
+
 @eval_group.command("label-import")
 @click.option(
     "--file", "path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path)
