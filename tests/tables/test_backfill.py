@@ -302,6 +302,29 @@ def test_reverify_rewrites_a_row_that_differs_at_current_versions(
 
 
 @pytest.mark.db
+def test_reverify_ignores_desc_provenance_and_carries_it_over(
+    wired: psycopg.Connection, blob: LocalBlobStore
+) -> None:
+    run_backfill(wired, blob, ingest_run_id="t", write=True)
+    wired.execute(
+        "UPDATE core.doc_table SET desc_model = 'deepseek-chat', desc_prompt_version = 'v3'"
+        " WHERE superseded_at IS NULL"
+    )
+    wired.commit()
+    same = run_backfill(wired, blob, ingest_run_id="t", write=False, reverify=True)
+    assert (same.docs[0].superseded, same.docs[0].inserted, same.docs[0].skipped) == (0, 0, 1)
+    wired.execute("UPDATE core.doc_table SET unit = '元' WHERE superseded_at IS NULL")
+    wired.commit()
+    rev = run_backfill(wired, blob, ingest_run_id="t", write=True, reverify=True)
+    assert (rev.docs[0].superseded, rev.docs[0].inserted) == (1, 1)
+    row = wired.execute(
+        "SELECT unit, desc_model, desc_prompt_version FROM core.doc_table"
+        " WHERE superseded_at IS NULL"
+    ).fetchone()
+    assert row == ("万元", "deepseek-chat", "v3")
+
+
+@pytest.mark.db
 def test_no_network_is_used(
     wired: psycopg.Connection, blob: LocalBlobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

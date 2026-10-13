@@ -20,6 +20,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
+from dataclasses import replace as dc_replace
 from typing import Any, Final
 
 import psycopg
@@ -174,8 +175,6 @@ def _fingerprint(rec: TableRecord) -> tuple[object, ...]:
         s.match,
         s.mismatch,
         s.unverifiable,
-        rec.desc_model,
-        rec.desc_prompt_version,
     )
 
 
@@ -183,7 +182,7 @@ def _stored_fingerprint(conn: psycopg.Connection[Any], table_id: int) -> tuple[o
     row = conn.execute(
         "SELECT grid, caption, unit, unit_source, currency, column_units, row_units,"
         " statement_kind, verify_verdict, cells_numeric, cells_match, cells_mismatch,"
-        " cells_unverifiable, desc_model, desc_prompt_version"
+        " cells_unverifiable"
         " FROM core.doc_table WHERE table_id = %s",
         (table_id,),
     ).fetchone()
@@ -356,6 +355,19 @@ def _backfill_in_txn(
             if row is None or not row[0]:
                 counts["deferred"] += 1  # superseded_at 必须晚于 known_at
                 continue
+            # 描述溯源（desc_*）与续表链接不是网格内容：重写时沿用旧行，不覆盖。
+            prev = conn.execute(
+                "SELECT desc_model, desc_prompt_version, continues_from_block_id"
+                " FROM core.doc_table WHERE table_id = %s",
+                (table_id,),
+            ).fetchone()
+            assert prev is not None
+            rec = dc_replace(
+                rec,
+                desc_model=prev[0],
+                desc_prompt_version=prev[1],
+                continues_from_block_id=prev[2],
+            )
             supersede_table(conn, table_id)
             counts["superseded"] += 1
         insert_table(conn, rec, ingest_run_id=ingest_run_id)
