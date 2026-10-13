@@ -43,6 +43,13 @@ L0_VERSION: Final = "det-v2"
 TABLELIKE_GAP_EM = 2.0
 TABLELIKE_MIN_ROWS = 2
 REASON_ROTATED: Final = "多栏版面：旋转文字残留"
+# G1 缺陷修复：行聚类按词的纵向中点（容差 3pt），文字层（pdfplumber extract_text）按词的 top
+# （容差 3pt）。一行里词的 top 相差超过该容差，说明有超大字号字形（装饰字母、大号页码）与
+# 小字号行只因中点相近被并成一行，而文字层把它们排成不同的行：排版顺序与文字层顺序可能
+# 不一致，闭合校验会（正确地）拦下。
+# 这样的页直接按"行序不可靠"拒收，不放进 plain_text 再失败。
+ROW_TOP_SPREAD_PT: Final = 3.0
+REASON_ROW_ORDER: Final = "多栏版面：行内词的 top 相差过大，行序与文字层不可对齐"
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,11 @@ def tablelike_run(rows: Sequence[Sequence[Word]], body_size: float) -> int:
         else:
             cur = 0
     return best
+
+
+def unaligned_row_count(rows: Sequence[Sequence[Word]]) -> int:
+    """行内 top 的极差 > ROW_TOP_SPREAD_PT 的行数（排版行序可能与文字层行序不一致的行）。"""
+    return sum(1 for r in rows if max(w.top for w in r) - min(w.top for w in r) > ROW_TOP_SPREAD_PT)
 
 
 def classify_page(
@@ -129,10 +141,13 @@ def classify_page(
         if residual_fragment_rows(plain) >= RESIDUAL_MIN_FRAGMENT_ROWS
         else None
     )
+    row_order = (
+        PageClass("multicolumn", REASON_ROW_ORDER) if unaligned_row_count(plain) > 0 else None
+    )
     if multicolumn_first:  # 旧次序：多栏 → 坐标表格 → 图表未解析 → 疑似表格行
-        order = (multicol, table, chart, tablelike)
+        order = (multicol, table, chart, tablelike, row_order)
     else:  # U-D3：坐标表格 → 疑似表格行 → 多栏 → 图表未解析
-        order = (table, tablelike, multicol, chart)
+        order = (table, tablelike, multicol, chart, row_order)
     for verdict in order:
         if verdict is not None:
             return verdict

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen import canvas
 
 from ragdemo.parse.local import l0 as l0_mod
 from ragdemo.parse.local.l0 import (
@@ -18,7 +19,15 @@ from ragdemo.parse.local.l0 import (
 from ragdemo.parse.local.layout import PageLayout, Word
 from ragdemo.parse.local.samples import layout_from_fixture
 from ragdemo.parse.local.typeset import TypesetResult
-from tests.parse.local.test_chart import TABLE, bar_chart, bar_page, body, pdf_page, plain_table
+from tests.parse.local.test_chart import (
+    TABLE,
+    bar_chart,
+    bar_page,
+    body,
+    pdf_page,
+    plain_table,
+    text,
+)
 from tests.parse.local.test_typeset import LEAD, H, W, body_lines, line, page
 
 RAW_RESEARCH = Path("docs/rawdata/688041-hygon/research")
@@ -235,3 +244,23 @@ def test_short_numeric_cells_inside_a_table_are_not_residual_chart_fragments() -
     for first in (False, True):
         kinds = page_kinds([page(*body_lines(100, 6), *rows)], multicolumn_first=first)
         assert kinds == ["table"], first
+
+
+def _oversized_page_number(c: canvas.Canvas) -> None:
+    # 真实失败页（G1）的结构：小字号标题行与两个超大字号字形（"P" 36pt、页码 "3" 22pt）
+    # 纵向相交，字形的 top 与标题行相差 > 3pt（文字层把它们排成不同的行），
+    # 但中点落在同一行容差内（行聚类把页码并进标题行）
+    text(c, "Q2业绩增长加速，大模型生态进一步完善", 280, 75, 10.6)
+    text(c, "P", 483, 84, 36.0)
+    text(c, "3", 502, 78, 22.0)
+    body(c, 160, 8)
+
+
+def test_g1_oversized_glyphs_overlapping_a_title_row_never_leave_a_closure_failed_plain_page() -> (
+    None
+):
+    (p,) = parse_pdf_l0(pdf_page(_oversized_page_number))
+    # 要么顺序与文字层一致地接受，要么作为合法拒收（带原因）；不能是 closure_failed
+    assert p.result.status != "closure_failed", p.result.reason
+    if p.kind != "plain_text":
+        assert not p.accepted and p.result.reason

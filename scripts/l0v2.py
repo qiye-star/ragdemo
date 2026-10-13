@@ -54,6 +54,7 @@ from ragdemo.parse.local.l0_eval import (
     HOLDOUT2_BLOCKING,
     CostKind,
     EvalRow,
+    FigureLabelTotals,
     HeadingTotals,
     L0Metrics,
     Prices,
@@ -783,6 +784,19 @@ def cmd_figure_sheet(run_dir: Path, sample_set: str, *, extra: bool) -> None:
     print(f"{FIGURE_LABELS}：追加 {len(rows)} 页；页图在 {review}")
 
 
+def _figure_labels_or_none(sample_set: str, *, final: bool) -> FigureLabelTotals | None:
+    """U5 标注：调参集模板已生成但用户尚未填写时按"未标注"处理（G14 显示未标注、不判失败）；
+    留出集的未标注一律报错。"""
+    if sample_set not in FIGURE_SAMPLE or not _has_figure_rows(sample_set):
+        return None
+    try:
+        return read_figure_labels(FIGURE_LABELS, sample_set)
+    except ValueError:
+        if final:
+            raise
+        return None
+
+
 def cmd_gates(run_dir: Path, sample_set: str) -> bool:
     m = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     rows = [
@@ -834,9 +848,7 @@ def cmd_gates(run_dir: Path, sample_set: str) -> bool:
         if m["figure_page_recall"] is None
         else float(m["figure_page_recall"]),
         figure_table_number_loss=float(m["figure_table_number_loss"]),
-        figure_labels=read_figure_labels(FIGURE_LABELS, sample_set)
-        if sample_set in FIGURE_SAMPLE and _has_figure_rows(sample_set)
-        else None,
+        figure_labels=_figure_labels_or_none(sample_set, final=final),
     )
     gates = evaluate_gates(metrics, final=final)
     informational = sample_set == "holdout2"
