@@ -398,6 +398,22 @@ CREATE INDEX provider_snapshot_params ON core.provider_snapshot USING gin (param
 
 原始响应永不修改、永不删除。任何「数据对不对」的争议都回到这张表重放。
 
+### 4.4 `core.fact_table_ref`（时点表，迁移 031）
+
+结构化事实（目前全部 `source = 'wind'`）在已解析公告表格单元格里的**佐证**：一行 =
+一条事实在某个单元格上的校验结论（只落 `match` / `mismatch`；`ambiguous` / `no_row` /
+`no_period_column` / `no_unit` / `not_cny` 只出现在校验报告里）。它不是事实来源：`fin_fact`
+一行不改，`fin_fact.source_block` 保持"抽取自文档"的原语义（Wind 事实不是从表格抽的）。
+
+- `report_value` 是 Python 按单元格数字 × 单位倍数换算出的元值；
+  `CHECK ((verdict = 'match') = (abs(report_value - fact_value) <= tolerance))` 让"差值超容差却标
+  match"在数据库层不可能写入。
+- `known_at = GREATEST(fin_fact.known_at, doc_table.known_at)`；只引用公共表，不需要 RLS。
+- 同 `(fact_id, block_id, cell_row, cell_col)` 任一时刻最多一行 live；`check_version`
+  （`factcell:vN`）变化或结论变化时旧行 `superseded_at`、插新行。
+- 登记在 `core.bitemporal_registry`，有 `asof.fact_table_ref` 视图。写入与匹配规则见
+  `packages/ragdemo/src/ragdemo/tables/fact_check.py`，命令 `ragdemo facts table-check`。
+
 ---
 
 ## 5. 文档层

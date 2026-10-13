@@ -38,6 +38,7 @@ BITEMPORAL_VIEWS = {
     "industry_metric_point",
     # 030：表格单元格网格（表格处理改进计划 T8）。
     "doc_table",
+    "fact_table_ref",
 }
 
 # 测试库里的一次性口令，不是任何环境的真实凭据。

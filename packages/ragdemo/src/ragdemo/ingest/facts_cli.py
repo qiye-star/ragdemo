@@ -25,6 +25,7 @@ from ragdemo.ingest.facts_extras_cli import (
     segments_command,
     verify_stage2_command,
 )
+from ragdemo.ingest.facts_table_cli import table_check_command
 from ragdemo.ingest.wind_facts import a_share_windcodes, ingest_wind_facts
 from ragdemo.sources.backlog import Backlog
 from ragdemo.sources.health import PgSourceHealth
@@ -111,3 +112,4 @@ facts_group.add_command(verify_stage2_command)
 facts_group.add_command(crosscheck_holders_command)
 facts_group.add_command(prices_command)
 facts_group.add_command(crosscheck_facts_command)
+facts_group.add_command(table_check_command)
