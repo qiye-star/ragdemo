@@ -289,4 +289,4 @@ def test_table_chunk_carries_the_same_attachment_object() -> None:
     (chunk,) = chunk_document(_doc([block]), CFG)
     assert chunk.table is att
     # table 不进切块指纹
-    assert ChunkConfig().version == CFG.version
+    assert CFG.version == "chunker:v2+65fa339a235ffc93"

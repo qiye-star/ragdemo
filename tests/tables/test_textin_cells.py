@@ -94,3 +94,89 @@ def test_no_cells_no_grid() -> None:
         )
         is None
     )
+
+
+def _item(cell: dict[str, object], **extra: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "row": 0,
+        "col": 0,
+        "row_span": 1,
+        "col_span": 1,
+        "text": "SECRETCELL",
+        "page_id": 1,
+        "position": [10, 10, 50, 10, 50, 20, 10, 20],
+    }
+    base.update(cell)
+    ok = {
+        "row": 1,
+        "col": 0,
+        "row_span": 1,
+        "col_span": 1,
+        "text": "ok",
+        "page_id": 1,
+        "position": [10, 30, 50, 30, 50, 40, 10, 40],
+    }
+    return {"type": "table", "page_id": 1, "paragraph_id": 3, "cells": [base, ok], **extra}
+
+
+def test_bbox_outside_page_is_none_never_clamped() -> None:
+    assert normalized_bbox([0, 0, 120, 0, 120, 10, 0, 10], (100, 100)) is None
+    assert normalized_bbox([-5, 0, 10, 0, 10, 10, -5, 10], (100, 100)) is None
+    assert normalized_bbox([0, 0, 100, 0, 100, 100, 0, 100], (100, 100)) == (0.0, 0.0, 1.0, 1.0)
+
+
+import logging  # noqa: E402
+
+import pytest  # noqa: E402
+
+from ragdemo.parse.textin import blocks_from_detail, table_html_from_cells  # noqa: E402
+
+_PROBES = {
+    "beyond_page": {"position": [10, 10, 120, 10, 120, 20, 10, 20]},
+    "negative_position": {"position": [-5, 10, 50, 10, 50, 20, -5, 20]},
+    "cell_page_zero": {"page_id": 0},
+    "row_span_zero": {"row_span": 0},
+    "col_span_zero": {"col_span": 0},
+    "negative_row": {"row": -1},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PROBES))
+def test_bad_cells_never_break_block_output(name: str, caplog: pytest.LogCaptureFixture) -> None:
+    item = _item(_PROBES[name])
+    with caplog.at_level(logging.WARNING):
+        (block,) = blocks_from_detail([item], page_dims={1: (100, 100)})
+    assert block.content == table_markdown(item["cells"])  # type: ignore[arg-type]
+    assert block.table_html == table_html_from_cells(item["cells"])  # type: ignore[arg-type]
+    if name in ("beyond_page", "negative_position"):
+        assert block.table is not None
+        assert block.table.grid.cells[0].bbox is None
+        assert block.table.grid.cells[1].bbox is not None
+    elif name == "cell_page_zero":
+        # 页码 0 在 1 基文档里不可能；整页偏移=0 时 page=0 非法 -> 无网格
+        assert block.table is None
+    else:
+        assert block.table is None
+    if block.table is None:
+        rec = [r for r in caplog.records if "table grid" in r.getMessage()]
+        assert rec and "SECRETCELL" not in rec[0].getMessage()
+
+
+def test_cell_without_page_id_in_multipage_table_is_unlocated() -> None:
+    item = dict(ITEM, cells=[dict(c) for c in ITEM["cells"]])  # type: ignore[call-overload]
+    del item["cells"][3]["page_id"]  # type: ignore[attr-defined]
+    g = grid_from_textin_item(item, page_offset=0, page_dims=DIMS, engine="e", provider_ref=None)
+    assert g is not None
+    tail = g.cell_at(1, 1)
+    assert tail is not None and tail.page is None and tail.bbox is None
+    head = g.cell_at(0, 0)
+    assert head is not None and head.page == 1 and head.bbox is not None
+
+
+def test_cell_without_page_id_in_single_page_table_uses_item_page() -> None:
+    item = _item({})
+    del item["cells"][0]["page_id"]  # type: ignore[attr-defined]
+    g = grid_from_textin_item(
+        item, page_offset=0, page_dims={1: (100, 100)}, engine="e", provider_ref=None
+    )
+    assert g is not None and g.cells[0].page == 1

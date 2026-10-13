@@ -17,7 +17,11 @@ def normalized_bbox(position: Sequence[float] | None, dims: tuple[int, int] | No
     if not width or not height:
         return None
     xs, ys = position[0::2], position[1::2]
-    return (min(xs) / width, min(ys) / height, max(xs) / width, max(ys) / height)
+    box = (min(xs) / width, min(ys) / height, max(xs) / width, max(ys) / height)
+    # 页外/负坐标：宁可没有 bbox，也不夹紧（夹紧后的框看似合理却是错的 = 假通过）。
+    if not all(0.0 <= v <= 1.0 for v in box):
+        return None
+    return box
 
 
 def textin_locator(json_ref: str | None, item: Mapping[str, Any]) -> str | None:
@@ -37,9 +41,13 @@ def grid_from_textin_item(
     raw = item.get("cells") or []
     if not raw:
         return None
+    multi_page = len(item.get("split_section_page_ids") or []) > 1
     cells: list[GridCell] = []
     for c in raw:
-        pid = c.get("page_id", item.get("page_id"))
+        pid = c.get("page_id")
+        if pid is None and not multi_page:
+            pid = item.get("page_id")
+        # 跨页表里缺 page_id 的单元格：页码未知，不猜（page=None、bbox=None）。
         page = int(pid) + page_offset if pid is not None else None
         cells.append(
             GridCell(

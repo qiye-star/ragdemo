@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -26,10 +27,11 @@ import httpx
 
 from ragdemo.adapters.announcements import NormalizedBlock
 from ragdemo.tables.context import bind_context, textin_caption, textin_preceding_texts
-from ragdemo.tables.grid import TableAttachment
+from ragdemo.tables.grid import GridError, TableAttachment
 from ragdemo.tables.textin_cells import grid_from_textin_item, textin_locator
 from ragdemo_core.blob import BlobStore
 
+_LOG = logging.getLogger(__name__)
 ENDPOINT: Final = "/ai/service/v1/pdf_to_markdown"
 DEFAULT_TIMEOUT_S: Final = 600.0
 
@@ -285,6 +287,7 @@ def blocks_from_detail(
     offset = _page_offset(detail)
     stack: list[str] = []
     blocks: list[NormalizedBlock] = []
+    table_index = -1
 
     for i, item in enumerate(detail):
         if int(item.get("content", 0) or 0) == 1:
@@ -306,13 +309,29 @@ def blocks_from_detail(
             cells = item.get("cells") or []
             block_type, content = "table", table_markdown(cells)
             table_html = table_html_from_cells(cells) or None
-            grid = grid_from_textin_item(
-                item,
-                page_offset=offset,
-                page_dims=page_dims,
-                engine=engine,
-                provider_ref=textin_locator(json_ref, item),
-            )
+            table_index += 1
+            try:
+                grid = grid_from_textin_item(
+                    item,
+                    page_offset=offset,
+                    page_dims=page_dims,
+                    engine=engine,
+                    provider_ref=textin_locator(json_ref, item),
+                )
+            except (GridError, ValueError, TypeError, KeyError) as exc:
+                # 网格是附加品：一格坏数据不能让整份已计费的文档解析失败，
+                # block 的 markdown/html 照常产出。日志只记计数器，不记内容。
+                grid = None
+                _LOG.warning(
+                    "table grid skipped: %s",
+                    type(exc).__name__,
+                    extra={
+                        "json_ref": json_ref,
+                        "table_index": table_index,
+                        "page_id": item.get("page_id"),
+                        "paragraph_id": item.get("paragraph_id"),
+                    },
+                )
             table = (
                 TableAttachment(
                     grid=grid,
