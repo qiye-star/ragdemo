@@ -213,3 +213,71 @@ def test_rewrite_is_off_by_default(corpus: psycopg.Connection, as_of_2024: datet
     assert RetrievalConfig().rewrite_enabled is False
     result = _service(corpus).search(RetrievalRequest(query="算力", as_of=as_of_2024))
     assert result.stats.ms_total > 0
+
+
+class _SpyReranker:
+    """记录重排收到的文档文本，不改变顺序语义（沿用 MockReranker 打分）。"""
+
+    model = "spy-reranker"
+
+    def __init__(self) -> None:
+        self.docs: list[str] = []
+        self._inner = MockReranker()
+
+    def rerank(self, query: str, docs: Sequence[str], top_k: int) -> list[tuple[int, float]]:
+        self.docs = list(docs)
+        return self._inner.rerank(query, docs, top_k)
+
+
+def test_rerank_rich_input_defaults_off() -> None:
+    assert RetrievalConfig().rerank_rich_input is False
+
+
+@pytest.mark.db
+def test_rerank_gets_bare_content_by_default(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    spy = _SpyReranker()
+    _service(corpus, spy).search(RetrievalRequest(query="智能计算 收入", as_of=as_of_2024))
+    assert spy.docs
+    assert not any("寒武纪 2024 年三季报" in d for d in spy.docs)
+
+
+@pytest.mark.db
+def test_rerank_rich_input_matches_embedding_input(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """开启后重排看到的文本必须和嵌入输入同一个拼法：标题 + 章节路径 + 描述 + 正文。"""
+    from ragdemo.embed.base import embedding_input
+
+    corpus.execute(
+        "UPDATE core.doc_block SET content_desc = '各业务分部收入同比表' WHERE block_type = 'table'"
+    )
+    corpus.commit()
+    spy = _SpyReranker()
+    _service(corpus, spy).search(
+        RetrievalRequest(
+            query="智能计算 收入",
+            as_of=as_of_2024,
+            config=RetrievalConfig(rerank_rich_input=True),
+        )
+    )
+    rows = corpus.execute(
+        "SELECT d.title, b.section_path, b.content_desc, b.content "
+        "FROM core.doc_block b JOIN core.document d USING (doc_id) WHERE b.is_leaf"
+    ).fetchall()
+    expected = {
+        embedding_input(
+            doc_title=str(r[0] or ""),
+            section_path=str(r[1] or ""),
+            content_desc=str(r[2] or ""),
+            content=str(r[3]),
+        )
+        for r in rows
+    }
+    assert spy.docs
+    assert set(spy.docs) <= expected
+    assert any(
+        d.startswith("寒武纪 2024 年三季报\n第三节 主营业务\n各业务分部收入同比表\n")
+        for d in spy.docs
+    )

@@ -28,6 +28,10 @@ class RetrievalConfig:
     # BM25 同时匹配 content_desc（表格/图的自然语言描述；索引自 004 起已含该列）。默认关闭，
     # 行为与加这个字段之前一致；翻默认值须过 `eval table-gate`。
     bm25_desc: bool = False
+    # 重排输入与嵌入输入同一个拼法（文档标题 + 章节路径 + 描述 + 正文，embed/base.py::
+    # embedding_input），而不是块的裸 content。默认关闭，行为与加这个字段之前一致；
+    # 翻默认值须跑 C2 评测与 `eval table-gate`（见 重排输入改造评测.md）。
+    rerank_rich_input: bool = False
 
     def validate(self) -> None:
         if self.top_k > self.fusion_k:

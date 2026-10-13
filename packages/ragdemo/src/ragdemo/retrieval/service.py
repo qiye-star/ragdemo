@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 
 import psycopg
 
-from ragdemo.embed.base import Embedder
+from ragdemo.embed.base import Embedder, embedding_input
 from ragdemo.retrieval.expand import expand_to_evidence
 from ragdemo.retrieval.fusion import FusedHit, weighted_rrf
 from ragdemo.retrieval.lexical import bm25_search
@@ -138,7 +138,9 @@ class RetrievalService:
 
             ms_rerank = 0.0
             if cfg.rerank_enabled and fused:
-                contents = _leaf_contents(conn, [f.block_id for f in fused])
+                contents = _leaf_contents(
+                    conn, [f.block_id for f in fused], rich=cfg.rerank_rich_input
+                )
                 t0 = time.perf_counter()
                 outcome = rerank_or_degrade(self.reranker, req.query, fused, contents, cfg.top_k)
                 ms_rerank = (time.perf_counter() - t0) * 1000
@@ -273,12 +275,35 @@ def chroma_backed_service(
     return RetrievalService(conn, embedder, reranker, synonyms=synonyms, index=index)
 
 
-def _leaf_contents(conn: psycopg.Connection, block_ids: list[int]) -> dict[int, str]:
-    """按 block_id 取叶子块正文，供重排使用（重排要叶子块，不要父块，见 rerank.py）。"""
+def _leaf_contents(
+    conn: psycopg.Connection, block_ids: list[int], *, rich: bool = False
+) -> dict[int, str]:
+    """按 block_id 取叶子块文本，供重排使用（重排要叶子块，不要父块，见 rerank.py）。
+
+    `rich=False`：裸 content（默认，行为不变）。
+    `rich=True`：与嵌入输入同一个拼法（标题 + 章节路径 + 描述 + 正文，截断同嵌入），
+    让重排模型也能看到期别、报告类型和表格描述。
+    """
     if not block_ids:
         return {}
-    rows = conn.execute(
-        "SELECT block_id, content FROM asof.doc_block WHERE block_id = ANY(%s)",
+    if not rich:
+        rows = conn.execute(
+            "SELECT block_id, content FROM asof.doc_block WHERE block_id = ANY(%s)",
+            (block_ids,),
+        ).fetchall()
+        return {int(r[0]): str(r[1]) for r in rows}
+    rich_rows = conn.execute(
+        "SELECT b.block_id, d.title, b.section_path, b.content_desc, b.content"
+        "  FROM asof.doc_block b LEFT JOIN asof.document d ON d.doc_id = b.doc_id"
+        " WHERE b.block_id = ANY(%s)",
         (block_ids,),
     ).fetchall()
-    return {int(r[0]): str(r[1]) for r in rows}
+    return {
+        int(r[0]): embedding_input(
+            doc_title=str(r[1] or ""),
+            section_path=str(r[2] or ""),
+            content_desc=str(r[3] or ""),
+            content=str(r[4]),
+        )
+        for r in rich_rows
+    }

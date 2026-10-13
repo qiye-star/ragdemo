@@ -149,3 +149,31 @@ def test_eval_reports_per_engine_by_parse_source(corpus: psycopg.Connection) -> 
     )
     assert set(result.per_engine) == {"local/human"} and result.per_engine["local/human"]["n"] == 1
     assert "per_engine" in result.as_metrics()
+
+
+@pytest.mark.db
+def test_eval_persists_per_question_ranks(corpus: psycopg.Connection) -> None:
+    table = corpus.execute(
+        "SELECT block_id FROM core.doc_block WHERE block_type = 'table' LIMIT 1"
+    ).fetchone()
+    assert table is not None
+    gold = int(table[0])
+    corpus.execute(
+        "INSERT INTO evals.eval_retrieval (question, as_of, gold_block_ids, difficulty, author)"
+        " VALUES ('寒武纪智能计算分部收入是多少？', %s, %s, 'easy', 'auto:test:v1')",
+        (datetime(2024, 12, 31, tzinfo=UTC), [gold]),
+    )
+    corpus.commit()
+    service = RetrievalService(corpus, MockEmbedder(), MockReranker())
+    result = run_retrieval_eval(corpus, service, git_sha="x", config=RetrievalConfig())
+    assert len(result.per_question) == 1
+    pq = result.per_question[0]
+    assert pq["gold"] == [gold]
+    for key in ("bm25_rank", "vec_rank", "fused_rank", "rerank_rank", "final_rank"):
+        assert key in pq
+    assert pq["final_rank"] is None or pq["final_rank"] >= 1
+    assert result.as_metrics()["per_question"] == result.per_question
+    stored = corpus.execute(
+        "SELECT metrics->'per_question' FROM evals.eval_run ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    assert stored is not None and stored[0][0]["gold"] == [gold]

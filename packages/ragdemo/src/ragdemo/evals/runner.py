@@ -10,7 +10,7 @@ import dataclasses
 import math
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -36,6 +36,9 @@ class RetrievalEvalResult:
     latency_p95_ms: float = 0.0
     per_group: dict[str, dict[str, float | int | bool]] = field(default_factory=dict)
     per_engine: dict[str, dict[str, float | int | bool]] = field(default_factory=dict)
+    # 逐题各阶段的 gold 排名（最佳 gold 的名次，None = 不在该阶段候选里）。
+    # 存进 metrics JSON，不需要迁移；事后分析失败题不用再付费重跑。
+    per_question: list[dict[str, Any]] = field(default_factory=list)
 
     def as_metrics(self) -> dict[str, Any]:
         return {
@@ -48,6 +51,7 @@ class RetrievalEvalResult:
             "latency_p95_ms": self.latency_p95_ms,
             "per_group": self.per_group,
             "per_engine": self.per_engine,
+            "per_question": self.per_question,
         }
 
 
@@ -57,6 +61,14 @@ def _percentile(values: list[float], q: float) -> float:
         return 0.0
     ordered = sorted(values)
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+
+
+def _best_rank(order: Sequence[int], gold: set[int]) -> int | None:
+    """gold 中名次最靠前者的名次（从 1 起）；一个都不在则为 None。"""
+    for i, block_id in enumerate(order):
+        if block_id in gold:
+            return i + 1
+    return None
 
 
 def record_eval_run(
@@ -114,9 +126,10 @@ def run_retrieval_eval(
     latencies_ms: list[float] = []
     outcomes: list[CaseOutcome] = []
     engine_outcomes: list[CaseOutcome] = []
+    per_question: list[dict[str, Any]] = []
 
     for (
-        _q_id,
+        q_id,
         question,
         as_of,
         gold,
@@ -135,10 +148,27 @@ def run_retrieval_eval(
                 entity_ids=list(entity_filter) if entity_filter else None,
                 doc_types=list(doc_type_filter) if doc_type_filter else None,
                 config=config,
-            )
+            ),
+            trace=True,
         )
         latencies_ms.append((time.perf_counter() - t0) * 1000)
         ordered10 = [b.block_id for b in top.blocks]
+        tr = top.trace
+        per_question.append(
+            {
+                "q_id": int(q_id),
+                "gold": sorted(gold_set),
+                "bm25_rank": _best_rank([s.block_id for s in tr.bm25], gold_set) if tr else None,
+                "vec_rank": _best_rank([s.block_id for s in tr.vec], gold_set) if tr else None,
+                "fused_rank": _best_rank([s.block_id for s in tr.fused], gold_set) if tr else None,
+                "rerank_rank": (
+                    _best_rank([s.block_id for s in tr.rerank], gold_set)
+                    if tr and tr.rerank_attempted
+                    else None
+                ),
+                "final_rank": _best_rank(ordered10, gold_set),
+            }
+        )
         hits10.append(recall_at_k(ordered10, gold_set, 10))
         mrrs.append(mrr_at_k(ordered10, gold_set, 10))
 
@@ -181,6 +211,7 @@ def run_retrieval_eval(
         latency_p95_ms=_percentile(latencies_ms, 0.95),
         per_group={k: v.as_dict() for k, v in summarize_groups(outcomes).items()},
         per_engine={k: v.as_dict() for k, v in summarize_groups(engine_outcomes).items()},
+        per_question=per_question,
     )
 
     record_eval_run(
