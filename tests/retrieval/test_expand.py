@@ -231,3 +231,39 @@ def test_no_show_raw_table_hides_caption(corpus: psycopg.Connection, as_of_2024:
     )
     assert ev.table_caption is None
     assert ev.table_unit == "万元"
+
+
+def _supersede_all(conn: psycopg.Connection) -> None:
+    conn.execute("UPDATE core.doc_table SET superseded_at = now() WHERE superseded_at IS NULL")
+    conn.commit()
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("text_layer_cells_mismatch", "text_layer_cells_ok"),
+        ("text_layer_cells_ok", "text_layer_cells_mismatch"),
+    ],
+)
+def test_superseded_version_never_shadows_latest(
+    corpus: psycopg.Connection, as_of_2024: datetime, old: str, new: str
+) -> None:
+    """新版继承块过去的 known_at、旧版 superseded_at = now()：历史 as_of 下两版都可见。
+    证据必须取最新版（table_id 最大）；反向（旧 ok -> 新 mismatch）也不能漏。"""
+    insert_test_grid(corpus, verdict=old)  # type: ignore[arg-type]
+    _supersede_all(corpus)
+    bid = insert_test_grid(corpus, verdict=new)  # type: ignore[arg-type]
+    # 物理顺序不能决定结果：更新旧版行（如 embed_input_version 回填）会把它挪到堆的后面。
+    corpus.execute(
+        "UPDATE core.doc_table SET ingest_run_id = ingest_run_id"
+        " WHERE table_id = (SELECT min(table_id) FROM core.doc_table)"
+    )
+    corpus.commit()
+    n_visible = corpus.execute("SELECT count(*) FROM core.doc_table").fetchone()
+    assert n_visible == (2,)
+    for _ in range(3):
+        (ev,) = expand_to_evidence(
+            corpus, [bid], {bid: 1.0}, reranked=False, top_k=10, as_of=as_of_2024
+        )
+        assert ev.table_verdict == new

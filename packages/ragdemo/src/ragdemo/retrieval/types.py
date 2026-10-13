@@ -79,6 +79,8 @@ class EvidenceBlock:
     reranked: bool
     # 表格块的量纲 / 表名 / 校验结论，取自 asof.doc_table（只带出，不参与排序）。
     # 没有网格（或网格在 as_of 时点不可见）时全为 None——不猜。
+    # 仅表级默认单位；逐格单位须用 TableContext.unit_for_cell（row_units / column_units /
+    # 格内行内单位可能不同；currency 为 None 表示未声明，不等于人民币）。
     table_unit: str | None = None
     table_caption: str | None = None
     table_verdict: str | None = None

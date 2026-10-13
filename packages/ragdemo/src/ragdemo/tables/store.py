@@ -83,6 +83,8 @@ _SELECT = """
 SELECT table_id, block_id, doc_id, grid, pages, caption, unit, column_units, row_units, currency,
        statement_kind, verify_verdict, can_show_raw, known_at
   FROM asof.doc_table WHERE block_id = %(block_id)s
+ -- 历史 as_of 下新旧版可能同时可见（新版继承过去的 known_at）：取最新派生，确定性。
+ ORDER BY table_id DESC LIMIT 1
 """
 
 

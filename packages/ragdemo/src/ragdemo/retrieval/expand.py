@@ -28,6 +28,9 @@ import psycopg
 from ragdemo.retrieval.types import EvidenceBlock
 from ragdemo_core.db.session import as_of_session
 
+# 同一块在某 as_of 下可能有多版网格同时可见：重新派生的新版继承块过去的 known_at，
+# 旧版的 superseded_at = now()，二者在中间时点都通过 asof 谓词。取 table_id 最大者
+# （该时点可见的最新一次派生），不依赖物理行序。
 _SQL_BLOCKS = """
 SELECT b.block_id,
        b.parent_block_id,
@@ -44,7 +47,13 @@ SELECT b.block_id,
        t.can_show_raw
   FROM asof.doc_block b
   JOIN asof.document d ON d.doc_id = b.doc_id
-  LEFT JOIN asof.doc_table t ON t.block_id = b.block_id
+  LEFT JOIN LATERAL (
+        SELECT x.unit, x.caption, x.verify_verdict, x.currency, x.can_show_raw
+          FROM asof.doc_table x
+         WHERE x.block_id = b.block_id
+         ORDER BY x.table_id DESC
+         LIMIT 1
+       ) t ON true
  WHERE b.block_id = ANY(%(block_ids)s)
 """
 

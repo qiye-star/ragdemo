@@ -213,3 +213,18 @@ def test_private_block_is_invisible_without_matching_user(
         conn.execute(f'DROP OWNED BY "{reader}"')
         conn.execute(f'DROP USER IF EXISTS "{reader}"')
         conn.commit()
+
+
+@pytest.mark.db
+def test_load_table_picks_latest_when_superseded_version_also_visible(
+    conn: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """旧版 superseded_at = now()、新版继承过去的 known_at：两版同时可见，取 table_id 最大者。"""
+    block_id, _ = _table_block(conn)
+    old_id = insert_table(conn, _record(block_id), ingest_run_id="r1")
+    supersede_table(conn, old_id)
+    new_id = insert_table(conn, _record(block_id), ingest_run_id="r2")
+    conn.commit()
+    assert new_id > old_id
+    got = load_table(conn, block_id, as_of=as_of_2024)
+    assert got is not None and got.table_id == new_id
