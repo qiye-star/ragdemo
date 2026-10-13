@@ -111,3 +111,35 @@ def call_from_dict(d: Mapping[str, Any]) -> TextInCall:
         engine=str(d["engine"]),
         billed_pages=int(d["billed_pages"]),
     )
+
+
+@dataclass(frozen=True)
+class TextInCall:
+    """一次 TextIn 调用（整份或一个连续段）。每次计费调用对应一条 provider_snapshot。"""
+
+    pages: tuple[int, ...]  # 原文档页码，升序、连续
+    json_ref: str | None
+    md_ref: str | None
+    engine: str  # TextIn engine_version：textin:<版本>+<参数指纹>
+    billed_pages: int  # 本次实际计费页数；缓存命中为 0
+
+    def __post_init__(self) -> None:
+        if not self.pages or list(self.pages) != sorted(set(self.pages)) or self.pages[0] < 1:
+            raise ValueError(f"TextInCall.pages 必须是升序、无重复、从 1 起的页码：{self.pages}")
+        if self.billed_pages < 0:
+            raise ValueError(f"计费页数不能为负：{self.billed_pages}")
+
+
+def call_to_dict(c: TextInCall) -> dict[str, object]:
+    return {"pages": list(c.pages), "json_ref": c.json_ref, "md_ref": c.md_ref, "engine": c.engine,
+            "billed_pages": c.billed_pages}
+
+
+def call_from_dict(d: Mapping[str, Any]) -> TextInCall:
+    return TextInCall(
+        pages=tuple(int(p) for p in d["pages"]),
+        json_ref=None if d.get("json_ref") is None else str(d["json_ref"]),
+        md_ref=None if d.get("md_ref") is None else str(d["md_ref"]),
+        engine=str(d["engine"]),
+        billed_pages=int(d["billed_pages"]),
+    )

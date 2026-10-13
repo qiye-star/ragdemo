@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
 from ragdemo.parse.chunker import _absorb_short_tail, chunk_document, split_text
 from ragdemo.parse.config import ChunkConfig
@@ -290,3 +292,47 @@ def test_table_chunk_carries_the_same_attachment_object() -> None:
     assert chunk.table is att
     # table 不进切块指纹
     assert CFG.version == "chunker:v2+65fa339a235ffc93"
+
+
+def test_sources_flow_into_chunks_and_local_figures_are_non_leaf_and_unsplit() -> None:
+    meta = {"image_sha256": "a" * 64, "caption": "图1 营业收入"}
+    blocks = [
+        NormalizedBlock(0, "paragraph", "一、概况", "营业收入 91.2 亿元。", page=1, source="local"),
+        NormalizedBlock(
+            1, "figure", "一、概况", "图1 营业收入", page=1, source="local", figure_meta=meta
+        ),
+        NormalizedBlock(
+            2,
+            "table",
+            "一、概况",
+            "| 项目 | 金额 |\n|---|---|\n| 净利润 | 19.3 |",
+            page=1,
+            source="textin",
+        ),
+    ]
+    chunks = chunk_document(_doc(blocks), CFG)
+    assert [(c.block_type, c.is_leaf, c.source) for c in chunks] == [
+        ("paragraph", True, "local"),
+        ("figure", False, "local"),
+        ("table", True, "textin"),
+    ]
+    assert chunks[1].content == "图1 营业收入" and chunks[1].figure_meta == meta
+
+
+def test_new_fields_are_validated() -> None:
+    with pytest.raises(ValueError, match="figure_meta"):
+        NormalizedBlock(0, "paragraph", "", "x", figure_meta={"a": 1})
+    with pytest.raises(ValueError, match="source"):
+        NormalizedBlock(0, "paragraph", "", "x", source="paddle")  # type: ignore[arg-type]
+
+
+def test_blocks_without_the_new_fields_chunk_exactly_as_before() -> None:
+    blocks = [
+        NormalizedBlock(0, "figure", "s", "图片里的文字 2024", page=1),
+        NormalizedBlock(1, "paragraph", "s", "公司本期营业收入保持稳定增长。", page=1),
+    ]
+    chunks = chunk_document(_doc(blocks), CFG)
+    assert [(c.block_type, c.is_leaf, c.source, c.figure_meta) for c in chunks] == [
+        ("figure", True, None, None),
+        ("paragraph", True, None, None),
+    ]

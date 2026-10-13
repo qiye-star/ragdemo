@@ -501,9 +501,9 @@ class DocumentWriter:
                 " section_path, ordinal, page, bbox, content, content_desc, char_len,"
                 " is_leaf, entity_id, doc_type, publish_at, owner_user, valid_from, known_at,"
                 " source, source_ref, ingest_run_id, can_show_raw, parse_confidence,"
-                " table_html, chunking_version) "
+                " table_html, chunking_version, parse_source, figure_meta) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-                "%s,%s) "
+                "%s,%s,%s,%s) "
                 "RETURNING block_id",
                 (
                     doc_id,
@@ -530,6 +530,8 @@ class DocumentWriter:
                     block_confidence,
                     chunk.table_html,
                     chunking_version,
+                    chunk.source,
+                    Jsonb(dict(chunk.figure_meta)) if chunk.figure_meta is not None else None,
                 ),
             ).fetchone()
             assert row is not None

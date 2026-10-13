@@ -1017,3 +1017,39 @@ def test_blocks_without_grid_write_no_doc_table_rows(writer: DocumentWriter) -> 
     chunks, desc = _prepare(doc)
     result = writer.write_document(doc, chunks, desc)
     assert _table_rows(writer.conn, result.doc_id) == []
+
+
+@pytest.mark.db
+def test_parse_source_and_figure_meta_are_written(writer: DocumentWriter) -> None:
+    doc = _docs()[0]
+    meta = {"image_sha256": "b" * 64, "image_key": "parse/figures/x/y.png"}
+    blocks = [replace(b, source="local") for b in doc.blocks]
+    page = next((b.page for b in blocks if b.page is not None), 1)
+    blocks.append(
+        NormalizedBlock(
+            len(blocks),
+            "figure",
+            blocks[-1].section_path,
+            "[图]",
+            page=page,
+            source="local",
+            figure_meta=meta,
+        )
+    )
+    doc = replace(doc, blocks=blocks)
+    chunks, desc = _prepare(doc)
+    result = writer.write_document(doc, chunks, desc)
+    rows = writer.conn.execute(
+        "SELECT block_type::text, is_leaf, parse_source, figure_meta FROM core.doc_block"
+        " WHERE doc_id = %s ORDER BY ordinal",
+        (result.doc_id,),
+    ).fetchall()
+    assert {r[2] for r in rows} == {"local"}
+    figs = [r for r in rows if r[3] is not None]
+    assert len(figs) == 1 and figs[0][0] == "figure" and figs[0][1] is False and figs[0][3] == meta
+    with pytest.raises(psycopg.errors.CheckViolation):
+        writer.conn.execute(
+            "UPDATE core.doc_block SET figure_meta = '{}'::jsonb"
+            " WHERE doc_id = %s AND block_type = 'paragraph'",
+            (result.doc_id,),
+        )

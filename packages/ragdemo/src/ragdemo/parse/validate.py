@@ -57,7 +57,7 @@ def validate_chunks(
         has_children = bool(children.get(chunk.ordinal))
         if chunk.is_leaf and has_children:
             violations.append(f"{where}: is_leaf=true 但有子块")
-        if not chunk.is_leaf and not has_children:
+        if not chunk.is_leaf and not has_children and chunk.figure_meta is None:
             violations.append(f"{where}: is_leaf=false 但没有子块")
 
     return violations

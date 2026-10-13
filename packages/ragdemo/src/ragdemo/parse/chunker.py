@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from ragdemo.adapters.announcements import NormalizedBlock, NormalizedDocument
@@ -33,6 +34,9 @@ class Chunk:
     table_html: str | None = None
     # 表格块的网格附件，原样从 NormalizedBlock.table 带过来；不进切块指纹。
     table: TableAttachment | None = None
+    # 解析来源：local / textin / mixed（父块）/ None；figure_meta 仅 L0 页图块。
+    source: str | None = None
+    figure_meta: Mapping[str, object] | None = None
 
 
 def _last_sentence_boundary(text: str, lo: int, hi: int) -> int | None:
@@ -191,6 +195,24 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
         _merge_short_paragraphs(list(doc.blocks), cfg) if cfg.merge_short_paragraphs else doc.blocks
     )
     for block in blocks:
+        if block.block_type == "figure" and block.figure_meta is not None:
+            # L0 页图块：只存图与元数据，非叶子、不嵌入、不检索、不切分、不加小节前缀
+            chunks.append(
+                Chunk(
+                    ordinal=ordinal,
+                    block_type="figure",
+                    section_path=block.section_path,
+                    content=block.content,
+                    page=block.page,
+                    bbox=block.bbox,
+                    is_leaf=False,
+                    source=block.source,
+                    figure_meta=block.figure_meta,
+                )
+            )
+            ordinal += 1
+            continue
+
         if cfg.drop_boilerplate and block.block_type != "table" and is_boilerplate(block.content):
             continue
 
@@ -209,6 +231,7 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
                     is_leaf=True,
                     table_html=block.table_html,
                     table=block.table,
+                    source=block.source,
                 )
             )
             ordinal += 1
@@ -224,6 +247,7 @@ def chunk_document(doc: NormalizedDocument, cfg: ChunkConfig) -> list[Chunk]:
                     page=block.page,
                     bbox=block.bbox,
                     is_leaf=True,
+                    source=block.source,
                 )
             )
             ordinal += 1

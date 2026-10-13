@@ -34,9 +34,15 @@ is_leaf 必须是显式的列：表格块既是父块也是叶子块，用「有
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ragdemo.parse.chunker import Chunk
 
 _TABLE = "table"
+
+
+def _is_local_figure(c: Chunk) -> bool:
+    return c.figure_meta is not None
 
 
 def build_tree(leaves: list[Chunk]) -> list[Chunk]:
@@ -53,7 +59,7 @@ def build_tree(leaves: list[Chunk]) -> list[Chunk]:
     section_order: list[str] = []
     by_section: dict[str, list[Chunk]] = {}
     for leaf in leaves:
-        if leaf.block_type == _TABLE:
+        if leaf.block_type == _TABLE or _is_local_figure(leaf):
             continue
         if leaf.section_path not in by_section:
             by_section[leaf.section_path] = []
@@ -68,7 +74,10 @@ def build_tree(leaves: list[Chunk]) -> list[Chunk]:
 
     next_ordinal = len(section_order)
     for leaf in leaves:
-        if leaf.block_type == _TABLE:
+        if _is_local_figure(leaf):
+            # L0 页图块：不聚合、无父块、非叶子（不嵌入不检索）
+            out.append(_with_ordinal(leaf, next_ordinal, parent=None, is_leaf=False))
+        elif leaf.block_type == _TABLE:
             out.append(_with_ordinal(leaf, next_ordinal, parent=None, is_leaf=True))
         else:
             parent = parent_ordinal_of[leaf.section_path]
@@ -90,6 +99,8 @@ def _make_parent(members: list[Chunk], ordinal: int) -> Chunk:
     section = members[0].section_path
     content = "\n".join(_strip_section_prefix(m.content, section) for m in members)
     pages = [m.page for m in members if m.page is not None]
+    sources = {m.source for m in members}
+    source = next(iter(sources)) if len(sources) == 1 else "mixed"
     return Chunk(
         ordinal=ordinal,
         block_type="paragraph",
@@ -99,6 +110,7 @@ def _make_parent(members: list[Chunk], ordinal: int) -> Chunk:
         bbox=None,
         is_leaf=False,
         parent_ordinal=None,
+        source=source,
     )
 
 
@@ -110,15 +122,4 @@ def _strip_section_prefix(content: str, section: str) -> str:
 
 
 def _with_ordinal(chunk: Chunk, ordinal: int, *, parent: int | None, is_leaf: bool) -> Chunk:
-    return Chunk(
-        ordinal=ordinal,
-        block_type=chunk.block_type,
-        section_path=chunk.section_path,
-        content=chunk.content,
-        page=chunk.page,
-        bbox=chunk.bbox,
-        is_leaf=is_leaf,
-        parent_ordinal=parent,
-        table_html=chunk.table_html,
-        table=chunk.table,
-    )
+    return replace(chunk, ordinal=ordinal, is_leaf=is_leaf, parent_ordinal=parent)

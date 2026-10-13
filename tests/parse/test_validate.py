@@ -99,3 +99,12 @@ def test_all_violations_are_reported_not_just_the_first() -> None:
     """一次看到全部问题，避免修一个跑一次。"""
     chunks = [_chunk(ordinal=3, content="  ", page=99)]
     assert len(validate_chunks(_doc(page_count=5), chunks)) >= 3
+
+
+def test_a_local_figure_may_be_non_leaf_without_children() -> None:
+    fig = _chunk(
+        ordinal=0, block_type="figure", content="[图]", is_leaf=False, figure_meta={"k": 1}
+    )
+    assert validate_chunks(_doc(), [fig]) == []
+    orphan = _chunk(ordinal=0, block_type="paragraph", content="甲", is_leaf=False)
+    assert any("没有子块" in v for v in validate_chunks(_doc(), [orphan]))

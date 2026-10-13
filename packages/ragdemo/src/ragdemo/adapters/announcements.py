@@ -7,15 +7,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from ragdemo.adapters.base import FetchContext, RawResponse, require_aware
 from ragdemo.tables.grid import TableAttachment
 
 BLOCK_TYPES = frozenset({"paragraph", "table", "figure", "title"})
+BlockSource = Literal["local", "textin"]
+_BLOCK_SOURCES = frozenset({"local", "textin"})
 
 
 @dataclass(frozen=True)
@@ -33,12 +35,21 @@ class NormalizedBlock:
     table_html: str | None = None
     # 表格块的引擎无关网格（T5）；与 table_html 并存，不影响 content。
     table: TableAttachment | None = None
+    # 正文由谁解析（L0 + TextIn 分页接入计划）：local = L0 确定性排版，textin = TextIn；
+    # None = 存量 / 未经分页路由的整份解析。只用于评测分组与审计。
+    source: BlockSource | None = None
+    # 仅 figure 块：L0 页图表图片元数据（parse/figures.py::figure_to_dict）。
+    figure_meta: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.block_type not in BLOCK_TYPES:
             raise ValueError(f"未知 block_type: {self.block_type!r}")
         if not self.content.strip():
             raise ValueError(f"第 {self.ordinal} 块内容为空")
+        if self.source is not None and self.source not in _BLOCK_SOURCES:
+            raise ValueError(f"未知 source: {self.source!r}")
+        if self.figure_meta is not None and self.block_type != "figure":
+            raise ValueError("figure_meta 只允许出现在 figure 块上")
 
 
 @dataclass(frozen=True)

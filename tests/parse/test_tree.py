@@ -237,3 +237,20 @@ def test_table_attachment_survives_build_tree() -> None:
     leaf = replace(_leaf(0, "第一节", "| a |", block_type="table"), table=att)
     (table,) = [c for c in build_tree([leaf]) if c.block_type == "table"]
     assert table.table is att
+
+
+def test_local_figures_stay_outside_parents_and_parents_carry_a_common_or_mixed_source() -> None:
+    a = Chunk(0, "paragraph", "一、概况", "一、概况\n甲", 1, None, True, source="local")
+    f = Chunk(1, "figure", "一、概况", "[图]", 1, None, False, source="local", figure_meta={"k": 1})
+    b = Chunk(2, "paragraph", "一、概况", "一、概况\n乙", 2, None, True, source="textin")
+    c = Chunk(3, "paragraph", "二、财务", "二、财务\n丙", 3, None, True, source="local")
+    tree = build_tree([a, f, b, c])
+    parents = [x for x in tree if not x.is_leaf and x.figure_meta is None]
+    assert [(p.section_path, p.source) for p in parents] == [
+        ("一、概况", "mixed"),
+        ("二、财务", "local"),
+    ]
+    fig = next(x for x in tree if x.figure_meta is not None)
+    assert (fig.is_leaf, fig.parent_ordinal) == (False, None)
+    assert "[图]" not in parents[0].content
+    assert [x.ordinal for x in tree] == list(range(len(tree)))
