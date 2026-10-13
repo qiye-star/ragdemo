@@ -55,14 +55,29 @@ class LabeledCase:
 
 
 def export_label_sheet(
-    conn: psycopg.Connection, path: Path, *, n: int, seed: int = DEFAULT_SEED
+    conn: psycopg.Connection,
+    path: Path,
+    *,
+    n: int,
+    seed: int = DEFAULT_SEED,
+    parse_source: str | None = None,
 ) -> int:
     used = {
         int(b)
         for (arr,) in conn.execute("SELECT gold_block_ids FROM evals.eval_retrieval")
         for b in arr
     }
-    pool = sample_candidates(conn, n=n * 2, seed=seed)
+    pool = sample_candidates(conn, n=n * 2 if parse_source is None else n * 8, seed=seed)
+    if parse_source is not None:
+        sources = {
+            int(r[0]): r[1]
+            for r in conn.execute(
+                "SELECT block_id, parse_source FROM core.doc_block WHERE block_id = ANY(%s)",
+                ([c.block_id for c in pool],),
+            )
+        }
+        want = None if parse_source == "legacy" else parse_source
+        pool = [c for c in pool if sources.get(c.block_id) == want]
     candidates = [c for c in pool if c.block_id not in used][:n]
     texts = {
         int(r[0]): (str(r[1]), str(r[2]))

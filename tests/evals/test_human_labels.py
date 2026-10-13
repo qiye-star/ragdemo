@@ -100,3 +100,23 @@ def test_duplicate_questions_and_an_empty_sheet_are_rejected(
     )
     with pytest.raises(LabelSheetError, match="问题重复"):
         parse_label_sheet(corpus, path)
+
+
+@pytest.mark.db
+def test_sheet_can_be_restricted_to_one_parse_source(
+    corpus: psycopg.Connection, tmp_path: Path
+) -> None:
+    leaf = corpus.execute(
+        "SELECT block_id FROM core.doc_block WHERE is_leaf AND block_type = 'paragraph'"
+        " ORDER BY block_id LIMIT 1"
+    ).fetchone()
+    assert leaf is not None
+    corpus.execute(
+        "UPDATE core.doc_block SET parse_source = 'local' WHERE block_id = %s", (int(leaf[0]),)
+    )
+    corpus.commit()
+    path = tmp_path / "local.csv"
+    n = export_label_sheet(corpus, path, n=5, parse_source="local")
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        ids = {int(r["block_id"]) for r in csv.DictReader(fh)}
+    assert n == len(ids) and ids <= {int(leaf[0])}

@@ -18,7 +18,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from ragdemo.evals.grouping import CaseOutcome, case_group, summarize_groups
+from ragdemo.evals.grouping import CaseOutcome, case_group, engine_group, summarize_groups
 from ragdemo.evals.retrieval_metrics import mrr_at_k, recall_at_k
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig, RetrievalRequest
@@ -35,6 +35,7 @@ class RetrievalEvalResult:
     latency_p50_ms: float = 0.0
     latency_p95_ms: float = 0.0
     per_group: dict[str, dict[str, float | int | bool]] = field(default_factory=dict)
+    per_engine: dict[str, dict[str, float | int | bool]] = field(default_factory=dict)
 
     def as_metrics(self) -> dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class RetrievalEvalResult:
             "latency_p50_ms": self.latency_p50_ms,
             "latency_p95_ms": self.latency_p95_ms,
             "per_group": self.per_group,
+            "per_engine": self.per_engine,
         }
 
 
@@ -96,13 +98,13 @@ def run_retrieval_eval(
         raise ValueError("评测集为空；空集会算出满分，让 CI 门禁形同虚设")
 
     all_gold = sorted({int(g) for case in cases for g in case[3]})
-    gold_types = {
-        int(r[0]): str(r[1])
-        for r in conn.execute(
-            "SELECT block_id, block_type::text FROM core.doc_block WHERE block_id = ANY(%s)",
-            (all_gold,),
-        ).fetchall()
-    }
+    gold_rows = conn.execute(
+        "SELECT block_id, block_type::text, parse_source FROM core.doc_block"
+        " WHERE block_id = ANY(%s)",
+        (all_gold,),
+    ).fetchall()
+    gold_types = {int(r[0]): str(r[1]) for r in gold_rows}
+    gold_sources: dict[int, str | None] = {int(r[0]): r[2] for r in gold_rows}
 
     wide = dataclasses.replace(config, top_k=min(config.fusion_k, 50), rerank_enabled=False)
     hits10: list[float] = []
@@ -111,6 +113,7 @@ def run_retrieval_eval(
     by_difficulty: dict[str, list[float]] = {}
     latencies_ms: list[float] = []
     outcomes: list[CaseOutcome] = []
+    engine_outcomes: list[CaseOutcome] = []
 
     for (
         _q_id,
@@ -158,6 +161,14 @@ def run_retrieval_eval(
                 mrrs[-1],
             )
         )
+        engine_outcomes.append(
+            CaseOutcome(
+                engine_group({gold_sources.get(g) for g in gold_set}, author=str(author)),
+                hits10[-1],
+                hits50[-1],
+                mrrs[-1],
+            )
+        )
         by_difficulty.setdefault(str(difficulty or "unknown"), []).append(hits10[-1])
 
     result = RetrievalEvalResult(
@@ -169,6 +180,7 @@ def run_retrieval_eval(
         latency_p50_ms=_percentile(latencies_ms, 0.50),
         latency_p95_ms=_percentile(latencies_ms, 0.95),
         per_group={k: v.as_dict() for k, v in summarize_groups(outcomes).items()},
+        per_engine={k: v.as_dict() for k, v in summarize_groups(engine_outcomes).items()},
     )
 
     record_eval_run(

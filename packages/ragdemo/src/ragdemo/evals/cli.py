@@ -30,7 +30,7 @@ from ragdemo.evals.sampler import (
     sample_candidates,
     write_candidates_csv,
 )
-from ragdemo.evals.table_gate import GateIncomparable, judge
+from ragdemo.evals.table_gate import GateIncomparable, judge, judge_engines
 from ragdemo.retrieval.models import build_models
 from ragdemo.retrieval.rewrite import load_synonyms
 from ragdemo.retrieval.service import RetrievalService
@@ -264,7 +264,15 @@ def run(
 @eval_group.command("table-gate")
 @click.option("--before", "before_id", required=True, help="上一步已接受状态的 eval_run.run_id")
 @click.option("--after", "after_id", required=True, help="本次改动的 eval_run.run_id")
-def table_gate(before_id: str, after_id: str) -> None:
+@click.option(
+    "--by",
+    "by",
+    type=click.Choice(["case", "engine"]),
+    default="case",
+    show_default=True,
+    help="case = gold 类型 x 出题方式（表格计划）；engine = 解析来源 x 出题方式（T11）",
+)
+def table_gate(before_id: str, after_id: str, by: str) -> None:
     """按计划写死的表格专项门槛比较两次运行（输出整段贴进 PR）。"""
     with psycopg.connect(_dsn()) as conn:
         rows = {
@@ -279,9 +287,11 @@ def table_gate(before_id: str, after_id: str) -> None:
         raise click.ClickException(f"找不到运行：{sorted(missing)}")
     b, a = rows[before_id], rows[after_id]
     try:
-        res = judge(
-            b.get("per_group", {}),
-            a.get("per_group", {}),
+        judge_fn = judge_engines if by == "engine" else judge
+        key = "per_engine" if by == "engine" else "per_group"
+        res = judge_fn(
+            b.get(key, {}),
+            a.get(key, {}),
             overall_before=float(b["recall_at_10"]),
             overall_after=float(a["recall_at_10"]),
         )
@@ -421,12 +431,18 @@ def generate(n: int, seed: int, replace_auto: bool, yes: bool) -> None:
 @click.option("--out", "out", required=True, type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--n", "n", type=int, default=120, show_default=True, help="导出多少个候选段落")
 @click.option("--seed", type=int, default=DEFAULT_SEED, show_default=True)
-def label_sheet(out: Path, n: int, seed: int) -> None:
+@click.option(
+    "--parse-source",
+    type=click.Choice(["local", "textin", "legacy"]),
+    default=None,
+    help="只导出某一解析来源的段落（L0 页 / TextIn 页 / 存量）",
+)
+def label_sheet(out: Path, n: int, seed: int, parse_source: str | None) -> None:
     """导出人工标注表（段落 + 空的 question 列）；默认排除已有用例用过的源块。"""
     from ragdemo.evals.human_labels import export_label_sheet
 
     with psycopg.connect(_dsn()) as conn:
-        count = export_label_sheet(conn, out, n=n, seed=seed)
+        count = export_label_sheet(conn, out, n=n, seed=seed, parse_source=parse_source)
     click.echo(f"已导出 {count} 个段落到 {out}；填好 question / difficulty 后用 label-import 导入")
 
 

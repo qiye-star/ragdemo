@@ -5,6 +5,7 @@ from ragdemo.evals.grouping import (
     CaseOutcome,
     GroupMetrics,
     case_group,
+    engine_group,
     summarize_groups,
 )
 
@@ -40,3 +41,10 @@ def test_as_dict_is_json_ready() -> None:
         "mrr_at_10": 0.4,
         "gated": True,
     }
+
+
+def test_engine_group_labels_by_parse_source_and_origin() -> None:
+    assert engine_group({"local"}, author="human:zs") == "local/human"
+    assert engine_group({None}, author="auto:m:v") == "legacy/auto"
+    assert engine_group({"local", "textin"}, author="human:zs") == "mixed/human"
+    assert engine_group(set(), author="human:zs") == "unknown/human"

@@ -125,3 +125,27 @@ def test_eval_reports_per_group_with_table_gold(corpus: psycopg.Connection) -> N
     assert set(result.per_group) == {"table/auto"}
     assert result.per_group["table/auto"]["n"] == 1
     assert "per_group" in result.as_metrics()
+
+
+@pytest.mark.db
+def test_eval_reports_per_engine_by_parse_source(corpus: psycopg.Connection) -> None:
+    leaf = corpus.execute(
+        "SELECT block_id FROM core.doc_block WHERE is_leaf AND block_type = 'paragraph'"
+        " ORDER BY block_id LIMIT 1"
+    ).fetchone()
+    assert leaf is not None
+    corpus.execute(
+        "UPDATE core.doc_block SET parse_source = 'local' WHERE block_id = %s", (int(leaf[0]),)
+    )
+    corpus.execute(
+        "INSERT INTO evals.eval_retrieval (question, as_of, gold_block_ids, difficulty, author)"
+        " VALUES ('寒武纪的主营业务是什么？', %s, %s, 'easy', 'human:t')",
+        (datetime(2024, 12, 31, tzinfo=UTC), [int(leaf[0])]),
+    )
+    corpus.commit()
+    service = RetrievalService(corpus, MockEmbedder(), MockReranker())
+    result = run_retrieval_eval(
+        corpus, service, git_sha="x", config=RetrievalConfig(), author_prefix="human:"
+    )
+    assert set(result.per_engine) == {"local/human"} and result.per_engine["local/human"]["n"] == 1
+    assert "per_engine" in result.as_metrics()

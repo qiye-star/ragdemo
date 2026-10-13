@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ragdemo.evals.table_gate import GATES, GateIncomparable, judge
+from ragdemo.evals.table_gate import GATES, GateIncomparable, judge, judge_engines
 
 
 def _m(n: int, r10: float, mrr: float) -> dict[str, float | int | bool]:
@@ -52,3 +52,41 @@ def test_small_groups_are_reported_not_gated() -> None:
     res = judge(before, after, overall_before=0.77, overall_after=0.77)
     assert res.passed
     assert any("other/human" in line and "不判门槛" in line for line in res.report)
+
+
+def test_engine_gate_legacy_baseline_equals_itself_and_new_groups_are_reported() -> None:
+    before = {"legacy/auto": _m(100, 0.77, 0.60)}
+    after = {
+        "legacy/auto": _m(100, 0.77, 0.60),
+        "local/human": _m(12, 0.5, 0.3),
+    }
+    res = judge_engines(before, after, overall_before=0.77, overall_after=0.77)
+    assert res.passed and any("local/human" in line for line in res.report)
+
+
+def test_engine_gate_changed_legacy_n_is_incomparable() -> None:
+    with pytest.raises(GateIncomparable):
+        judge_engines(
+            {"legacy/auto": _m(100, 0.7, 0.6)},
+            {"legacy/auto": _m(99, 0.7, 0.6)},
+            overall_before=0.7,
+            overall_after=0.7,
+        )
+
+
+def test_engine_gate_overall_tolerance_reused() -> None:
+    g = {"legacy/auto": _m(100, 0.8, 0.6)}
+    res = judge_engines(g, g, overall_before=0.80, overall_after=0.77)
+    assert not res.passed and any("总体" in r for r in res.reasons)
+
+
+def test_engine_gate_e2_local_human_vs_textin_human() -> None:
+    base = {"legacy/auto": _m(100, 0.7, 0.6)}
+    bad = {**base, "local/human": _m(30, 0.60, 0.3), "textin/human": _m(30, 0.70, 0.3)}
+    res = judge_engines(base, bad, overall_before=0.7, overall_after=0.7)
+    assert not res.passed and any("E2" in r for r in res.reasons)
+    ok = {**base, "local/human": _m(30, 0.66, 0.3), "textin/human": _m(30, 0.70, 0.3)}
+    assert judge_engines(base, ok, overall_before=0.7, overall_after=0.7).passed
+    thin = {**base, "local/human": _m(29, 0.0, 0.0), "textin/human": _m(30, 0.70, 0.3)}
+    res = judge_engines(base, thin, overall_before=0.7, overall_after=0.7)
+    assert res.passed and any("证据不足" in line for line in res.report)

@@ -19,6 +19,17 @@ def case_group(gold_types: Collection[str], *, author: str) -> str:
     return f"{kind}/{origin}"
 
 
+def engine_group(sources: Collection[str | None], *, author: str) -> str:
+    """gold 块的解析来源 × 出题方式（L0 + TextIn 分页接入计划 T11）。
+
+    NULL = legacy（迁移 033 之前的整份 TextIn）。
+    """
+    kinds = {s or "legacy" for s in sources}
+    kind = "unknown" if not kinds else (next(iter(kinds)) if len(kinds) == 1 else "mixed")
+    origin = "auto" if author.startswith("auto:") else "human"
+    return f"{kind}/{origin}"
+
+
 @dataclass(frozen=True)
 class CaseOutcome:
     group: str
