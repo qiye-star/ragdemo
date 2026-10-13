@@ -10,8 +10,8 @@ B 是其页第一个块；列数相等；两者都不是 L3（TextIn 已 apply_m
 from __future__ import annotations
 
 from collections.abc import Sequence
-from itertools import pairwise
 from dataclasses import dataclass
+from itertools import pairwise
 
 from ragdemo.tables.headers import is_value_text
 
