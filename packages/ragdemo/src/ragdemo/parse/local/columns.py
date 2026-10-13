@@ -18,7 +18,7 @@ from ragdemo.parse.local.tables import cluster_rows, find_table_regions
 # 空白带左缘 >= 页宽 * 下限、右缘 <= 页宽 * 上限（排除页边的右对齐日期 / 页码）
 GUTTER_ZONE = (0.15, 0.85)
 MIN_GUTTER_EM = 1.5  # 空白带宽度 >= 此值 * 正文字号
-MIN_SIDE_ROWS = 3  # 空白带两侧各至少这么多行
+MIN_SIDE_ROWS = 4  # 空白带两侧各至少这么多行（调参第 1 轮：3 -> 4）
 X_STEP = 2.0  # 横向扫描步长（pt）
 VERTICAL_MIN_CHARS = 3  # 竖排单字列：同一 x 上至少连续这么多个孤立单字
 VERTICAL_X_TOL = 2.0
@@ -56,8 +56,12 @@ def _row_side(row: Sequence[Word], x: float) -> tuple[bool, bool, bool]:
     )
 
 
-def _mid(row: Sequence[Word]) -> float:
-    return sum(w.mid_y for w in row) / len(row)
+def _extent(rows: Sequence[Sequence[Word]]) -> tuple[float, float]:
+    return min(w.top for r in rows for w in r), max(w.bottom for r in rows for w in r)
+
+
+def _touches(row: Sequence[Word], y0: float, y1: float) -> bool:
+    return min(w.top for w in row) <= y1 and max(w.bottom for w in row) >= y0
 
 
 def _gutter_at(
@@ -79,16 +83,17 @@ def _gutter_at(
             right_rows.append(row)
     if len(left_rows) < MIN_SIDE_ROWS or len(right_rows) < MIN_SIDE_ROWS:
         return None
-    left_mids = [_mid(r) for r in left_rows]
-    right_mids = [_mid(r) for r in right_rows]
-    y0, y1 = max(min(left_mids), min(right_mids)), min(max(left_mids), max(right_mids))
+    # 重叠区间按行的纵向范围（top..bottom）算，不按行中点：两栏基线错位半行时，按中点会各丢一行
+    ltop, lbot = _extent(left_rows)
+    rtop, rbot = _extent(right_rows)
+    y0, y1 = max(ltop, rtop), min(lbot, rbot)
     if y0 > y1:
         return None
-    in_left = [r for r, m in zip(left_rows, left_mids, strict=True) if y0 <= m <= y1]
-    in_right = [r for r, m in zip(right_rows, right_mids, strict=True) if y0 <= m <= y1]
+    in_left = [r for r in left_rows if _touches(r, y0, y1)]
+    in_right = [r for r in right_rows if _touches(r, y0, y1)]
     if len(in_left) < MIN_SIDE_ROWS or len(in_right) < MIN_SIDE_ROWS:
         return None
-    n_banner = sum(y0 <= _mid(r) <= y1 for r in banners)
+    n_banner = sum(_touches(r, y0, y1) for r in banners)
     n_side = len({id(r) for r in (*in_left, *in_right)})
     if n_banner > MAX_BANNER_SHARE * (n_banner + n_side):
         return None

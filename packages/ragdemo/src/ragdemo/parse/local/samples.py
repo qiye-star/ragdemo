@@ -22,8 +22,8 @@ SampleSet = Literal["tune", "holdout"]
 
 def require_tune_set(name: str) -> SampleSet:
     """调参类命令只许碰调参集：留出集只在 T6 的锁定运行器里跑一次。"""
-    if name == "holdout":
-        raise ValueError("留出集只由 T6 的锁定运行器运行，调参类命令不得读取留出集")
+    if name.startswith("holdout"):  # holdout / holdout2 一律拒绝
+        raise ValueError("留出集只由 T6 的锁定运行器运行，调参类命令不得读取留出集（含 holdout2）")
     if name != "tune":
         raise ValueError(f"未知样本集：{name!r}")
     return "tune"

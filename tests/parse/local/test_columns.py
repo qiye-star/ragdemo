@@ -192,10 +192,10 @@ def test_a_signature_below_the_body_is_not_a_gutter() -> None:
     assert not detect_columns(_rows(page(*wide, *closing, *signature)), W, 10.0).multicolumn
 
 
-def test_a_three_line_sidebar_beside_the_body_is_a_gutter() -> None:
+def test_a_min_side_rows_line_sidebar_beside_the_body_is_a_gutter() -> None:
     body = [line("正文" * 15, 100 + i * LEAD, cjk=True) for i in range(10)]  # 60–360
     wide = [line("正文" * 40, 240 + i * LEAD, cjk=True) for i in range(4)]
-    side = _short(3, 100 + 2 * LEAD, 420)
+    side = _short(columns.MIN_SIDE_ROWS, 100 + 2 * LEAD, 420)
     v = detect_columns(_rows(page(*body, *side, *wide)), W, 10.0)
     assert v.multicolumn and v.reason == REASON_GUTTER
 
@@ -221,8 +221,8 @@ def test_two_columns_with_offset_baselines_are_a_gutter() -> None:
     assert detect_columns(_rows(page(*left, *right)), W, 10.0).multicolumn
 
 
-def test_key_value_rows_count_for_both_sides_so_three_of_them_are_flagged_and_two_are_not() -> None:
-    # 行内两段（标签 + 值）的行同时算左右两侧各一行：3 行即成栏（保守：交给上层降级）
+def test_key_value_rows_count_for_both_sides_so_min_side_rows_of_them_are_flagged() -> None:
+    # 行内两段（标签 + 值）的行同时算左右两侧各一行：MIN_SIDE_ROWS 行即成栏（保守：交给上层降级）
     def kv(n: int) -> list[list[Word]]:
         return [
             line("项目名称", 100 + i * LEAD, x=60, cjk=True)
@@ -230,8 +230,9 @@ def test_key_value_rows_count_for_both_sides_so_three_of_them_are_flagged_and_tw
             for i in range(n)
         ]
 
-    assert detect_columns(_rows(page(*kv(3))), W, 10.0).multicolumn
-    assert not detect_columns(_rows(page(*kv(2))), W, 10.0).multicolumn
+    n = columns.MIN_SIDE_ROWS
+    assert detect_columns(_rows(page(*kv(n))), W, 10.0).multicolumn
+    assert not detect_columns(_rows(page(*kv(n - 1))), W, 10.0).multicolumn
 
 
 # ---- A4：边界 ----
@@ -255,7 +256,7 @@ def test_the_gutter_width_boundary_is_inclusive_at_the_constant(
 
 
 def test_two_side_rows_are_not_enough_three_are(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 3)
+    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 3)  # 取范围内的值，不随调参漂移
     assert not detect_columns(_rows(page(*_two_col_gap(30.0, rows=2))), W, 10.0).multicolumn
     assert detect_columns(_rows(page(*_two_col_gap(30.0, rows=3))), W, 10.0).multicolumn
 
@@ -286,3 +287,15 @@ def test_a_gutter_whose_right_edge_is_beyond_the_zone_upper_bound_is_not_a_gutte
 
     assert detect_columns(_rows(page(*cols(hi))), W, 10.0).multicolumn
     assert not detect_columns(_rows(page(*cols(hi + 10))), W, 10.0).multicolumn
+
+
+def test_four_rows_per_side_with_half_a_row_baseline_offset_are_all_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 重叠区间按行范围而不是行中点算：偏移 7pt 的两栏各 4 行，不能被裁成各 3 行
+    monkeypatch.setattr(columns, "MIN_SIDE_ROWS", 4)
+    left = [line("左栏文字内容", 100 + i * LEAD, x=60, cjk=True) for i in range(4)]
+    right = [line("右栏文字内容", 107 + i * LEAD, x=330, cjk=True) for i in range(4)]
+    v = detect_columns(_rows(page(*left, *right)), W, 10.0)
+    assert v.multicolumn and v.gutter is not None
+    assert (v.gutter.left_rows, v.gutter.right_rows) == (4, 4)

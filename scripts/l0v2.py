@@ -8,6 +8,7 @@ uv run --no-sync python scripts/l0v2.py split            # 生成拆分清单（
 uv run --no-sync python scripts/l0v2.py fixtures         # 生成脱敏版面夹具
 uv run --no-sync python scripts/l0v2.py multicol-sheet   # 渲染页图 + 多栏标注表模板
 uv run --no-sync python scripts/l0v2.py headings --set tune   # 调参集标题指标（拒绝 holdout）
+uv run --no-sync python scripts/l0v2.py multicol-eval --set tune   # 调参集多栏混淆表（拒绝留出集）
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import pdfplumber
 import psycopg
 
 from ragdemo.config import load_config
+from ragdemo.parse.local.columns import REASON_GUTTER, REASON_VERTICAL, page_columns
 from ragdemo.parse.local.compare import (
     HeadingMatchV2,
     heading_matches_v2,
@@ -32,8 +34,13 @@ from ragdemo.parse.local.compare import (
     wilson_interval,
 )
 from ragdemo.parse.local.decor import strip_decor
-from ragdemo.parse.local.layout import extract_pages
-from ragdemo.parse.local.pipeline import parse_pages_deterministic
+from ragdemo.parse.local.l0_eval import EvalRow, aggregate_multicol, format_report, parse_labels
+from ragdemo.parse.local.layout import PageLayout, extract_pages
+from ragdemo.parse.local.pipeline import (
+    PageResult,
+    parse_layouts_deterministic,
+    parse_pages_deterministic,
+)
 from ragdemo.parse.local.samples import (
     FORCED_TUNE,
     SampleDoc,
@@ -45,6 +52,7 @@ from ragdemo.parse.local.samples import (
     split_samples,
     write_split,
 )
+from ragdemo.parse.local.typeset import body_font_size
 from ragdemo.parse.textin import blocks_from_detail
 from ragdemo_core.blob import LocalBlobStore
 
@@ -184,6 +192,70 @@ def cmd_headings(set_name: str) -> None:
     )
 
 
+def _is_column_flag(res: PageResult) -> bool:
+    """流水线把这一页判为多栏退回（与 pipeline 一致：看 layout_unsupported + 多栏原因）。"""
+    return res.status == "layout_unsupported" and res.reason in (REASON_GUTTER, REASON_VERTICAL)
+
+
+def cmd_multicol_eval(set_name: str) -> None:
+    """调参集多栏检测评估：对标注页跑与流水线完全相同的整页判定（含竖排单字检查）。
+    unsure 不进比率；留出集一律拒绝。另报调参集公告页 layout_unsupported 占比（G11 类比）。"""
+    sample_set = require_tune_set(set_name)
+    split = read_split(SPLIT_PATH)
+    tune_keys = {(r.doc.group, r.doc.key) for r in split if r.sample_set == sample_set}
+    labels = [
+        r
+        for r in parse_labels(LABELS_PATH.read_text(encoding="utf-8"))
+        if r.sample_set == sample_set and (r.group, r.key) in tune_keys
+    ]
+    blob = LocalBlobStore(load_config().blob_root)
+    docs = _db_docs()
+    files = _research_files()
+    results: dict[tuple[str, str], dict[int, PageResult]] = {}
+    layouts: dict[tuple[str, str], dict[int, PageLayout]] = {}
+
+    def run(group: str, key: str) -> dict[int, PageResult]:
+        if (group, key) not in results:
+            pdf = _pdf_bytes(group, key, docs, blob, files)
+            pages = extract_pages(pdf)
+            results[(group, key)] = {r.page: r for r in parse_layouts_deterministic(pages)}
+            stripped = [s.layout for s in strip_decor(pages)]
+            layouts[(group, key)] = {lay.page: lay for lay in stripped}
+        return results[(group, key)]
+
+    def detected(group: str, key: str, page: int) -> bool:
+        res = run(group, key)[page]
+        if _is_column_flag(res):
+            return True
+        if res.status in ("layout_unsupported", "no_text_layer"):
+            # 流水线在进入排版（列检测）之前就因方向 / 无文字层退回了这一页：列检测器没被问到，
+            # 这里直接问它（用该文档全部页的正文字号），评估的是检测器而不是上游的预先退回
+            lays = list(layouts[(group, key)].values())
+            return page_columns(layouts[(group, key)][page], body_font_size(lays)).multicolumn
+        return False
+
+    rows = [
+        EvalRow(lb.group, lb.key, lb.page, lb.label, detected(lb.group, lb.key, lb.page))
+        for lb in labels
+    ]
+    print(format_report(aggregate_multicol(rows)))
+    ann = [
+        r.doc.key
+        for r in split
+        if r.doc.group == "docs" and r.doc.stratum == "announcement" and r.sample_set == sample_set
+    ]
+    pages = [res for k in ann for res in run("docs", k).values()]
+    unsupported = [res for res in pages if res.status == "layout_unsupported"]
+    by_reason: dict[str, int] = {}
+    for res in unsupported:
+        by_reason[res.reason] = by_reason.get(res.reason, 0) + 1
+    print(
+        f"G11-analogue: announcement pages {len(pages)}, layout_unsupported {len(unsupported)}"
+        f" ({len(unsupported) / len(pages):.4f}; target <= 0.10); column-flagged "
+        f"{sum(_is_column_flag(r) for r in pages)}; by reason {by_reason}"
+    )
+
+
 def _sheet_pages(n_pages: int, *, group: str, extra_page2: bool, rng: random.Random) -> list[int]:
     if group == "docs":
         return list(range(1, n_pages + 1))
@@ -236,6 +308,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     ms.add_argument("--extra-page2", action="store_true", help="给留出集研报补标第 2 页")
     hd = sub.add_parser("headings")
     hd.add_argument("--set", dest="sample_set", required=True, help="只接受 tune")
+    me = sub.add_parser("multicol-eval")
+    me.add_argument("--set", dest="sample_set", required=True, help="只接受 tune")
     args = ap.parse_args(argv)
     if args.cmd == "split":
         cmd_split()
@@ -244,6 +318,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     elif args.cmd == "headings":
         try:
             cmd_headings(args.sample_set)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    elif args.cmd == "multicol-eval":
+        try:
+            cmd_multicol_eval(args.sample_set)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
     elif args.cmd == "multicol-sheet":
