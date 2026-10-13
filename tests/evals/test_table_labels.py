@@ -15,6 +15,7 @@ from ragdemo.evals.table_labels import (
     _pages_by_ordinal,
     estimate_header_rows,
     export_table_label_sheet,
+    is_usable_other,
     table_stratum,
 )
 
@@ -87,3 +88,57 @@ def test_pages_by_ordinal_reads_split_pages_and_rejects_count_mismatch(tmp_path:
     assert _pages_by_ordinal(tmp_path, "a.json", 3) == []
     assert _pages_by_ordinal(tmp_path, "missing.json", 2) == []
     assert _pages_by_ordinal(tmp_path, None, 2) == []
+
+
+def test_is_usable_other_filters_tiny_and_non_numeric() -> None:
+    ok = "| a | b |\n|---|---|\n| x | 1 |\n| y | 2 |"
+    assert is_usable_other(ok)
+    assert not is_usable_other("| a | b |\n|---|---|\n| x | 1 |")  # 只有 2 行
+    assert not is_usable_other("| a |\n|---|\n| x |\n| y |")  # 单列
+    assert not is_usable_other("| a | b |\n|---|---|\n| x | y |\n| z | w |")  # 无数字
+
+
+def _add_tables(
+    conn: psycopg.Connection, n: int, *, doc_type: str, owner_user: str | None, base: int
+) -> None:
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO core.doc_block (doc_id, block_type, section_path, ordinal, page, content,"
+            " content_desc, is_leaf, entity_id, doc_type, publish_at, valid_from, known_at, source,"
+            " ingest_run_id, owner_user) SELECT doc_id, 'table', '', %s, 1,"
+            " %s, 'DESCMARK', true, entity_id, %s, publish_at, valid_from, known_at, source,"
+            " 'r1', %s FROM core.document WHERE doc_id = 1",
+            (
+                base + i,
+                f"| 项 | 值 |\n|---|---|\n| 甲{i}{doc_type} | {i + 1} |\n| 乙 | 2 |",
+                doc_type,
+                owner_user,
+            ),
+        )
+    conn.commit()
+
+
+@pytest.mark.db
+def test_other_stratum_fills_to_80_and_excludes_research_private(
+    corpus: psycopg.Connection, tmp_path: Path
+) -> None:
+    _add_tables(corpus, 100, doc_type="announcement", owner_user=None, base=1000)
+    _add_tables(corpus, 5, doc_type="research_report", owner_user=None, base=2000)
+    _add_tables(corpus, 5, doc_type="announcement", owner_user="u1", base=3000)
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    n = export_table_label_sheet(corpus, a, blob_root=tmp_path / "nb")
+    export_table_label_sheet(corpus, b, blob_root=tmp_path / "nb")
+    assert a.read_bytes() == b.read_bytes()  # 同种子确定
+    text = a.read_text(encoding="utf-8-sig")
+    assert n >= 80
+    assert "[other]" in text
+    assert "research_report" not in text
+    assert "DESCMARK" not in text
+    with a.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    # 私有块的 doc_type 也是 announcement，靠 owner_user 排除：行数不超过公共块总数
+    pub = corpus.execute(
+        "SELECT count(*) FROM core.doc_block WHERE block_type='table' AND owner_user IS NULL"
+        " AND doc_type <> 'research_report'"
+    ).fetchone()
+    assert pub is not None and len(rows) <= int(pub[0])

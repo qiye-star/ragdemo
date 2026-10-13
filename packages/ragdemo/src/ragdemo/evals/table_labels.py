@@ -31,6 +31,9 @@ TABLE_QUOTA: Final[Mapping[str, int]] = {
     "multi_header": 5,
 }
 _CANDIDATE_FACTOR = 2
+MIN_TOTAL_CANDIDATES: Final = 80  # 50 题目标 + 余量；分层候选不足时由 other 层补足
+_MIN_ROWS = 3
+_MIN_COLS = 2
 _DEFAULT_BLOB_ROOT = "data/blob"
 _STATEMENT_LABELS = frozenset(
     normalise_name(label) for labels in FACT_LABELS.values() for label in labels
@@ -54,6 +57,18 @@ def table_stratum(content: str, *, n_pages: int, header_rows: int) -> str:
     if header_rows >= 2:
         return "multi_header"
     return "other"
+
+
+def is_usable_other(content: str) -> bool:
+    """other 层准入：至少 3 行（含表头）、2 列，且有数字格；太小或纯文字的表出不了数值题。"""
+    rows = [
+        [c.strip() for c in line.strip().strip("|").split("|")]
+        for line in content.split("\n")
+        if line.strip() and not re.fullmatch(r"[|\s:\-]+", line)
+    ]
+    if len(rows) < _MIN_ROWS or max((len(r) for r in rows), default=0) < _MIN_COLS:
+        return False
+    return any(_NUMERIC_RE.match(c) and re.search(r"\d", c) for r in rows for c in r)
 
 
 def estimate_header_rows(table_html: str | None) -> int:
@@ -108,6 +123,7 @@ def export_table_label_sheet(
         " d.parse_json_ref FROM core.doc_block b JOIN core.document d USING (doc_id)"
         " WHERE b.block_type = 'table' AND b.is_leaf AND b.superseded_at IS NULL"
         " AND d.superseded_at IS NULL AND d.doc_type <> 'research_report'"
+        " AND b.doc_type <> 'research_report'"
         " AND b.owner_tenant IS NULL AND b.owner_user IS NULL"
         " ORDER BY b.doc_id, b.ordinal"
     ).fetchall()
@@ -125,18 +141,27 @@ def export_table_label_sheet(
             stratum = table_stratum(
                 str(r[5]), n_pages=n_pages, header_rows=estimate_header_rows(r[6])
             )
+            if stratum == "other" and not is_usable_other(str(r[5])):
+                continue
             strata[stratum].append((r, last))
 
     rng = random.Random(seed)
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    picked: dict[str, list[tuple[Any, int]]] = {}
+    for stratum, quota in TABLE_QUOTA.items():
+        pool = sorted(strata.get(stratum, []), key=lambda x: int(x[0][0]))
+        rng.shuffle(pool)
+        picked[stratum] = pool[: quota * _CANDIDATE_FACTOR]
+    other = sorted(strata.get("other", []), key=lambda x: int(x[0][0]))
+    rng.shuffle(other)
+    need = max(0, MIN_TOTAL_CANDIDATES - sum(len(v) for v in picked.values()))
+    picked["other"] = other[:need]
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(SHEET_COLUMNS)
-        for stratum, quota in TABLE_QUOTA.items():
-            pool = sorted(strata.get(stratum, []), key=lambda x: int(x[0][0]))
-            rng.shuffle(pool)
-            for r, last in pool[: quota * _CANDIDATE_FACTOR]:
+        for stratum, items in picked.items():
+            for r, last in items:
                 first = r[4] or ""
                 span = f"{first}–{max(int(last), int(first))}" if first and last else f"{first}"
                 passage = f"{r[5]}\n页码：{span}"
