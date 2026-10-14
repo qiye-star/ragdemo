@@ -29,15 +29,15 @@ class RetrievalConfig:
     # 行为与加这个字段之前一致；翻默认值须过 `eval table-gate`。
     bm25_desc: bool = False
     # 重排输入与嵌入输入同一个拼法（文档标题 + 章节路径 + 描述 + 正文，embed/base.py::
-    # embedding_input），而不是块的裸 content。默认关闭，行为与加这个字段之前一致；
-    # 翻默认值须跑 C2 评测与 `eval table-gate`（见 重排输入改造评测.md）。
-    rerank_rich_input: bool = False
+    # embedding_input），而不是块的裸 content。2026-10-14 经 C2 评测（自动题与盲标表格题）
+    # 与用户批准翻为默认开启（见 重排输入改造评测.md）；评测对照用 --no-rerank-rich-input。
+    rerank_rich_input: bool = True
     # 仅对重排输入生效的字符上限；None = 沿用嵌入上限（DEFAULT_MAX_EMBED_CHARS）。嵌入本身不受影响。
     rerank_rich_max_chars: int | None = None
-    # 重排调用的超时（秒）。None = 不设超时（默认，行为不变）；超时则放弃重排、回退融合顺序，
-    # 并标记 degraded_reason='rerank_timeout'。建议生产值 3.0（重排接口偶发卡 7-12s，见
-    # 重排输入改造评测.md）；翻默认值须先跑评测。
-    rerank_timeout_s: float | None = None
+    # 重排调用的超时（秒）。None = 不设超时；超时则放弃重排、回退融合顺序，并标记
+    # degraded_reason='rerank_timeout'。2026-10-14 经用户批准默认 3.0（重排接口偶发卡
+    # 7-12s，见 重排输入改造评测.md）。
+    rerank_timeout_s: float | None = 3.0
 
     def validate(self) -> None:
         if self.rerank_timeout_s is not None and self.rerank_timeout_s <= 0:

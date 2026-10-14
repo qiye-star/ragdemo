@@ -174,7 +174,7 @@ def add_retrieval(
 )
 @click.option(
     "--rerank-rich-input/--no-rerank-rich-input",
-    default=False,
+    default=True,
     help="重排输入与嵌入同一拼法（标题+章节路径+描述+正文），而非裸正文",
 )
 @click.option(
@@ -186,8 +186,8 @@ def add_retrieval(
 @click.option(
     "--rerank-timeout-s",
     type=float,
-    default=None,
-    help="重排调用超时（秒），超时回退融合顺序；默认不设超时。建议生产值 3.0",
+    default=3.0,
+    help="重排调用超时（秒），超时回退融合顺序；默认 3.0（生产值）",
 )
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 @click.option(

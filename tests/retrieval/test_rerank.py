@@ -131,4 +131,5 @@ def test_timeout_logs_structured_line_with_context(caplog: pytest.LogCaptureFixt
 def test_timeout_must_be_positive() -> None:
     with pytest.raises(ValueError):
         RetrievalConfig(rerank_timeout_s=0).validate()
-    assert RetrievalConfig().rerank_timeout_s is None
+    assert RetrievalConfig().rerank_timeout_s == 3.0
+    assert RetrievalConfig(rerank_timeout_s=None).rerank_timeout_s is None

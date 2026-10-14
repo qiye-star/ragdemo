@@ -229,16 +229,22 @@ class _SpyReranker:
         return self._inner.rerank(query, docs, top_k)
 
 
-def test_rerank_rich_input_defaults_off() -> None:
-    assert RetrievalConfig().rerank_rich_input is False
+def test_rerank_rich_input_defaults_on() -> None:
+    assert RetrievalConfig().rerank_rich_input is True
 
 
 @pytest.mark.db
-def test_rerank_gets_bare_content_by_default(
+def test_rerank_gets_bare_content_when_rich_input_off(
     corpus: psycopg.Connection, as_of_2024: datetime
 ) -> None:
     spy = _SpyReranker()
-    _service(corpus, spy).search(RetrievalRequest(query="智能计算 收入", as_of=as_of_2024))
+    _service(corpus, spy).search(
+        RetrievalRequest(
+            query="智能计算 收入",
+            as_of=as_of_2024,
+            config=RetrievalConfig(rerank_rich_input=False),
+        )
+    )
     assert spy.docs
     assert not any("寒武纪 2024 年三季报" in d for d in spy.docs)
 
