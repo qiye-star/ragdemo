@@ -329,3 +329,29 @@ def test_rerank_rich_max_chars_none_keeps_embedding_cap(
     )
     assert spy.docs
     assert any(len(d) > 20 for d in spy.docs)
+
+
+@pytest.mark.db
+def test_rerank_candidates_equal_fusion_when_guarantee_off(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    result = _service(corpus).search(RetrievalRequest(query="收入", as_of=as_of_2024), trace=True)
+    assert result.trace is not None
+    assert result.trace.rerank_candidates == [s.block_id for s in result.trace.fused]
+
+
+@pytest.mark.db
+def test_rerank_vector_guarantee_puts_vector_top_into_rerank_input(
+    corpus: psycopg.Connection, as_of_2024: datetime
+) -> None:
+    """融合只留 2 个候选时，向量前 2 名仍必须送进重排，且总数不超过 fusion_k。"""
+    cfg = RetrievalConfig(fusion_k=2, top_k=1, w_bm25=0.99, w_vec=0.01, rerank_vector_guarantee=2)
+    result = _service(corpus).search(
+        RetrievalRequest(query="智能计算 收入", as_of=as_of_2024, config=cfg), trace=True
+    )
+    tr = result.trace
+    assert tr is not None
+    vec_top = [s.block_id for s in tr.vec[:2]]
+    assert set(vec_top) <= set(tr.rerank_candidates)
+    assert len(tr.rerank_candidates) <= 2
+    assert set(tr.final_order) <= set(tr.rerank_candidates)

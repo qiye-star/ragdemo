@@ -23,7 +23,7 @@ import psycopg
 
 from ragdemo.embed.base import Embedder, embedding_input
 from ragdemo.retrieval.expand import expand_to_evidence
-from ragdemo.retrieval.fusion import FusedHit, weighted_rrf
+from ragdemo.retrieval.fusion import FusedHit, guarantee_vector_top, weighted_rrf
 from ragdemo.retrieval.lexical import bm25_search
 from ragdemo.retrieval.period import boost_fused, boost_scores
 from ragdemo.retrieval.rerank import Reranker, RerankOutcome, rerank_or_degrade
@@ -136,11 +136,26 @@ class RetrievalService:
             if cfg.period_boost > 0:
                 fused = boost_fused(conn, req.query, fused, cfg.period_boost)
 
+            # 重排候选：融合结果，开了向量保底时再把主查询向量一路前 N 名补进来（总数仍是
+            # fusion_k）。只对重排生效——重排关闭时直接截断融合顺序，与保底无关。
+            candidates: list[FusedHit] = list(fused)
+            if cfg.rerank_enabled and cfg.rerank_vector_guarantee > 0:
+                candidates = guarantee_vector_top(
+                    fused,
+                    bm25,
+                    vec,
+                    n=cfg.rerank_vector_guarantee,
+                    limit=cfg.fusion_k,
+                    w_bm25=cfg.w_bm25,
+                    w_vec=cfg.w_vec,
+                    rrf_k=cfg.rrf_k,
+                )
+
             ms_rerank = 0.0
-            if cfg.rerank_enabled and fused:
+            if cfg.rerank_enabled and candidates:
                 contents = _leaf_contents(
                     conn,
-                    [f.block_id for f in fused],
+                    [f.block_id for f in candidates],
                     rich=cfg.rerank_rich_input,
                     max_chars=cfg.rerank_rich_max_chars,
                 )
@@ -148,7 +163,7 @@ class RetrievalService:
                 outcome = rerank_or_degrade(
                     self.reranker,
                     req.query,
-                    fused,
+                    candidates,
                     contents,
                     cfg.top_k,
                     timeout_s=cfg.rerank_timeout_s,
@@ -214,7 +229,7 @@ class RetrievalService:
 
         result_trace: RetrievalTrace | None = None
         if trace:
-            rerank_attempted = cfg.rerank_enabled and bool(fused)
+            rerank_attempted = cfg.rerank_enabled and bool(candidates)
             result_trace = RetrievalTrace(
                 bm25=[StageRank(h.block_id, h.rank, h.raw_score) for h in bm25],
                 vec=[StageRank(h.block_id, h.rank, h.raw_score) for h in vec],
@@ -229,6 +244,7 @@ class RetrievalService:
                 embedder_model=self.embedder.model,
                 reranker_model=self.reranker.model,
                 rerank_attempted=rerank_attempted,
+                rerank_candidates=[f.block_id for f in candidates],
             )
 
         return RetrievalResult(blocks=blocks, stats=stats, trace=result_trace)

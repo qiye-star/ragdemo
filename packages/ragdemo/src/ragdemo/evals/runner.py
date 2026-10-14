@@ -164,6 +164,8 @@ def run_retrieval_eval(
                 "bm25_rank": _best_rank([s.block_id for s in tr.bm25], gold_set) if tr else None,
                 "vec_rank": _best_rank([s.block_id for s in tr.vec], gold_set) if tr else None,
                 "fused_rank": _best_rank([s.block_id for s in tr.fused], gold_set) if tr else None,
+                # gold 在实际送进重排的候选里的位置（开了向量保底时与 fused_rank 不同）。
+                "cand_rank": _best_rank(tr.rerank_candidates, gold_set) if tr else None,
                 "rerank_rank": (
                     _best_rank([s.block_id for s in tr.rerank], gold_set)
                     if tr and tr.rerank_attempted

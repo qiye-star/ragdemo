@@ -38,8 +38,17 @@ class RetrievalConfig:
     # degraded_reason='rerank_timeout'。2026-10-14 经用户批准默认 3.0（重排接口偶发卡
     # 7-12s，见 重排输入改造评测.md）。
     rerank_timeout_s: float | None = 3.0
+    # 向量一路前 N 名保底进重排候选（retrieval/fusion.py::guarantee_vector_top）。重排候选总数
+    # 仍是 fusion_k（为保底块从融合尾部腾位置），重排文档数不变。0 = 关闭（默认，行为不变）；
+    # 只在重排开启时生效。翻默认值须过评测（向量保底进重排评测.md）。
+    rerank_vector_guarantee: int = 0
 
     def validate(self) -> None:
+        if not 0 <= self.rerank_vector_guarantee <= self.fusion_k:
+            raise ValueError(
+                f"rerank_vector_guarantee 必须在 [0, fusion_k={self.fusion_k}] 内，"
+                f"收到 {self.rerank_vector_guarantee}"
+            )
         if self.rerank_timeout_s is not None and self.rerank_timeout_s <= 0:
             raise ValueError("rerank_timeout_s 必须为正")
         if self.rerank_rich_max_chars is not None and self.rerank_rich_max_chars <= 0:
@@ -143,6 +152,8 @@ class RetrievalTrace:
     embedder_model: str
     reranker_model: str
     rerank_attempted: bool
+    # 实际送进重排的候选（顺序即降级回退顺序）。未开向量保底时等于 fused 的 block_id。
+    rerank_candidates: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

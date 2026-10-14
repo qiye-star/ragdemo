@@ -171,7 +171,7 @@ def test_eval_persists_per_question_ranks(corpus: psycopg.Connection) -> None:
     assert len(result.per_question) == 1
     pq = result.per_question[0]
     assert pq["gold"] == [gold]
-    for key in ("bm25_rank", "vec_rank", "fused_rank", "rerank_rank", "final_rank"):
+    for key in ("bm25_rank", "vec_rank", "fused_rank", "cand_rank", "rerank_rank", "final_rank"):
         assert key in pq
     assert pq["final_rank"] is None or pq["final_rank"] >= 1
     assert result.as_metrics()["per_question"] == result.per_question

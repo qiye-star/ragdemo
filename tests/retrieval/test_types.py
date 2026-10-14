@@ -42,3 +42,17 @@ def test_top_k_larger_than_fusion_k_is_rejected() -> None:
 def test_weights_must_be_positive() -> None:
     with pytest.raises(ValueError, match="权重"):
         RetrievalConfig(w_bm25=0.0, w_vec=0.0).validate()
+
+
+def test_rerank_vector_guarantee_defaults_off() -> None:
+    assert RetrievalConfig().rerank_vector_guarantee == 0
+
+
+def test_rerank_vector_guarantee_must_be_non_negative() -> None:
+    with pytest.raises(ValueError, match="rerank_vector_guarantee"):
+        RetrievalConfig(rerank_vector_guarantee=-1).validate()
+
+
+def test_rerank_vector_guarantee_cannot_exceed_fusion_k() -> None:
+    with pytest.raises(ValueError, match="rerank_vector_guarantee"):
+        RetrievalConfig(fusion_k=10, top_k=5, rerank_vector_guarantee=11).validate()

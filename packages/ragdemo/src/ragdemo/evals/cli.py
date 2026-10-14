@@ -189,6 +189,13 @@ def add_retrieval(
     default=3.0,
     help="重排调用超时（秒），超时回退融合顺序；默认 3.0（生产值）",
 )
+@click.option(
+    "--rerank-vector-guarantee",
+    type=int,
+    default=0,
+    show_default=True,
+    help="向量一路前 N 名保底进重排候选（总数仍为 fusion_k）；0 = 关闭",
+)
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 @click.option(
     "--author-prefix",
@@ -210,6 +217,7 @@ def run(
     rerank_rich_input: bool,
     rerank_rich_max_chars: int | None,
     rerank_timeout_s: float | None,
+    rerank_vector_guarantee: int,
     label: str,
     author_prefix: str | None,
 ) -> None:
@@ -230,6 +238,7 @@ def run(
         rerank_rich_input=rerank_rich_input,
         rerank_rich_max_chars=rerank_rich_max_chars,
         rerank_timeout_s=rerank_timeout_s,
+        rerank_vector_guarantee=rerank_vector_guarantee,
     )
     config.validate()
     synonyms = load_synonyms() if rewrite else None
@@ -270,6 +279,8 @@ def run(
         click.echo(f"| p95 延迟 | {result.latency_p95_ms:.0f} ms |")
         click.echo(f"| 用例数 | {result.n_cases} |")
         click.echo(f"| 重排超时降级次数 | {result.rerank_timeouts} |")
+        in_pool = sum(1 for q in result.per_question if q["cand_rank"] is not None)
+        click.echo(f"| gold 进重排候选 | {in_pool}/{result.n_cases} |")
         for group, m in result.per_group.items():
             click.echo(
                 f"| recall@10（{group}，n={m['n']}）| {float(m['recall_at_10']):.4f} |"
