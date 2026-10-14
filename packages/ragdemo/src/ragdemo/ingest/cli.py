@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -63,6 +65,7 @@ from ragdemo.ingest.assets_docs import (
 from ragdemo.ingest.cninfo_docs import ingest_cninfo_announcements, list_announcements
 from ragdemo.ingest.documents import DocumentWriter, MetadataInvalid, ParseArtifacts
 from ragdemo.ingest.edgar_docs import ingest_edgar_filings, list_filings
+from ragdemo.ingest.gold_remap import load_case_remaps, remap_report_rows, remap_sql
 from ragdemo.ingest.parse_pending import (
     _select_pending,
     resolve_parse_input,
@@ -72,6 +75,7 @@ from ragdemo.ingest.parse_pending import (
 from ragdemo.ingest.parse_policy import ESTIMATED_PAGES, ParseTier
 from ragdemo.ingest.pdf_pages import pdf_page_count
 from ragdemo.ingest.render_html import RenderHtmlError, render_html_document
+from ragdemo.ingest.reparse_cached import REPORT_COLUMNS, report_rows, run_reparse_cached
 from ragdemo.ingest.snapshot import record_snapshot
 from ragdemo.parse.config import ChunkConfig
 from ragdemo.parse.describe import TableDescriber
@@ -459,6 +463,106 @@ def docs_rechunk(doc_id: int, entity_ref: str, blob_root_opt: Path | None) -> No
     click.echo(
         f"重新切块完成：新 doc_id={write_result.doc_id} blocks={len(write_result.block_ids)}"
     )
+
+
+# --- docs reparse-cached -------------------------------------------------------
+
+
+def _write_tsv(path: Path, columns: Sequence[str], rows: Sequence[Mapping[str, object]]) -> None:
+    def cell(v: object) -> str:
+        return str(v).replace("\t", " ").replace("\n", " ")
+
+    lines = ["\t".join(columns)] + ["\t".join(cell(r.get(c, "")) for c in columns) for r in rows]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@docs_group.command("reparse-cached")
+@click.option("--doc-id", "doc_ids", type=int, multiple=True, help="只处理这些 doc_id（可重复）")
+@click.option("--yes", is_flag=True, default=False, help="真正写库；不传只 dry run（不写库）")
+@click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
+@click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+def docs_reparse_cached(
+    doc_ids: tuple[int, ...], yes: bool, report_path: Path | None, blob_root_opt: Path | None
+) -> None:
+    """现行文档用已缓存的 TextIn JSON 按新流程（分页路由整份 L3、台账、网格）重解析入库。
+
+    零外部调用：TextIn 走重放传输层（真实请求即报错）、blob 只读、不调 LLM（表格描述只沿用
+    内容完全相同的旧描述）、不调嵌入（嵌入输入逐字节相同才沿用旧向量）。缓存缺失的文档列出、不动。
+    """
+    cfg = _load_config()
+    blob = LocalBlobStore(blob_root_opt or cfg.blob_root)
+    run_id = f"cli:docs-reparse-cached:{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(_dsn()) as conn:
+        report = run_reparse_cached(
+            conn,
+            blob,
+            doc_ids=list(doc_ids) or None,
+            write=yes,
+            ingest_run_id=run_id,
+            cost_per_page_cny=cfg.textin_cost_per_page_cny,
+        )
+    if report_path is not None:
+        _write_tsv(report_path, REPORT_COLUMNS, report_rows(report))
+    mode = "写库" if yes else "dry run（未写库）"
+    status = Counter(o.status for o in report.outcomes)
+    states = Counter(o.state or "-" for o in report.outcomes)
+    reasons = Counter(n.reason for n in report.not_reparseable)
+    click.echo(f"[{mode}] run_id={run_id} 可重解析 {len(report.outcomes)} 份：{dict(status)}")
+    click.echo(f"  验收结论：{dict(states)}")
+    click.echo(
+        f"  块：旧 {sum(o.old_blocks for o in report.outcomes)} -> "
+        f"新 {sum(o.new_blocks for o in report.outcomes)}，"
+        f"逐字相同 {sum(o.identical_blocks for o in report.outcomes)}；"
+        f"表格描述沿用 {sum(o.desc_carried for o in report.outcomes)}，"
+        f"缺描述 {sum(len(o.desc_missing) for o in report.outcomes)}"
+    )
+    if yes:
+        click.echo(
+            f"  嵌入：沿用 {sum(o.embed_carried for o in report.outcomes)}，"
+            f"待嵌入 {sum(o.embed_needed for o in report.outcomes)}（本命令不调嵌入）"
+        )
+    click.echo(f"  不能重解析 {len(report.not_reparseable)} 份：{dict(reasons)}")
+    for o in report.outcomes:
+        if o.status not in ("dry_run", "written"):
+            click.echo(f"  - doc_id={o.doc_id} {o.status} {o.error} {o.title}", err=True)
+    if report.replay_calls:
+        raise click.ClickException(f"重放传输层收到 {report.replay_calls} 次真实请求（已拒绝）")
+    if any(o.status == "failed" for o in report.outcomes):
+        raise click.ClickException("有文档重解析失败，见上方")
+
+
+@docs_group.command("remap-gold")
+@click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
+@click.option("--sql-out", "sql_path", type=click.Path(path_type=Path), default=None)
+@click.option("--yes", is_flag=True, default=False, help="直接执行生成的 SQL；不传只出报告")
+def docs_remap_gold(report_path: Path | None, sql_path: Path | None, yes: bool) -> None:
+    """评测 gold 块号重映射（重解析之后）。默认只读：打印统计、写报告 TSV 与待审 SQL。"""
+    with psycopg.connect(_dsn()) as conn:
+        remaps = load_case_remaps(conn)
+        sql = remap_sql(remaps)
+        if report_path is not None:
+            rows = remap_report_rows(remaps)
+            _write_tsv(report_path, list(rows[0].keys()) if rows else ["q_id"], rows)
+        if sql_path is not None:
+            sql_path.parent.mkdir(parents=True, exist_ok=True)
+            sql_path.write_text(sql, encoding="utf-8")
+        by_author: dict[str, Counter[str]] = {}
+        for r in remaps:
+            for b in r.blocks:
+                by_author.setdefault(r.author, Counter())[b.kind] += 1
+        for author, counts in sorted(by_author.items()):
+            click.echo(f"{author}: {dict(counts)}")
+        changed = sum(1 for r in remaps if r.changed)
+        lost = [r for r in remaps if r.kind == "lost"]
+        click.echo(f"gold 有变化的题 {changed}；含 lost 块的题 {len(lost)}")
+        for r in lost:
+            ids = [b.old_block_id for b in r.blocks if b.kind == "lost"]
+            click.echo(f"  - q_id={r.q_id} {r.author} lost={ids}", err=True)
+        if yes:
+            conn.execute(sql)
+            conn.commit()
+            click.echo(f"已执行：{changed} 题的 gold 已改写")
 
 
 # --- docs embed --------------------------------------------------------------

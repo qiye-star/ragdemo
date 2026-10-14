@@ -250,6 +250,20 @@ def test_periodic_reports_go_whole(tmp_path: Path) -> None:
     )
 
 
+def test_parse_periodic_sends_the_whole_document_with_a_forced_ledger(tmp_path: Path) -> None:
+    """doc_type 为 annual_report / quarterly 时不能进 parse_for 的路由（构造时就拒绝），
+    但旧文档缓存重解析要给它们同样的逐页台账：整份一次、全部 L3、forced_l3。"""
+    p, t, _ = _parser(tmp_path, from_cache=True)
+    r = p.parse_periodic(_pdf(3))
+    assert t.calls == [([1, 2, 3], None)]
+    assert {b.source for b in r.blocks} == {"textin"} and r.engine_version == "textin:1+fp"
+    led = r.ledger
+    assert led is not None and led.routes_ref == r.json_ref
+    assert {x.tier for x in led.pages} == {"L3"}
+    assert led.pages[0].reasons == (REASON_PERIODIC,)
+    assert led.doc.billed_pages == 0 and r.billable_pages == 0
+
+
 def test_private_material_and_untargeted_doc_types_bypass_routing(tmp_path: Path) -> None:
     p, t, _ = _parser(tmp_path)
     r1 = p.parse_for(_pdf(3), doc_type="announcement", title="x", owner_user="u1")

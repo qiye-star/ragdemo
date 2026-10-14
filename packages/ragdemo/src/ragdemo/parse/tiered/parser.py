@@ -255,6 +255,16 @@ class TieredParser:
                 billable_pages=tp.billed_pages + (whole.billable_pages or 0),
             )
 
+    def parse_periodic(self, file_bytes: bytes) -> ParseResult:
+        """doc_type 本身就是定期报告（annual_report / quarterly）时的入口：整份原 PDF 一次送 TextIn
+        （与旧路径同一缓存键），全部 L3、`forced_l3`，并给出逐页台账。
+
+        `parse_for` 对不在 `doc_types` 里的类型原样旁路（无台账）；定期报告类型又不允许放进
+        `doc_types`。旧文档缓存重解析（`ingest/reparse_cached.py`）需要它们也有台账，走这里。"""
+        return self._whole(
+            file_bytes, reason=REASON_PERIODIC, kind=KIND_PERIODIC, forced=True, fallback=None
+        )
+
     def _plan(self, file_bytes: bytes, doc_type: str) -> _Plan:
         layouts = tuple(self._extract(file_bytes))
         if not layouts:

@@ -955,6 +955,29 @@ def test_reparse_supersedes_old_grid_and_writes_new_one(writer: DocumentWriter) 
 
 
 @pytest.mark.db
+def test_reparse_takes_per_table_desc_provenance_over_the_document_default(
+    writer: DocumentWriter,
+) -> None:
+    """缓存重解析沿用旧描述：每张表的描述来源各不相同，按 ordinal 逐表记录；
+    未列出的表用整份默认值。"""
+    doc = _doc_with_grid(grid=_sample_grid())
+    chunks, desc = _prepare(doc)
+    first = writer.write_document(doc, chunks, desc, desc_provenance=("mock", "v1"))
+    (table_ordinal,) = [c.ordinal for c in chunks if c.block_type == "table"]
+    second = writer.reparse_document(
+        doc,
+        chunks,
+        desc,
+        supersedes_doc_id=first.doc_id,
+        desc_provenance=("mock", "v1"),
+        desc_provenance_by_ordinal={table_ordinal: ("deepseek-chat", "table_desc:v2")},
+    )
+    (new,) = _table_rows(writer.conn, second.doc_id)
+    assert (new[5], new[6]) == ("deepseek-chat", "table_desc:v2")
+    assert check_schema_invariants(writer.conn) == []
+
+
+@pytest.mark.db
 def test_grid_page_inconsistent_with_block_is_dropped_with_a_warning(
     writer: DocumentWriter, caplog: pytest.LogCaptureFixture
 ) -> None:

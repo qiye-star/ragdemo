@@ -281,6 +281,7 @@ class DocumentWriter:
         artifacts: ParseArtifacts | None,
         chunking_version: str | None,
         desc_provenance: tuple[str, str] | None = None,
+        desc_provenance_by_ordinal: Mapping[int, tuple[str, str]] | None = None,
     ) -> DocumentWriteResult:
         """把前序行标 superseded_at，插入沿用同一 version_group_id 的新行。
 
@@ -325,6 +326,7 @@ class DocumentWriter:
                 doc_confidence=doc_confidence,
                 chunking_version=chunking_version,
                 desc_provenance=desc_provenance,
+                desc_provenance_by_ordinal=desc_provenance_by_ordinal,
             )
         self.conn.commit()  # 理由见 write_document 里同样这一行上面的注释。
         return DocumentWriteResult(doc_id, block_ids, skipped=False)
@@ -339,8 +341,13 @@ class DocumentWriter:
         artifacts: ParseArtifacts | None = None,
         chunking_version: str | None = None,
         desc_provenance: tuple[str, str] | None = None,
+        desc_provenance_by_ordinal: Mapping[int, tuple[str, str]] | None = None,
     ) -> DocumentWriteResult:
         """升级解析器或换供应商后重新解析。新增版本，不原地替换。
+
+        `desc_provenance_by_ordinal` 按块 ordinal 覆盖表格描述的来源（模型 / prompt 版本）：
+        缓存重解析沿用旧块的描述时，每张表的描述来自不同的生成者，不能统一记成一个值；
+        没列出的表仍用 `desc_provenance`。
 
         归属沿用被取代的那份文档——重解析是同一份文档换了个解析结果，不是
         换了归属；这里不接受调用方传 owner_user，就像 known_at 不接受调用方
@@ -368,6 +375,7 @@ class DocumentWriter:
             artifacts=artifacts,
             chunking_version=chunking_version,
             desc_provenance=desc_provenance,
+            desc_provenance_by_ordinal=desc_provenance_by_ordinal,
         )
 
     # --- 内部 -------------------------------------------------------------
@@ -469,6 +477,7 @@ class DocumentWriter:
         doc_confidence: float | None = None,
         chunking_version: str | None = None,
         desc_provenance: tuple[str, str] | None = None,
+        desc_provenance_by_ordinal: Mapping[int, tuple[str, str]] | None = None,
     ) -> list[int]:
         # owner_user / can_show_raw 从刚插入的 document 行读回，而不是让调用方
         # 另传一份——与 known_at / publish_at 同样的道理（本方法原有的反规范化
@@ -539,7 +548,8 @@ class DocumentWriter:
             if chunk.block_type == "table" and chunk.table is not None:
                 if pages_words is None:
                     pages_words = self._page_words(doc, entity_id)
-                self._insert_table(entity_id, int(row[0]), chunk, pages_words, desc_provenance)
+                provenance = (desc_provenance_by_ordinal or {}).get(chunk.ordinal, desc_provenance)
+                self._insert_table(entity_id, int(row[0]), chunk, pages_words, provenance)
 
         return [ordinal_to_block_id[c.ordinal] for c in sorted(chunks, key=lambda c: c.ordinal)]
 
