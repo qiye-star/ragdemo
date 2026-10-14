@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import psycopg
 import pytest
 
 from ragdemo.embed.mock import MockEmbedder
-from ragdemo.evals.runner import run_retrieval_eval
+from ragdemo.evals.runner import RetrievalEvalResult, run_retrieval_eval
 from ragdemo.retrieval.rerank import MockReranker
 from ragdemo.retrieval.service import RetrievalService
 from ragdemo.retrieval.types import RetrievalConfig
@@ -177,3 +179,29 @@ def test_eval_persists_per_question_ranks(corpus: psycopg.Connection) -> None:
         "SELECT metrics->'per_question' FROM evals.eval_run ORDER BY started_at DESC LIMIT 1"
     ).fetchone()
     assert stored is not None and stored[0][0]["gold"] == [gold]
+
+
+class _SlowReranker:
+    model = "slow"
+
+    def rerank(self, query: str, docs: Sequence[str], top_k: int) -> list[tuple[int, float]]:
+        time.sleep(1.0)
+        return MockReranker().rerank(query, docs, top_k)
+
+
+def test_as_metrics_includes_rerank_timeouts() -> None:
+    metrics = RetrievalEvalResult(0.0, 0.0, 0.0, 1, {}, rerank_timeouts=3).as_metrics()
+    assert metrics["rerank_timeouts"] == 3
+
+
+@pytest.mark.db
+def test_eval_counts_rerank_timeouts(corpus: psycopg.Connection) -> None:
+    _seed_cases(corpus)
+    service = RetrievalService(corpus, MockEmbedder(), _SlowReranker())
+    result = run_retrieval_eval(
+        corpus, service, git_sha="x", config=RetrievalConfig(rerank_timeout_s=0.05)
+    )
+    assert result.rerank_timeouts == 1
+    assert result.per_question[0]["degraded_reason"] == "rerank_timeout"
+    clean = run_retrieval_eval(corpus, service, git_sha="x", config=RetrievalConfig())
+    assert clean.rerank_timeouts == 0

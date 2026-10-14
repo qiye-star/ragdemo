@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ class RerankOutcome:
     order: list[int]
     scores: dict[int, float]
     degraded: bool
+    # 降级原因：'rerank_error' / 'rerank_timeout'；未降级为 None。
+    degraded_reason: str | None = None
 
 
 class MockReranker:
@@ -57,33 +60,74 @@ class FailingReranker:
         raise RuntimeError("重排服务不可用")
 
 
+def _call_with_timeout(
+    reranker: Reranker, query: str, docs: list[str], top_k: int, timeout_s: float
+) -> list[tuple[int, float]]:
+    """在工作线程里调用重排，超时抛 `TimeoutError`。
+
+    超时后不等线程：`shutdown(wait=False, cancel_futures=True)`。被放弃的那个调用会在
+    后台跑完（受 HTTP 客户端自身超时约束，默认 30s），结果被丢弃——每次调用一个
+    一次性线程池，不共享状态，不会堆积长期线程。
+    """
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rerank")
+    try:
+        future = pool.submit(reranker.rerank, query, docs, top_k)
+        return future.result(timeout=timeout_s)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def rerank_or_degrade(
     reranker: Reranker,
     query: str,
     fused: Sequence[FusedHit],
     contents: Mapping[int, str],
     top_k: int,
+    *,
+    timeout_s: float | None = None,
+    log_context: Mapping[str, object] | None = None,
 ) -> RerankOutcome:
-    """重排失败时回退到 RRF 顺序，并标记 degraded。"""
+    """重排失败或超时时回退到 RRF 顺序，并标记 degraded。
+
+    `timeout_s=None`（默认）= 不设超时，行为与加这个参数之前一致。
+    """
     if not fused:
         return RerankOutcome(order=[], scores={}, degraded=False)
 
     block_ids = [f.block_id for f in fused]
     docs = [contents.get(b, "") for b in block_ids]
 
+    reason = "rerank_error"
     try:
-        ranked = reranker.rerank(query, docs, top_k)
+        if timeout_s is None:
+            ranked = reranker.rerank(query, docs, top_k)
+        else:
+            ranked = _call_with_timeout(reranker, query, docs, top_k, timeout_s)
+    except concurrent.futures.TimeoutError:
+        reason = "rerank_timeout"
     except Exception:  # 任何失败都必须降级，不能让查询挂掉（本仓库未启用 flake8-blind-except）
-        logger.warning("rerank_degraded", extra={"model": reranker.model, "n": len(fused)})
-        head = list(fused)[:top_k]
+        pass
+    else:
         return RerankOutcome(
-            order=[f.block_id for f in head],
-            scores={f.block_id: f.score for f in head},
-            degraded=True,
+            order=[block_ids[i] for i, _ in ranked],
+            scores={block_ids[i]: score for i, score in ranked},
+            degraded=False,
         )
 
+    logger.warning(
+        "rerank_degraded",
+        extra={
+            **(log_context or {}),
+            "model": reranker.model,
+            "n": len(fused),
+            "degraded_reason": reason,
+            "timeout_s": timeout_s,
+        },
+    )
+    head = list(fused)[:top_k]
     return RerankOutcome(
-        order=[block_ids[i] for i, _ in ranked],
-        scores={block_ids[i]: score for i, score in ranked},
-        degraded=False,
+        order=[f.block_id for f in head],
+        scores={f.block_id: f.score for f in head},
+        degraded=True,
+        degraded_reason=reason,
     )

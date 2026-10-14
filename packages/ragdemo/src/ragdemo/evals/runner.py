@@ -39,6 +39,8 @@ class RetrievalEvalResult:
     # 逐题各阶段的 gold 排名（最佳 gold 的名次，None = 不在该阶段候选里）。
     # 存进 metrics JSON，不需要迁移；事后分析失败题不用再付费重跑。
     per_question: list[dict[str, Any]] = field(default_factory=list)
+    # 重排超时而回退融合顺序的查询数（仅统计 top-k 那次检索）。
+    rerank_timeouts: int = 0
 
     def as_metrics(self) -> dict[str, Any]:
         return {
@@ -52,6 +54,7 @@ class RetrievalEvalResult:
             "per_group": self.per_group,
             "per_engine": self.per_engine,
             "per_question": self.per_question,
+            "rerank_timeouts": self.rerank_timeouts,
         }
 
 
@@ -169,6 +172,7 @@ def run_retrieval_eval(
                 "final_rank": _best_rank(ordered10, gold_set),
                 "ms_total": round(latencies_ms[-1], 1),
                 "ms_rerank": round(top.stats.ms_rerank, 1),
+                "degraded_reason": top.stats.degraded_reason,
                 "ms_embed_vec": round(top.stats.ms_vec, 1),
                 "ms_bm25": round(top.stats.ms_bm25, 1),
             }
@@ -216,6 +220,7 @@ def run_retrieval_eval(
         per_group={k: v.as_dict() for k, v in summarize_groups(outcomes).items()},
         per_engine={k: v.as_dict() for k, v in summarize_groups(engine_outcomes).items()},
         per_question=per_question,
+        rerank_timeouts=sum(1 for q in per_question if q["degraded_reason"] == "rerank_timeout"),
     )
 
     record_eval_run(

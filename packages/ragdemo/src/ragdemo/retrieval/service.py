@@ -145,7 +145,19 @@ class RetrievalService:
                     max_chars=cfg.rerank_rich_max_chars,
                 )
                 t0 = time.perf_counter()
-                outcome = rerank_or_degrade(self.reranker, req.query, fused, contents, cfg.top_k)
+                outcome = rerank_or_degrade(
+                    self.reranker,
+                    req.query,
+                    fused,
+                    contents,
+                    cfg.top_k,
+                    timeout_s=cfg.rerank_timeout_s,
+                    log_context={
+                        "run_id": run_id,
+                        "as_of": req.as_of.isoformat(),
+                        "entity_id": req.entity_ids,
+                    },
+                )
                 ms_rerank = (time.perf_counter() - t0) * 1000
             else:
                 # 重排关闭（或没有融合候选）时直接截断 RRF 顺序，不是降级——
@@ -187,6 +199,7 @@ class RetrievalService:
             ms_rerank=ms_rerank,
             ms_total=(time.perf_counter() - started) * 1000,
             degraded=outcome.degraded,
+            degraded_reason=outcome.degraded_reason,
         )
         logger.info(
             "retrieval",

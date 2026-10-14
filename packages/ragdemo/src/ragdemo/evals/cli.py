@@ -183,6 +183,12 @@ def add_retrieval(
     default=None,
     help="丰富重排输入的字符上限（仅重排，嵌入不变）；默认沿用嵌入上限 2000",
 )
+@click.option(
+    "--rerank-timeout-s",
+    type=float,
+    default=None,
+    help="重排调用超时（秒），超时回退融合顺序；默认不设超时。建议生产值 3.0",
+)
 @click.option("--label", default="", help="这次运行的备注（写进 eval_run.config，便于事后对比）")
 @click.option(
     "--author-prefix",
@@ -203,6 +209,7 @@ def run(
     bm25_desc: bool,
     rerank_rich_input: bool,
     rerank_rich_max_chars: int | None,
+    rerank_timeout_s: float | None,
     label: str,
     author_prefix: str | None,
 ) -> None:
@@ -222,6 +229,7 @@ def run(
         bm25_desc=bm25_desc,
         rerank_rich_input=rerank_rich_input,
         rerank_rich_max_chars=rerank_rich_max_chars,
+        rerank_timeout_s=rerank_timeout_s,
     )
     config.validate()
     synonyms = load_synonyms() if rewrite else None
@@ -261,6 +269,7 @@ def run(
         click.echo(f"| p50 延迟 | {result.latency_p50_ms:.0f} ms |")
         click.echo(f"| p95 延迟 | {result.latency_p95_ms:.0f} ms |")
         click.echo(f"| 用例数 | {result.n_cases} |")
+        click.echo(f"| 重排超时降级次数 | {result.rerank_timeouts} |")
         for group, m in result.per_group.items():
             click.echo(
                 f"| recall@10（{group}，n={m['n']}）| {float(m['recall_at_10']):.4f} |"

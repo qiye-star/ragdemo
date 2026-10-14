@@ -34,8 +34,14 @@ class RetrievalConfig:
     rerank_rich_input: bool = False
     # 仅对重排输入生效的字符上限；None = 沿用嵌入上限（DEFAULT_MAX_EMBED_CHARS）。嵌入本身不受影响。
     rerank_rich_max_chars: int | None = None
+    # 重排调用的超时（秒）。None = 不设超时（默认，行为不变）；超时则放弃重排、回退融合顺序，
+    # 并标记 degraded_reason='rerank_timeout'。建议生产值 3.0（重排接口偶发卡 7-12s，见
+    # 重排输入改造评测.md）；翻默认值须先跑评测。
+    rerank_timeout_s: float | None = None
 
     def validate(self) -> None:
+        if self.rerank_timeout_s is not None and self.rerank_timeout_s <= 0:
+            raise ValueError("rerank_timeout_s 必须为正")
         if self.rerank_rich_max_chars is not None and self.rerank_rich_max_chars <= 0:
             raise ValueError("rerank_rich_max_chars 必须为正")
         if self.top_k > self.fusion_k:
@@ -105,6 +111,8 @@ class RetrievalStats:
     ms_rerank: float = 0.0
     ms_total: float = 0.0
     degraded: bool = False
+    # 'rerank_error' / 'rerank_timeout'；未降级为 None。
+    degraded_reason: str | None = None
 
 
 @dataclass(frozen=True)
