@@ -12,7 +12,8 @@
 3. `ragdemo eval label-import --file sheet.csv --annotator <名字> [--yes]`：先校验（默认只校验，
    一次报全），`--yes` 才写库。gold = 该块 + 同实体内正文完全相同的块 + 额外填写的块。
    author 记为 `human:<名字>`，与合成集始终可区分；`eval run --author-prefix human:` 只跑人工集。
-   模型出题、经独立复核的表用 `--origin blindmodel` 导入，author 记为 `blindmodel:<名字>`。
+   模型出题、经独立复核的表用 `--origin blindmodel` 导入，author 记为 `blindmodel:<名字>`；
+   正文（非表格）盲标集用 origin `blindmodel-text`，author 记为 `blindmodel-text:<名字>`。
 """
 
 from __future__ import annotations
@@ -41,7 +42,12 @@ SHEET_COLUMNS = (
 )
 _DIFFICULTIES = ("easy", "medium", "hard")
 # 出题来源 → 备注前缀。author 记为 `<来源>:<标注员>`；模型出题（经独立复核）不得记成 human:。
-ORIGIN_NOTES = {"human": "人工标注", "blindmodel": "模型盲标（独立复核）"}
+# blindmodel-text 是非表格（正文）盲标集：前缀与 blindmodel: 互不包含，两套题可分别选中。
+ORIGIN_NOTES = {
+    "human": "人工标注",
+    "blindmodel": "模型盲标（独立复核）",
+    "blindmodel-text": "模型盲标正文题（独立复核）",
+}
 
 
 def _check_origin(origin: str) -> None:

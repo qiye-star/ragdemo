@@ -89,6 +89,31 @@ def test_model_written_cases_keep_their_own_author_and_note(
     ).fetchone() == (0,)
 
 
+@pytest.mark.db
+def test_blind_text_set_has_its_own_prefix_disjoint_from_blindmodel(
+    corpus: psycopg.Connection, tmp_path: Path
+) -> None:
+    """正文盲标集记为 blindmodel-text:，`--author-prefix blindmodel:` 不会把它选进来，反之亦然。"""
+    path = tmp_path / "s.csv"
+    export_label_sheet(corpus, path, n=3)
+    _fill(path, {0: {"question": GOOD_Q, "difficulty": "medium"}})
+    when = datetime(2026, 9, 30, tzinfo=UTC)
+    tbl = parse_label_sheet(corpus, path, origin="blindmodel")
+    insert_labeled(corpus, tbl, as_of=when, annotator="tbl-v1", origin="blindmodel")
+    txt = parse_label_sheet(corpus, path, origin="blindmodel-text")
+    assert txt[0].notes.startswith(ORIGIN_NOTES["blindmodel-text"])
+    insert_labeled(corpus, txt, as_of=when, annotator="text-v1", origin="blindmodel-text")
+
+    def authors(prefix: str) -> list[str]:
+        rows = corpus.execute(
+            "SELECT author FROM evals.eval_retrieval WHERE author LIKE %s", (f"{prefix}%",)
+        ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    assert authors("blindmodel:") == ["blindmodel:tbl-v1"]
+    assert authors("blindmodel-text:") == ["blindmodel-text:text-v1"]
+
+
 def test_unknown_origin_is_refused() -> None:
     when = datetime(2026, 9, 30, tzinfo=UTC)
     with pytest.raises(ValueError):
