@@ -95,3 +95,29 @@ Agent 与应用层**只允许查询 `asof` schema 下的安全视图**，不得�
 P4 之前不做面向用户的 Web 产品前端（内部只读诊断界面除外，见 `docs/adr/0010-internal-diagnostic-web-ui-in-p1.md`）。
 
 收到超出上述范围的需求时，先说明它在边界外，再问是否要调整边界——不要默默扩张。
+
+---
+
+## 5. 目录地图（进入某个目录前先读它自己的 CLAUDE.md）
+
+每个目录都有自己的 `CLAUDE.md`，说明这个包做什么、关键模块、本包才有的硬规则、怎么测、常见坑。
+它们不重复本文件，只补充本文件没有的内容。**在哪个目录改代码，先读那个目录的 CLAUDE.md。**
+
+| 目录 | 一句话 |
+|---|---|
+| `packages/ragdemo-core/` | 底层：数据库连接、时点不变量检查、blob 存储；不得引用业务层 |
+| `packages/ragdemo/` | 业务层总览，每个子包一行并链到各自文件 |
+| `packages/ragdemo/src/ragdemo/parse/`（含 `local/`、`tiered/`） | 文档解析：生产只走合合信息，分级路由、逐页验收、本地排版（L0 关闭） |
+| `…/tables/` | 表格流水线：网格、单位与期别绑定、逐格校验、引用、事实核对 |
+| `…/ingest/` | 入库与重解析：抓取、解析入库、缓存重解析、网页转 PDF、CLI 入口 |
+| `…/retrieval/` | 检索：BM25 加向量融合、重排、改写、期别偏置，各开关默认值与理由 |
+| `…/evals/` | 评测：运行、冻结、标注导入、表格门槛、基线规则 |
+| `…/adapters/`（含 `mock/`）、`embed/`、`sources/` | 外部供应商适配器与对应 Mock、嵌入、数据源 |
+| `…/api/`、`dataapi/` | 只读内部诊断接口与数据接口 |
+| `…/agents/`、`tools/`、`templates/`、`audit/` | P2 占位（只有提示词与约束说明），实现前须遵守 docs/07、docs/09 |
+| `…/entities/`、`metrics/`、`ops/`、`quality/`、`seed/` | 实体解析、指标、告警与预算、质量检查与时点回放、种子数据 |
+| `db/`（含 `migrations/`、`seed/`） | 迁移（只追加、不重命名）与种子 |
+| `tests/`（含 `contracts/`） | 测试布局、标记、隔离测试库、已知失败 |
+| `scripts/`、`config/`、`infra/`、`data/`、`web/`、`evals/`、`docs/` | 脚本（标明是否花钱或写库）、配置、部署、本地数据（不入库）、内部诊断前端、评测产物位置、文档地图 |
+
+已知的目录级陷阱：`.env` 指向开发库，带 `--yes` 的命令都会写开发库；运行命令前先 `set -a; . ./.env; set +a`（CLI 不会自己读 .env）；仓库根的 `data.zip` 不要 `git add -A` 带进去。
