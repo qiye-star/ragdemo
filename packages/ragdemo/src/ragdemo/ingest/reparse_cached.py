@@ -3,6 +3,15 @@
 新流程 = `TieredParser`（整份 L3、不启用任何减页规则、L0 永远关闭），因此块带 `parse_source`、
 写逐页台账（`core.parse_page_route`）与文档验收结论（`core.parse_doc_acceptance`），表格带网格。
 
+两种结局（用户裁决 2026-10-14）：
+- **逐块相同**（数量、顺序、内容、页码、章节路径、类型、叶子与父子关系都一样）：**不取代、不插入**，
+  只在现行块上原地补 `parse_source`（及新流程给出的 `figure_meta`），再写逐页台账与文档结论；
+  块号、描述、嵌入、网格全部不动。这两列是迁移 033 明确的运维元数据（只用于评测分组与审计、
+  不参与检索打分、不属于时点公共列），原地补写不改变任何 `as_of` 下的可见性。
+- **有差异**（如旧版切块器切的文档）：默认原样保留旧切块，不写台账 / 结论，报告里列为
+  `differs`。原因：取代会让新旧两版在早于执行时刻的 `as_of` 上同时可见（检索重复）。
+  `replace_differing=True`（CLI `--replace-differing`）才走下面的取代路径。
+
 零外部调用、零付费：
 - TextIn 的传输层是 `ReplayTransport`，任何真实请求都抛 `ReplayMiss`（缓存未命中 = 不能重解析）；
 - blob 只读（`ReadOnlyBlob`），重解析不在 blob 里写任何东西；
@@ -27,6 +36,7 @@ from typing import Any, Final
 
 import httpx
 import psycopg
+from psycopg.types.json import Jsonb
 
 from ragdemo.adapters.announcements import NormalizedDocument
 from ragdemo.embed.base import embedding_input
@@ -101,6 +111,7 @@ class OldBlock:
     desc_model: str | None
     desc_prompt_version: str | None
     embedding_version: str | None = None
+    parent_ordinal: int | None = None
 
 
 @dataclass(frozen=True)
@@ -124,7 +135,9 @@ class DocOutcome:
     doc_id: int
     doc_type: str
     title: str
-    status: str  # dry_run / written / skipped_desc / validation_failed / failed
+    # fill（dry run）/ filled / differs / replace（dry run）/ written / skipped_desc /
+    # validation_failed / failed
+    status: str
     old_blocks: int = 0
     new_blocks: int = 0
     identical_blocks: int = 0
@@ -137,6 +150,7 @@ class DocOutcome:
     embed_carried: int = 0
     embed_needed: int = 0
     pages: int = 0
+    filled_blocks: int = 0
     error: str = ""
 
 
@@ -252,9 +266,10 @@ def load_old_blocks(conn: psycopg.Connection, doc_id: int) -> list[OldBlock]:
     rows = conn.execute(
         "SELECT b.block_id, b.ordinal, b.block_type::text, b.section_path, b.page, b.content,"
         "       b.content_desc, b.is_leaf, b.embedding IS NOT NULL, t.desc_model,"
-        "       t.desc_prompt_version, b.embedding_version"
+        "       t.desc_prompt_version, b.embedding_version, p.ordinal"
         "  FROM core.doc_block b"
         "  LEFT JOIN core.doc_table t ON t.block_id = b.block_id AND t.superseded_at IS NULL"
+        "  LEFT JOIN core.doc_block p ON p.block_id = b.parent_block_id"
         " WHERE b.doc_id = %s AND b.superseded_at IS NULL ORDER BY b.ordinal",
         (doc_id,),
     ).fetchall()
@@ -272,9 +287,53 @@ def load_old_blocks(conn: psycopg.Connection, doc_id: int) -> list[OldBlock]:
             r[9],
             r[10],
             r[11],
+            r[12],
         )
         for r in rows
     ]
+
+
+DIFFERS_REASON: Final = (
+    "differs: left on old chunking（取代会让新旧两版在早于执行时刻的 as_of 上同时可见，"
+    "检索出现重复；需 --replace-differing 且先定好过去时点的呈现规则）"
+)
+
+
+def _sig_new(c: Chunk) -> tuple[object, ...]:
+    return (c.ordinal, c.block_type, c.content, c.page, c.section_path, c.is_leaf, c.parent_ordinal)
+
+
+def _sig_old(o: OldBlock) -> tuple[object, ...]:
+    return (o.ordinal, o.block_type, o.content, o.page, o.section_path, o.is_leaf, o.parent_ordinal)
+
+
+def same_blocks(chunks: Sequence[Chunk], old: Sequence[OldBlock]) -> bool:
+    """逐块相同：数量、顺序、类型、内容、页码、章节路径、是否叶子、父块 ordinal 全部一致。"""
+    if len(chunks) != len(old):
+        return False
+    new_sorted = sorted(chunks, key=lambda c: c.ordinal)
+    return all(_sig_new(c) == _sig_old(o) for c, o in zip(new_sorted, old, strict=True))
+
+
+def fill_metadata(
+    conn: psycopg.Connection, chunks: Sequence[Chunk], old: Sequence[OldBlock]
+) -> int:
+    """逐块相同的文档：在现行块上原地补 parse_source / figure_meta（只填运维元数据，不提交）。"""
+    updated = 0
+    for c, o in zip(sorted(chunks, key=lambda c: c.ordinal), old, strict=True):
+        if c.source is None and c.figure_meta is None:
+            continue
+        meta = Jsonb(dict(c.figure_meta)) if c.figure_meta is not None else None
+        cur = conn.execute(
+            "UPDATE core.doc_block SET parse_source = COALESCE(%(src)s, parse_source),"
+            " figure_meta = COALESCE(%(meta)s, figure_meta)"
+            " WHERE block_id = %(id)s AND superseded_at IS NULL"
+            "   AND (parse_source IS DISTINCT FROM COALESCE(%(src)s, parse_source)"
+            "        OR figure_meta IS DISTINCT FROM COALESCE(%(meta)s, figure_meta))",
+            {"src": c.source, "meta": meta, "id": o.block_id},
+        )
+        updated += cur.rowcount
+    return updated
 
 
 def carry_table_descriptions(
@@ -392,6 +451,7 @@ def reparse_one(
     ingest_run_id: str,
     chunk_cfg: ChunkConfig,
     cost_per_page_cny: Decimal | None,
+    replace_differing: bool = False,
 ) -> DocOutcome:
     row = c.row
     out = DocOutcome(row.doc_id, row.doc_type, row.title, "dry_run")
@@ -410,6 +470,31 @@ def reparse_one(
     out.desc_carried, out.desc_missing = len(descriptions), missing
     out.state = result.ledger.doc.state if result.ledger is not None else None
     out.pages = result.page_count
+    artifacts = ParseArtifacts(
+        engine=result.engine_version,
+        json_ref=result.json_ref,
+        md_ref=result.md_ref,
+        warnings=[*result.warnings, *c.parse_in.markers],
+    )
+    ledger_item = PreparedDocument(
+        doc, artifacts, billed_pages=0, textin_calls=result.textin_calls, ledger=result.ledger
+    )
+    if same_blocks(chunks, old):
+        out.status = "fill"
+        if not write:
+            return out
+        out.filled_blocks = fill_metadata(conn, chunks, old)
+        # 台账与结论（缓存命中 billed 0：不留 provider_snapshot）；写完台账统一提交
+        record_parse_snapshots(
+            conn, [ledger_item], ingest_run_id=ingest_run_id, cost_per_page_cny=cost_per_page_cny
+        )
+        conn.commit()
+        out.status = "filled"
+        return out
+    if not replace_differing:
+        out.status, out.error, out.state = "differs", DIFFERS_REASON, None
+        return out
+    out.status = "replace"
     violations = [
         v
         for v in validate_chunks(doc, chunks, descriptions)
@@ -425,12 +510,6 @@ def reparse_one(
     if not write:
         return out
 
-    artifacts = ParseArtifacts(
-        engine=result.engine_version,
-        json_ref=result.json_ref,
-        md_ref=result.md_ref,
-        warnings=[*result.warnings, *c.parse_in.markers],
-    )
     writer = DocumentWriter(conn, ingest_run_id=ingest_run_id, source=row.source, blob=blob)
     written = writer.reparse_document(
         doc,
@@ -450,18 +529,7 @@ def reparse_one(
     conn.commit()
     # 台账（缓存命中，billed 0：不留 provider_snapshot，只写逐页台账与文档结论，及无输出告警）
     record_parse_snapshots(
-        conn,
-        [
-            PreparedDocument(
-                doc,
-                artifacts,
-                billed_pages=0,
-                textin_calls=result.textin_calls,
-                ledger=result.ledger,
-            )
-        ],
-        ingest_run_id=ingest_run_id,
-        cost_per_page_cny=cost_per_page_cny,
+        conn, [ledger_item], ingest_run_id=ingest_run_id, cost_per_page_cny=cost_per_page_cny
     )
     out.embed_carried, out.embed_needed = carry_embeddings(
         conn, new_doc_id=written.doc_id, title=row.title, old_blocks=old
@@ -479,6 +547,7 @@ def run_reparse_cached(
     ingest_run_id: str,
     cost_per_page_cny: Decimal | None = None,
     chunk_cfg: ChunkConfig | None = None,
+    replace_differing: bool = False,
 ) -> ReparseReport:
     ro = ReadOnlyBlob(blob)
     cfg = chunk_cfg or ChunkConfig()
@@ -496,6 +565,7 @@ def run_reparse_cached(
                 ingest_run_id=ingest_run_id,
                 chunk_cfg=cfg,
                 cost_per_page_cny=cost_per_page_cny,
+                replace_differing=replace_differing,
             )
         except Exception as exc:  # 单份失败不拖垮其余文档；原文档原样保留
             conn.rollback()
@@ -537,6 +607,7 @@ REPORT_COLUMNS: Final = (
     "state",
     "embed_carried",
     "embed_needed",
+    "filled_blocks",
     "error",
     "title",
 )
@@ -562,6 +633,7 @@ def report_rows(report: ReparseReport) -> list[Mapping[str, object]]:
                 "state": o.state or "",
                 "embed_carried": o.embed_carried,
                 "embed_needed": o.embed_needed,
+                "filled_blocks": o.filled_blocks,
                 "error": o.error,
                 "title": o.title,
             }

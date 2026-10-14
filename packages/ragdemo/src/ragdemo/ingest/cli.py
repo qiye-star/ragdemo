@@ -482,10 +482,23 @@ def _write_tsv(path: Path, columns: Sequence[str], rows: Sequence[Mapping[str, o
 @click.option("--yes", is_flag=True, default=False, help="真正写库；不传只 dry run（不写库）")
 @click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
 @click.option("--blob-root", "blob_root_opt", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--replace-differing",
+    is_flag=True,
+    default=False,
+    help="与现行块不同的文档也取代重写（默认关：原样保留旧切块并列出）",
+)
 def docs_reparse_cached(
-    doc_ids: tuple[int, ...], yes: bool, report_path: Path | None, blob_root_opt: Path | None
+    doc_ids: tuple[int, ...],
+    yes: bool,
+    report_path: Path | None,
+    blob_root_opt: Path | None,
+    replace_differing: bool,
 ) -> None:
-    """现行文档用已缓存的 TextIn JSON 按新流程（分页路由整份 L3、台账、网格）重解析入库。
+    """现行文档用已缓存的 TextIn JSON 按新流程（分页路由整份 L3）补台账与解析来源。
+
+    默认：新块与现行块逐块相同 -> 只原地补 parse_source 并写逐页台账 / 文档结论，块号、描述、
+    嵌入、网格都不动；有差异 -> 原样保留旧切块、不写台账，列出（--replace-differing 才取代重写）。
 
     零外部调用：TextIn 走重放传输层（真实请求即报错）、blob 只读、不调 LLM（表格描述只沿用
     内容完全相同的旧描述）、不调嵌入（嵌入输入逐字节相同才沿用旧向量）。缓存缺失的文档列出、不动。
@@ -501,6 +514,7 @@ def docs_reparse_cached(
             write=yes,
             ingest_run_id=run_id,
             cost_per_page_cny=cfg.textin_cost_per_page_cny,
+            replace_differing=replace_differing,
         )
     if report_path is not None:
         _write_tsv(report_path, REPORT_COLUMNS, report_rows(report))
@@ -517,14 +531,15 @@ def docs_reparse_cached(
         f"表格描述沿用 {sum(o.desc_carried for o in report.outcomes)}，"
         f"缺描述 {sum(len(o.desc_missing) for o in report.outcomes)}"
     )
-    if yes:
+    click.echo(f"  原地补 parse_source 的块：{sum(o.filled_blocks for o in report.outcomes)}")
+    if yes and replace_differing:
         click.echo(
             f"  嵌入：沿用 {sum(o.embed_carried for o in report.outcomes)}，"
             f"待嵌入 {sum(o.embed_needed for o in report.outcomes)}（本命令不调嵌入）"
         )
     click.echo(f"  不能重解析 {len(report.not_reparseable)} 份：{dict(reasons)}")
     for o in report.outcomes:
-        if o.status not in ("dry_run", "written"):
+        if o.status not in ("fill", "filled", "replace", "written"):
             click.echo(f"  - doc_id={o.doc_id} {o.status} {o.error} {o.title}", err=True)
     if report.replay_calls:
         raise click.ClickException(f"重放传输层收到 {report.replay_calls} 次真实请求（已拒绝）")

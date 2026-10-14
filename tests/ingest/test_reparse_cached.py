@@ -177,39 +177,117 @@ def _blocks(conn: psycopg.Connection, doc_id: int) -> list[tuple[object, ...]]:
     ).fetchall()
 
 
+def _state(conn: psycopg.Connection, doc_id: int) -> list[tuple[object, ...]]:
+    """块号、块内容、描述、嵌入、网格——填元数据之外的一切都必须原样不动。"""
+    return conn.execute(
+        "SELECT b.block_id, b.ordinal, b.block_type::text, b.content, b.page, b.section_path,"
+        " b.content_desc, b.embedding::text, b.embedding_version, b.known_at, b.superseded_at,"
+        " b.ingest_run_id, t.table_id, t.desc_model, t.superseded_at"
+        " FROM core.doc_block b LEFT JOIN core.doc_table t ON t.block_id = b.block_id"
+        " WHERE b.doc_id = %s ORDER BY b.ordinal",
+        (doc_id,),
+    ).fetchall()
+
+
+def _make_differ(conn: psycopg.Connection, doc_id: int) -> None:
+    """把一个现行段落块改成与缓存不同的内容（模拟旧切块版本）。"""
+    conn.execute(
+        "UPDATE core.doc_block SET content = content || '（旧切块）' WHERE block_id = ("
+        " SELECT min(block_id) FROM core.doc_block WHERE doc_id = %s AND is_leaf"
+        " AND block_type = 'paragraph')",
+        (doc_id,),
+    )
+    conn.commit()
+
+
 @pytest.mark.db
 def test_dry_run_writes_nothing(seeded: tuple[psycopg.Connection, LocalBlobStore, int]) -> None:
-    conn, blob, _ = seeded
+    conn, blob, doc_id = seeded
+    before = _state(conn, doc_id)
     report = run_reparse_cached(conn, blob, doc_ids=None, write=False, ingest_run_id="t")
-    assert [o.status for o in report.outcomes] == ["dry_run"]
+    assert [o.status for o in report.outcomes] == ["fill"]
     o = report.outcomes[0]
     assert o.old_blocks == o.new_blocks == o.identical_blocks and o.desc_missing == []
     assert o.state is not None
-    n = conn.execute("SELECT count(*) FROM core.document").fetchone()
-    assert n is not None and n[0] == 1
+    assert _state(conn, doc_id) == before
+    assert conn.execute(
+        "SELECT count(*) FILTER (WHERE parse_source IS NOT NULL) FROM core.doc_block"
+    ).fetchone() == (0,)
     assert conn.execute("SELECT count(*) FROM core.parse_page_route").fetchone() == (0,)
 
 
 @pytest.mark.db
-def test_reparse_supersedes_rewrites_and_carries_descriptions_and_embeddings(
+def test_identical_document_only_gets_metadata_filled_in_place(
+    seeded: tuple[psycopg.Connection, LocalBlobStore, int],
+) -> None:
+    conn, blob, doc_id = seeded
+    before = _state(conn, doc_id)
+    report = run_reparse_cached(conn, blob, doc_ids=None, write=True, ingest_run_id="t")
+    (o,) = report.outcomes
+    assert o.status == "filled" and o.new_doc_id is None and report.replay_calls == 0
+    # 块号、内容、描述、嵌入、时点列、网格全部原样；没有新文档、没有被取代的行
+    assert _state(conn, doc_id) == before
+    assert conn.execute("SELECT count(*) FROM core.document").fetchone() == (1,)
+    assert {
+        r[0]
+        for r in conn.execute(
+            "SELECT parse_source FROM core.doc_block WHERE doc_id = %s", (doc_id,)
+        ).fetchall()
+    } == {"textin"}
+    (ref,) = conn.execute(
+        "SELECT parse_json_ref FROM core.document WHERE doc_id = %s", (doc_id,)
+    ).fetchone()  # type: ignore[misc]
+    (state,) = conn.execute(
+        "SELECT state FROM core.parse_doc_acceptance WHERE routes_ref = %s", (ref,)
+    ).fetchone()  # type: ignore[misc]
+    assert state == o.state
+    assert conn.execute(
+        "SELECT count(*) FROM core.parse_page_route WHERE routes_ref = %s", (ref,)
+    ).fetchone() == (2,)
+    assert check_schema_invariants(conn) == []
+
+
+@pytest.mark.db
+def test_differing_document_is_left_on_its_old_chunking_by_default(
+    seeded: tuple[psycopg.Connection, LocalBlobStore, int],
+) -> None:
+    conn, blob, doc_id = seeded
+    _make_differ(conn, doc_id)
+    before = _state(conn, doc_id)
+    report = run_reparse_cached(conn, blob, doc_ids=None, write=True, ingest_run_id="t")
+    (o,) = report.outcomes
+    assert o.status == "differs" and "as_of" in o.error
+    assert o.identical_blocks == o.old_blocks - 1
+    assert _state(conn, doc_id) == before
+    assert conn.execute(
+        "SELECT count(*) FILTER (WHERE parse_source IS NOT NULL) FROM core.doc_block"
+    ).fetchone() == (0,)
+    assert conn.execute("SELECT count(*) FROM core.parse_page_route").fetchone() == (0,)
+    assert conn.execute("SELECT count(*) FROM core.parse_doc_acceptance").fetchone() == (0,)
+
+
+@pytest.mark.db
+def test_replace_differing_supersedes_and_carries_descriptions_and_embeddings(
     seeded: tuple[psycopg.Connection, LocalBlobStore, int],
 ) -> None:
     conn, blob, old_id = seeded
+    _make_differ(conn, old_id)
     before = _blocks(conn, old_id)
-    report = run_reparse_cached(conn, blob, doc_ids=None, write=True, ingest_run_id="t")
+    report = run_reparse_cached(
+        conn, blob, doc_ids=None, write=True, ingest_run_id="t", replace_differing=True
+    )
     (o,) = report.outcomes
     assert o.status == "written" and o.new_doc_id is not None and report.replay_calls == 0
     new_id = o.new_doc_id
 
-    old_after = _blocks(conn, old_id)
-    assert all(r[9] is not None for r in old_after)  # 旧块只标 superseded_at，不删
+    assert all(r[9] is not None for r in _blocks(conn, old_id))  # 旧块只标 superseded_at，不删
     new = _blocks(conn, new_id)
-    assert [r[:5] for r in new] == [r[:5] for r in before]  # 同一份缓存 -> 同样的块与描述
+    assert len(new) == len(before)
+    assert sum(1 for a, b in zip(new, before, strict=True) if a[:5] != b[:5]) == 1
     assert {r[5] for r in new} == {"textin"}  # parse_source 写上了
     assert {r[8] for r in new} == {before[0][8]}  # known_at 沿用发布时刻
     leaves = [r for r in new if r[3]]
-    assert all(r[6] and r[7] == "BAAI/bge-m3" for r in leaves)  # 嵌入原样带过来
-    assert o.embed_carried == len(leaves) and o.embed_needed == 0
+    assert o.embed_carried == len(leaves) - 1 and o.embed_needed == 1  # 改过的那块要重嵌
 
     doc = conn.execute(
         "SELECT superseded_at IS NULL, supersedes_doc_id, parse_json_ref FROM core.document"
@@ -221,10 +299,6 @@ def test_reparse_supersedes_rewrites_and_carries_descriptions_and_embeddings(
         "SELECT state FROM core.parse_doc_acceptance WHERE routes_ref = %s", (doc[2],)
     ).fetchone()  # type: ignore[misc]
     assert state == o.state
-    pages = conn.execute(
-        "SELECT count(*) FROM core.parse_page_route WHERE routes_ref = %s", (doc[2],)
-    ).fetchone()
-    assert pages == (2,)
     tables = conn.execute(
         "SELECT desc_model, desc_prompt_version FROM core.doc_table"
         " WHERE doc_id = %s AND superseded_at IS NULL",
@@ -238,15 +312,13 @@ def test_reparse_supersedes_rewrites_and_carries_descriptions_and_embeddings(
 def test_a_second_run_skips_documents_already_on_the_new_flow(
     seeded: tuple[psycopg.Connection, LocalBlobStore, int],
 ) -> None:
-    conn, blob, _ = seeded
+    conn, blob, doc_id = seeded
     first = run_reparse_cached(conn, blob, doc_ids=None, write=True, ingest_run_id="t1")
-    (o,) = first.outcomes
+    assert [o.status for o in first.outcomes] == ["filled"]
     second = run_reparse_cached(conn, blob, doc_ids=None, write=True, ingest_run_id="t2")
     assert second.outcomes == []
-    assert [(n.doc_id, n.reason) for n in second.not_reparseable] == [
-        (o.new_doc_id, "already_new_flow")
-    ]
-    assert conn.execute("SELECT count(*) FROM core.document").fetchone() == (2,)
+    assert [(n.doc_id, n.reason) for n in second.not_reparseable] == [(doc_id, "already_new_flow")]
+    assert conn.execute("SELECT count(*) FROM core.document").fetchone() == (1,)
 
 
 @pytest.mark.db
