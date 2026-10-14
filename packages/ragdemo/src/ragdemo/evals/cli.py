@@ -487,22 +487,29 @@ def table_label_sheet(out: Path, seed: int) -> None:
 @click.option(
     "--file", "path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
-@click.option("--annotator", required=True, help="标注员名字，记为 author = human:<名字>")
+@click.option("--annotator", required=True, help="标注员名字，记为 author = <origin>:<名字>")
+@click.option(
+    "--origin",
+    type=click.Choice(["human", "blindmodel"]),
+    default="human",
+    show_default=True,
+    help="出题来源：human = 人工；blindmodel = 模型出题并经独立复核",
+)
 @click.option("--yes", is_flag=True, default=False, help="真正写库；不传只校验")
-def label_import(path: Path, annotator: str, yes: bool) -> None:
-    """校验并导入人工标注表；有任何问题整批不写。"""
+def label_import(path: Path, annotator: str, origin: str, yes: bool) -> None:
+    """校验并导入标注表；有任何问题整批不写。"""
     from datetime import UTC
 
     from ragdemo.evals.human_labels import LabelSheetError, insert_labeled, parse_label_sheet
 
     with psycopg.connect(_dsn()) as conn:
         try:
-            cases = parse_label_sheet(conn, path)
+            cases = parse_label_sheet(conn, path, origin=origin)
         except LabelSheetError as exc:
             raise click.ClickException(str(exc)) from None
         click.echo(f"校验通过：{len(cases)} 条")
         if not yes:
             click.echo("[dry run] 未写库；加 --yes 写入")
             return
-        n = insert_labeled(conn, cases, as_of=datetime.now(UTC), annotator=annotator)
-    click.echo(f"已写入 {n} 条（author = human:{annotator}）")
+        n = insert_labeled(conn, cases, as_of=datetime.now(UTC), annotator=annotator, origin=origin)
+    click.echo(f"已写入 {n} 条（author = {origin}:{annotator}）")

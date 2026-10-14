@@ -12,6 +12,7 @@
 3. `ragdemo eval label-import --file sheet.csv --annotator <名字> [--yes]`：先校验（默认只校验，
    一次报全），`--yes` 才写库。gold = 该块 + 同实体内正文完全相同的块 + 额外填写的块。
    author 记为 `human:<名字>`，与合成集始终可区分；`eval run --author-prefix human:` 只跑人工集。
+   模型出题、经独立复核的表用 `--origin blindmodel` 导入，author 记为 `blindmodel:<名字>`。
 """
 
 from __future__ import annotations
@@ -39,6 +40,13 @@ SHEET_COLUMNS = (
     "entity_filter",
 )
 _DIFFICULTIES = ("easy", "medium", "hard")
+# 出题来源 → 备注前缀。author 记为 `<来源>:<标注员>`；模型出题（经独立复核）不得记成 human:。
+ORIGIN_NOTES = {"human": "人工标注", "blindmodel": "模型盲标（独立复核）"}
+
+
+def _check_origin(origin: str) -> None:
+    if origin not in ORIGIN_NOTES:
+        raise ValueError(f"origin 须为 {'/'.join(ORIGIN_NOTES)}，收到 {origin!r}")
 
 
 class LabelSheetError(ValueError):
@@ -99,7 +107,10 @@ def export_label_sheet(
     return len(candidates)
 
 
-def parse_label_sheet(conn: psycopg.Connection, path: Path) -> list[LabeledCase]:
+def parse_label_sheet(
+    conn: psycopg.Connection, path: Path, *, origin: str = "human"
+) -> list[LabeledCase]:
+    _check_origin(origin)
     with path.open(encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         missing = [c for c in SHEET_COLUMNS if c not in (reader.fieldnames or [])]
@@ -155,7 +166,7 @@ def parse_label_sheet(conn: psycopg.Connection, path: Path) -> list[LabeledCase]
                 gold,
                 (str(entity),) if use_filter else None,
                 r["difficulty"],
-                f"人工标注；源块 {block_id}；第 {i} 行",
+                f"{ORIGIN_NOTES[origin]}；源块 {block_id}；第 {i} 行",
             )
         )
     if problems:
@@ -166,8 +177,14 @@ def parse_label_sheet(conn: psycopg.Connection, path: Path) -> list[LabeledCase]
 
 
 def insert_labeled(
-    conn: psycopg.Connection, cases: Sequence[LabeledCase], *, as_of: datetime, annotator: str
+    conn: psycopg.Connection,
+    cases: Sequence[LabeledCase],
+    *,
+    as_of: datetime,
+    annotator: str,
+    origin: str = "human",
 ) -> int:
+    _check_origin(origin)
     for c in cases:
         conn.execute(
             "INSERT INTO evals.eval_retrieval (question, as_of, gold_block_ids, entity_filter,"
@@ -179,7 +196,7 @@ def insert_labeled(
                 list(c.entity_filter) if c.entity_filter else None,
                 c.difficulty,
                 c.notes,
-                f"human:{annotator}",
+                f"{origin}:{annotator}",
             ),
         )
     conn.commit()

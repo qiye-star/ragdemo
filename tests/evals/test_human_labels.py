@@ -10,6 +10,7 @@ import psycopg
 import pytest
 
 from ragdemo.evals.human_labels import (
+    ORIGIN_NOTES,
     SHEET_COLUMNS,
     LabelSheetError,
     export_label_sheet,
@@ -59,6 +60,39 @@ def test_only_filled_rows_are_imported_as_human_cases(
         "SELECT count(*), count(*) FILTER (WHERE author = 'human:张三') FROM evals.eval_retrieval"
     ).fetchone()
     assert row == (n, n)
+
+
+@pytest.mark.db
+def test_model_written_cases_keep_their_own_author_and_note(
+    corpus: psycopg.Connection, tmp_path: Path
+) -> None:
+    """模型出题不得记成 human:；author 与备注如实标注，`--author-prefix blindmodel:` 只选中它们。"""
+    path = tmp_path / "s.csv"
+    export_label_sheet(corpus, path, n=3)
+    _fill(path, {0: {"question": GOOD_Q, "difficulty": "medium"}})
+    cases = parse_label_sheet(corpus, path, origin="blindmodel")
+    assert cases[0].notes.startswith(ORIGIN_NOTES["blindmodel"])
+    n = insert_labeled(
+        corpus,
+        cases,
+        as_of=datetime(2026, 9, 30, tzinfo=UTC),
+        annotator="tbl-v1",
+        origin="blindmodel",
+    )
+    rows = corpus.execute(
+        "SELECT author, notes FROM evals.eval_retrieval WHERE author LIKE 'blindmodel:%'"
+    ).fetchall()
+    assert len(rows) == n == 1 and rows[0][0] == "blindmodel:tbl-v1"
+    assert "人工" not in rows[0][1]
+    assert corpus.execute(
+        "SELECT count(*) FROM evals.eval_retrieval WHERE author LIKE 'human:%'"
+    ).fetchone() == (0,)
+
+
+def test_unknown_origin_is_refused() -> None:
+    when = datetime(2026, 9, 30, tzinfo=UTC)
+    with pytest.raises(ValueError):
+        insert_labeled(None, [], as_of=when, annotator="x", origin="auto")  # type: ignore[arg-type]
 
 
 @pytest.mark.db
