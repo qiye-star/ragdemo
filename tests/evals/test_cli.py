@@ -20,6 +20,16 @@ def test_eval_subcommands_exist() -> None:
     assert "run" in result.output
 
 
+def test_label_import_origin_choices_follow_origin_notes() -> None:
+    """命令行的 --origin 选项必须与 ORIGIN_NOTES 同步（blindmodel-text 不能再绕开 CLI 导入）。"""
+    from ragdemo.evals.cli import label_import
+    from ragdemo.evals.human_labels import ORIGIN_NOTES
+
+    origin = next(p for p in label_import.params if p.name == "origin")
+    assert set(origin.type.choices) == set(ORIGIN_NOTES)  # type: ignore[attr-defined]
+    assert "blindmodel-text" in origin.type.choices  # type: ignore[attr-defined]
+
+
 def _record(conn: psycopg.Connection, sha: str, recall: float) -> None:
     conn.execute(
         "INSERT INTO evals.eval_run (run_id, suite, git_sha, config, metrics,"

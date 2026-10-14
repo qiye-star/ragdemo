@@ -43,7 +43,6 @@ CLAUDE.md §1.4 的执行器：改 prompt / 切块 / 检索参数 / 模型之前
 
 ## 常见坑
 - `--gate` 取的是该 suite **最近一次**运行的 recall@10（不分配置、不分 author 前缀）作基线，容差 `TOLERANCE = 0.02`；先读基线再跑（读晚了会和自己比）。多配置混跑时 `--gate` 结果不可信，正式判定用 `table-gate`。
-- `label-import --origin` 命令行目前只接受 `human|blindmodel`，`blindmodel-text` 只能直接调 `parse_label_sheet` / `insert_labeled`（代码里 `ORIGIN_NOTES` 已支持，CLI 未同步）。
 - 近似同分块的排名会因 BM25 索引状态漂移（原地 UPDATE 后未 `REINDEX INDEX core.doc_block_bm25`），评测数字会"无故"下降 ~0.03，见 `docs/10.12-plan/验收记录/旧文档缓存重解析演练.md`。
 - 重解析沿用旧 `known_at`，同一历史 `as_of` 下新旧版本块可同时可见；`freeze` 落块号集合正是为了留证据，不是多余。
 - 逐题名次存在 `metrics.per_question`（JSON，无需迁移），失败题分析不必重跑付费评测：看 `cand_rank` 判断 gold 是否进了重排候选。

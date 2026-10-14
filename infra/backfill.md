@@ -10,7 +10,7 @@
 ## 0. 前置
 
 ```bash
-uv run ragdemo db migrate      # 执行未执行的迁移（当前到 023）
+uv run ragdemo db migrate      # 执行未执行的迁移（当前到 034）
 uv run ragdemo db seed         # 种子：实体、口径、关系、规则
 uv run ragdemo db check        # schema 不变量 + 时点泄漏自检，必须"全部检查通过"
 ```

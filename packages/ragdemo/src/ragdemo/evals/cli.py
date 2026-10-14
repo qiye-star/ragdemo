@@ -23,6 +23,7 @@ from ragdemo.evals.freeze import (
     load_freeze,
     save_freeze,
 )
+from ragdemo.evals.human_labels import ORIGIN_NOTES
 from ragdemo.evals.runner import run_retrieval_eval
 from ragdemo.evals.sampler import (
     DEFAULT_MIN_PER_STRATUM,
@@ -501,10 +502,11 @@ def table_label_sheet(out: Path, seed: int) -> None:
 @click.option("--annotator", required=True, help="标注员名字，记为 author = <origin>:<名字>")
 @click.option(
     "--origin",
-    type=click.Choice(["human", "blindmodel"]),
+    type=click.Choice(list(ORIGIN_NOTES)),
     default="human",
     show_default=True,
-    help="出题来源：human = 人工；blindmodel = 模型出题并经独立复核",
+    help="出题来源：human = 人工；blindmodel = 模型出题并经独立复核（表格）；"
+    "blindmodel-text = 同上（正文）",
 )
 @click.option("--yes", is_flag=True, default=False, help="真正写库；不传只校验")
 def label_import(path: Path, annotator: str, origin: str, yes: bool) -> None:
